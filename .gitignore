@@ -1,0 +1,14 @@
+.DS_Store
+node_modules/
+dist/
+build/
+.turbo/
+.vite/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Local KnowLLM workspaces
+/.knowllm/

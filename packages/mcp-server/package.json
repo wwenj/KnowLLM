@@ -1,0 +1,20 @@
+{
+  "name": "@knowllm/mcp-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "knowllm-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@knowllm/core": "workspace:*",
+    "@knowllm/protocol": "workspace:*",
+    "tsx": "^4.19.2"
+  }
+}
