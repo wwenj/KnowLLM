@@ -2,11 +2,9 @@
   <img src="assets/logo.png" alt="KnowLLM logo" width="180" />
 </p>
 
-# KnowLLM
-
-KnowLLM 是一个面向 Agent 的 LLM Wiki 开源项目，目标是把个人和企业的原始资料整理成一套可持续维护的 AI 知识工作区。
-
-它不只是一个“上传文档后问答”的工具。KnowLLM 更关注的是：如何让 AI 把资料读完、整理好、沉淀下来，并在之后被人和 Agent 反复使用。
+<h1 align="center">KnowLLM</h1>
+<p align="center">
+面向 Agent 的 LLM Wiki 开源框架，面向企业 Agent LLM Wiki 知识库落地方案与个人 Agent 工作台</p>
 
 ## 为什么需要 KnowLLM
 
@@ -256,13 +254,6 @@ KnowLLM 适合这些场景：
 - 只需要一次性问答的临时文件。
 - 超大规模低价值文档的纯搜索场景。
 - 完全不需要人工检查和维护的黑盒知识库。
-
-## 文档
-
-- [LLM Wiki 开源实现方案](LLM%20Wiki%20开源实现方案.md)：完整实现方案。
-- [Karpathy 的 LLM Wiki：让 AI 不再每次都从零开始读你的资料](调研记录/Karpathy%20的%20LLM%20Wiki：让%20AI%20不再每次都从零开始读你的资料.md)：LLM Wiki 背景整理。
-- [llmWiki 实现说明](调研记录/llmWiki实现说明.md)：内部原型实践说明。
-- [面向 Agent 的知识库技术演进与范式迭代](调研记录/面向%20Agent%20的知识库技术演进与范式迭代.md)：为什么不从传统 RAG 开始设计 Agent 知识库。
 
 ## License
 
