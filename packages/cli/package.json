@@ -1,0 +1,19 @@
+{
+  "name": "@knowllm/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "knowllm": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@knowllm/core": "workspace:*",
+    "tsx": "^4.19.2"
+  }
+}

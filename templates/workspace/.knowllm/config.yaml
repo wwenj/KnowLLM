@@ -1,0 +1,11 @@
+workspace:
+  id: default
+  name: My KnowLLM Wiki
+
+models:
+  compiler: ""
+  reviewer: ""
+  synthesizer: ""
+
+storage:
+  type: file
