@@ -1,263 +1,268 @@
+<p align="center">
+  <img src="assets/logo.png" alt="KnowLLM logo" width="180" />
+</p>
+
 # KnowLLM
 
-KnowLLM 是一个面向 Agent 的 LLM Wiki 开源项目设计方案。它的目标不是再做一个传统 RAG 文档问答系统，而是把原始资料编译成一套可读、可编辑、可追溯、可被 Agent 调用的 Markdown Wiki。
+KnowLLM 是一个面向 Agent 的 LLM Wiki 开源项目，目标是把个人和企业的原始资料整理成一套可持续维护的 AI 知识工作区。
 
-当前仓库处于开源方案整理阶段，核心设计来自三条线索：
+它不只是一个“上传文档后问答”的工具。KnowLLM 更关注的是：如何让 AI 把资料读完、整理好、沉淀下来，并在之后被人和 Agent 反复使用。
 
-1. Andrej Karpathy 提出的 LLM Wiki 思路：让 AI 先把资料整理成持续演化的知识库，而不是每次提问都从原文重新检索。
-2. 对 Agent 知识库演进路径的判断：传统 Vector RAG 适合基础问答和长尾兜底，但不适合作为复杂 Agent 的核心外挂知识层。
-3. 一个内部项目中的 llmWiki 原型实践：已经验证了 source、schema、compile、fusion、wiki、lint、issue、Agent query 这条链路的工程可行性。
+## 为什么需要 KnowLLM
 
-KnowLLM 准备把这套思路抽象成一个通用开源项目，服务两类使用场景：
+现在很多知识库系统的默认起点是 RAG：上传文档，切成片段，查询时临时召回，再让模型拼答案。
 
-- 个人用户：本地安装 CLI 后启动一个轻量 Web 工作区，用来上传资料、编译 Wiki、查看日志、搜索页面、执行 lint，并通过 Skill、MCP 或 CLI 快速接入 Claude Code、Codex、Cursor 等 Agent 工具。
-- 企业用户：私有化部署一个 LLM Wiki 服务，提供资料上传、编译任务、Wiki 管理、诊断、查询检索和 Agent 接入能力，用作企业内部 Agent 的长期知识层。
+这条路线能解决基础问答，但对 Agent 长期工作并不理想。Agent 不只是需要几段临时召回的文本，它更需要一个能持续演化、能被检查、能被复用的知识结构。
 
-## 背景
+KnowLLM 的判断是：
 
-很多知识库项目的默认起点是 RAG：上传文档，切成 chunk，写入向量库，查询时召回 Top-K，再交给模型生成答案。
+- 原始资料应该保留为事实来源。
+- AI 应该先把资料整理成可读的 Wiki，而不是每次提问都从零开始理解。
+- Wiki 应该能被人编辑、被工具检索、被 Agent 调用。
+- 知识库不应该是黑盒，它要能追踪来源、暴露问题、持续修正。
 
-这条路线能解决不少问答问题，但对 Agent 长期使用并不理想。Agent 需要的不只是“这次召回了几段文本”，而是一个可以长期维护、可以复盘来源、可以不断吸收新资料的知识结构。传统 chunk 往往会丢失章节语义、上下文指代、跨文档关系和历史演进。资料越多，Agent 越容易在零散片段里重复理解、重复拼接、重复犯错。
+## 核心理念
 
-LLM Wiki 的思路是把知识整理前置：
+KnowLLM 的核心理念可以概括为：
 
 ```text
-raw sources -> schema-guided compile -> wiki pages -> lint/issues -> agent query
+把资料编译成 Wiki，而不是只把资料切成 Chunk。
 ```
 
-原始资料仍然是事实来源，但它不直接承担长期检索层。系统先用 LLM 把资料编译成结构化 Markdown Wiki，再围绕 Wiki 做搜索、人工编辑、诊断和 Agent 查询。Wiki 页面是人能读懂的中间层，也是 Agent 更容易导航的知识地图。
+原始资料进入系统后，KnowLLM 会把它整理成结构化的 Markdown Wiki。后续无论是用户搜索、人工查看，还是 Agent 查询，都优先基于这套已经整理过的 Wiki 工作。
 
-## 项目定位
+这样做的价值在于：
 
-KnowLLM 可以理解成两个东西的组合：
+- **长期沉淀**：每次导入资料都会更新知识库，而不是只服务一次查询。
+- **结构清晰**：资料会被整理成主题、概念、对象、对比等页面。
+- **人机共用**：Markdown Wiki 既适合人阅读，也适合 Agent 读取。
+- **来源可追溯**：重要内容可以回到原始资料核验。
+- **可持续维护**：知识库可以检查死链、重复、冲突和来源缺失。
+
+## 产品定位
+
+KnowLLM 可以理解为：
 
 ```text
 LLM Wiki Compiler + Agent Knowledge Workspace
 ```
 
-它不是单纯的文档总结器，也不是单纯的向量检索服务。
+它面向两类场景。
 
-它要解决的是：
+### 个人本地知识工作区
 
-- 如何把不断新增的原始资料编译成稳定 Wiki 页面。
-- 如何让新资料合并进已有页面，而不是制造重复页面。
-- 如何保留 source、page、claim、relationship 之间的来源链路。
-- 如何用 lint 和 issue 持续维护知识库健康度。
-- 如何让 Agent 查询时先读 Wiki，再按需回到 raw source 核验证据。
-- 如何同时支持个人本地工作流和企业私有化服务。
+个人用户可以在本地安装 CLI，启动一个轻量 Web 工作区，用来管理自己的学习资料、研究资料、项目文档、文章、会议记录和笔记。
 
-## 技术架构
-
-KnowLLM 的核心分层如下：
+目标体验是：
 
 ```text
-Interfaces
-  CLI / Web Workspace / MCP Server / Agent Skill / HTTP API
-
-Agent Query Runtime
-  manifest -> plan -> search/read -> review -> source verify -> snippets/answer
-
-Wiki Maintenance
-  search index / lint / issues / provenance / version history
-
-Wiki Artifacts
-  index / summaries / concepts / entities / comparisons / sidecar metadata
-
-Compile Runtime
-  parse -> draft -> normalize -> fusion -> stage -> commit
-
-Knowledge Schema
-  AGENTS.md / wiki rules / page rules / citation rules / query rules
-
-Raw Sources
-  markdown / text / pdf / html / docx / metadata / extracted text
-```
-
-### Raw Sources
-
-`source` 是唯一事实源。上传或导入后的原始资料只读保存，并记录文件名、hash、来源、解析状态、schema 版本和影响过的 Wiki 页面。
-
-首版可以优先支持 Markdown 和纯文本。后续再加入 PDF、HTML、DOCX、网页抓取和外部系统同步。
-
-### Knowledge Schema
-
-`schema` 是知识库的规则文件，类似 Karpathy 示例里的 `CLAUDE.md`，也类似 Agent 项目里的 `AGENTS.md`。
-
-它定义：
-
-- 当前知识库的目的和边界。
-- source 如何进入系统。
-- Wiki 页面类型和格式。
-- 来源引用规则。
-- 冲突和不确定信息的处理方式。
-- Agent 查询时的优先级和禁止行为。
-
-### Compile Runtime
-
-编译流程负责把 source 变成 Wiki。
-
-它不是简单总结，而是一个带约束的写入流程：
-
-1. 读取 schema、source 和当前 Wiki manifest。
-2. 调用模型生成结构化 draft。
-3. 服务端规范化 draft，限制路径、类型、数量和来源标记。
-4. 为 concept、entity、comparison 等页面查找候选旧页。
-5. 调用 fusion 模型合并新旧内容。
-6. 生成 staged changes，写入 Wiki、metadata、issue 和 index。
-
-原则是：模型负责理解和写草稿，系统负责边界、路径、来源、一致性和提交。
-
-### Wiki Artifacts
-
-Wiki 是可读、可编辑、可版本化的 Markdown 文件集合。
-
-推荐的基础页面类型：
-
-- `index`：自动生成的导航页。
-- `summary`：一份 source 对应的摘要页。
-- `concept`：可复用概念页。
-- `entity`：稳定对象页，例如产品、工具、组织、人物、项目。
-- `comparison`：跨实体或跨方案的对比分析页。
-
-`claim` 和 `relationship` 更适合先作为结构化 sidecar metadata 存储，再按需要渲染到页面或用于 Agent 推理。这样能避免把每个原子断言都变成 Markdown 页面，导致 Wiki 过碎。
-
-### Wiki Maintenance
-
-长期可用的知识库需要维护能力。
-
-KnowLLM 需要提供：
-
-- 全文搜索和可选 hybrid retrieval。
-- 页面 frontmatter 和来源校验。
-- 死链、孤立页、重复标题、超大页面检测。
-- 缺失来源、来源已删除、schema drift、贡献记录不一致检测。
-- issue 生命周期管理。
-- 页面 diff、版本历史和人工审核入口。
-
-lint 不应该静默改知识。它应该先把问题暴露出来，再提供可审阅的修复建议。
-
-### Agent Query Runtime
-
-Agent 查询不是简单 `search(q)`。
-
-更合理的流程是：
-
-```text
-load manifest
-  -> plan query
-  -> collect candidates
-  -> read wiki pages
-  -> review evidence
-  -> search/follow/read more
-  -> read raw sources when needed
-  -> verify source support
-  -> return snippets or synthesize answer
-```
-
-这样可以把 LLM Wiki 作为 Agent 的知识检索节点使用：
-
-- `snippets` 模式：只返回知识片段，交给上层 Agent 或 Chat 模型组织回答。
-- `answer` 模式：直接基于证据生成最终答案。
-- `wiki-only` 模式：只使用 Wiki 页面，不回读 source。
-- `key-sources` / `exhaustive` 模式：按重要性回读原始资料核验。
-
-### Interfaces
-
-KnowLLM 面向个人和企业提供多种入口：
-
-- CLI：初始化、导入、编译、搜索、查询、lint、导出、启动本地服务。
-- Web Workspace：上传资料、查看编译进度、浏览 Wiki、编辑页面、查看 issue、运行查询。
-- MCP Server：把 Wiki 搜索、页面读取、source 核验、query 作为 MCP tools 暴露给外部 Agent。
-- Agent Skill：提供 Claude Code、Codex、Cursor 等工具可直接读取的使用说明和命令封装。
-- HTTP API：给企业系统、内部 Agent 平台和自动化任务接入。
-
-## 个人使用形态
-
-目标体验：
-
-```text
-npm install -g knowllm
 knowllm init my-wiki
-cd my-wiki
 knowllm start
 ```
 
-启动后打开本地 Web 工作区，用户可以：
+启动后可以在浏览器里完成：
 
-- 上传 Markdown、TXT、PDF 或网页资料。
-- 选择模型和 schema。
-- 发起 compile。
-- 查看任务日志、模型调用、变更计划和失败原因。
-- 浏览生成的 Wiki 页面。
-- 搜索、查询、lint 和修复 issue。
-- 一键生成 MCP 配置或 Agent Skill 接入说明。
+- 上传和导入资料。
+- 编译生成 Wiki。
+- 查看编译日志。
+- 浏览和编辑 Wiki 页面。
+- 搜索知识库。
+- 运行知识库检查。
+- 生成 MCP、Skill 或 CLI 接入配置。
 
-本地目录应该保持透明，用户可以直接用 VS Code、Obsidian、Git 或普通编辑器查看和管理 Markdown 文件。
+本地数据保持透明，用户仍然可以用 VS Code、Obsidian、Git 或普通编辑器打开和管理这些 Markdown 文件。
 
-## 企业使用形态
+### 企业 Agent 知识层
 
-企业版重点不是“多一个网页上传工具”，而是提供一个可私有化的 Agent 知识层。
+企业可以把 KnowLLM 私有化部署为内部 Agent 的长期知识层。
 
-典型能力包括：
+它适合承载：
 
-- 多 workspace 或多 tenant 管理。
-- 服务端上传、批量导入和定时同步。
-- 持久化任务队列和 worker。
-- staging + commit/rollback，避免半次 ingest 污染 Wiki。
-- REST API 和 MCP Gateway。
-- 权限、审计、运行日志和模型调用记录。
-- 可配置模型供应商和私有模型网关。
-- 对象存储、数据库和 Git 备份。
-- 检索评测、引用覆盖率和 unsupported claim 检查。
+- 产品文档。
+- SOP 和流程规范。
+- 项目资料。
+- 客户访谈。
+- 会议纪要。
+- 研究报告。
+- 内部知识库。
 
-企业部署中，KnowLLM 应该和现有 RAG、Graph RAG、搜索引擎、文档系统协作，而不是强行替代所有知识基础设施。LLM Wiki 更适合作为高价值、需要长期维护的核心知识层。
+企业系统可以通过服务 API、MCP 或 CLI 把 KnowLLM 接入现有 Agent 平台，让 Agent 不再只依赖临时检索，而是优先读取一套被整理过、可维护、可审计的 Wiki 知识层。
 
-## 当前设计文档
+## 工作方式
 
-- [LLM Wiki 开源实现方案](LLM%20Wiki%20开源实现方案.md)：当前开源项目要实现的完整技术方案。
-- [Karpathy 的 LLM Wiki：让 AI 不再每次都从零开始读你的资料](调研记录/Karpathy%20的%20LLM%20Wiki：让%20AI%20不再每次都从零开始读你的资料.md)：LLM Wiki 背景和使用方式整理。
-- [llmWiki 实现说明](调研记录/llmWiki实现说明.md)：内部原型实现的工程说明，是本项目方案的主要来源之一。
-- [面向 Agent 的知识库技术演进与范式迭代](调研记录/面向%20Agent%20的知识库技术演进与范式迭代.md)：从 Vector RAG、Graph RAG 到 LLM Wiki 的技术判断。
+KnowLLM 的工作方式可以简化成五步：
 
-## 路线图
+```text
+导入资料
+  -> AI 整理成 Wiki
+  -> 合并进已有知识库
+  -> 检查和维护知识质量
+  -> 提供给人和 Agent 使用
+```
 
-### v0.1: 本地最小可用版本
+其中，原始资料不会被覆盖。Wiki 是从原始资料生成出来的知识层，人可以继续编辑，Agent 可以继续查询，系统也可以持续检查它是否健康。
 
-- CLI 初始化 workspace。
-- 支持 Markdown / TXT source。
-- schema 配置。
-- source -> draft -> wiki compile。
-- summary / concept / entity 基础页面模型。
-- 本地 Web 工作区。
-- 全文搜索、lint、issue。
-- CLI query 和 MCP tools。
+## 架构设计
 
-### v0.2: Agent 集成版本
+KnowLLM 的架构分为六层：
 
-- planner / reviewer / synthesizer 查询链路。
-- snippets 输出模式。
-- Claude Code / Codex / Cursor Skill 模板。
-- raw source 核验。
-- 查询 run 日志和可观测性。
-- 基础评测集和 citation support 检查。
+```text
+用户入口
+  CLI / Web 工作区 / MCP / Skill / API
 
-### v0.3: 生产化版本
+Agent 知识调用层
+  查询、检索、证据核验、片段返回、答案生成
 
-- PDF / HTML / DOCX 解析。
-- 持久化任务队列。
-- staged commit 和 rollback。
-- 页面版本历史和 diff。
-- claim / relationship sidecar。
-- hybrid retrieval。
-- HTTP API、鉴权、审计、多 workspace。
-- Docker Compose 和私有化部署文档。
+Wiki 工作区
+  页面浏览、编辑、搜索、检查、问题管理
 
-## 设计边界
+知识编译层
+  资料解析、Wiki 生成、页面合并、变更提交
 
-- KnowLLM 不把模型输出当成可信写入，所有路径、类型、来源和提交都必须由系统校验。
-- KnowLLM 不承诺适合高频实时数据流。LLM Wiki 有写放大，更适合高价值、可维护、需要长期沉淀的知识。
-- KnowLLM 不把传统 RAG 视为无价值。长尾海量资料、低价值日志和兜底问答仍然适合 RAG 或搜索引擎。
-- KnowLLM 的核心价值是把知识整理成能被人和 Agent 共同维护的中间层。
+规则层
+  知识库目标、页面规范、来源规范、Agent 使用规范
+
+原始资料层
+  Markdown、文本、PDF、网页、文档、外部系统资料
+```
+
+这套架构的重点不是把所有知识都塞进一个向量库，而是把“资料整理”“知识维护”“Agent 使用”拆成可检查的层次。
+
+## 核心能力规划
+
+### 1. 本地 CLI
+
+CLI 是 KnowLLM 的最小入口，用来初始化工作区、导入资料、启动服务、编译 Wiki、搜索和查询知识库。
+
+它既服务个人用户，也服务自动化脚本和企业任务系统。
+
+### 2. Web 工作区
+
+Web 工作区是本地和企业控制台。
+
+它主要提供：
+
+- 资料上传。
+- 编译进度。
+- 运行日志。
+- Wiki 浏览。
+- 页面编辑。
+- 搜索调试。
+- 知识库检查。
+- Agent 查询调试。
+
+界面目标是控制台式、低噪声、可操作，不做复杂装饰。
+
+### 3. LLM Wiki 编译器
+
+编译器是项目核心。它负责把原始资料整理成 Wiki 页面，并把新知识合并进已有页面。
+
+它要解决的不是“总结一篇文档”，而是“持续维护一个会增长的知识库”。
+
+### 4. 知识库检查
+
+KnowLLM 会提供类似 lint 的检查能力，用来发现：
+
+- 页面结构不完整。
+- 页面之间链接断开。
+- 内容重复。
+- 来源缺失。
+- 新旧资料冲突。
+- 页面过大或过碎。
+
+检查结果不会默认静默修改正文，而是先暴露问题，再交给用户或 Agent 处理。
+
+### 5. Agent 接入
+
+KnowLLM 会提供多种 Agent 接入方式：
+
+- MCP tools。
+- Agent Skill。
+- CLI 命令。
+- HTTP API。
+
+外部 Agent 可以把 KnowLLM 当作一个知识工具：先读取整理好的 Wiki，必要时再回到原始资料核验。
+
+### 6. 企业私有化部署
+
+企业版本会重点补齐：
+
+- 多工作区管理。
+- 权限和审计。
+- 批量导入。
+- 后台任务队列。
+- 模型供应商配置。
+- 服务 API。
+- Docker 部署。
+- 运行日志和评测。
+
+## 实现路线
+
+### v0.1: 本地可用
+
+第一阶段先完成个人本地闭环：
+
+- 初始化本地工作区。
+- 导入 Markdown 和文本资料。
+- 编译生成基础 Wiki。
+- 提供 Web 工作区。
+- 支持搜索、查询和检查。
+- 提供 MCP 和 Skill 的基础接入。
+
+### v0.2: Agent 友好
+
+第二阶段强化 Agent 使用：
+
+- 更稳定的查询流程。
+- 返回可复用的知识片段。
+- 支持回到原始资料核验证据。
+- 提供运行记录和调试视图。
+- 提供 Codex、Claude Code、Cursor 等工具的接入模板。
+
+### v0.3: 生产化
+
+第三阶段面向企业落地：
+
+- 支持 PDF、网页和常见文档格式。
+- 引入后台任务和失败恢复。
+- 支持变更预览和回滚。
+- 支持权限、审计和多工作区。
+- 提供完整服务 API 和部署方案。
+
+### v1.0: 稳定开放
+
+稳定版本目标：
+
+- 个人本地体验完整。
+- 企业私有化部署清晰。
+- Agent 接入稳定。
+- 数据结构可迁移。
+- 知识库质量可检查、可评估、可持续维护。
+
+## 适合场景
+
+KnowLLM 适合这些场景：
+
+- 个人研究资料库。
+- 技术文档和项目知识库。
+- 企业 SOP 和内部流程库。
+- Agent 外挂知识层。
+- 学习笔记和长期主题研究。
+- 需要持续整理、复用和审计的资料集合。
+
+它不适合这些场景：
+
+- 高频实时日志分析。
+- 只需要一次性问答的临时文件。
+- 超大规模低价值文档的纯搜索场景。
+- 完全不需要人工检查和维护的黑盒知识库。
+
+## 文档
+
+- [LLM Wiki 开源实现方案](LLM%20Wiki%20开源实现方案.md)：完整实现方案。
+- [Karpathy 的 LLM Wiki：让 AI 不再每次都从零开始读你的资料](调研记录/Karpathy%20的%20LLM%20Wiki：让%20AI%20不再每次都从零开始读你的资料.md)：LLM Wiki 背景整理。
+- [llmWiki 实现说明](调研记录/llmWiki实现说明.md)：内部原型实践说明。
+- [面向 Agent 的知识库技术演进与范式迭代](调研记录/面向%20Agent%20的知识库技术演进与范式迭代.md)：为什么不从传统 RAG 开始设计 Agent 知识库。
 
 ## License
 

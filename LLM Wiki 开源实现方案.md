@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="KnowLLM logo" width="180" />
+</p>
+
 # LLM Wiki 开源实现方案
 
 本文是 KnowLLM 当前准备开源实现的技术方案。它基于已有 llmWiki 原型经验重新整理，去掉内部业务路径、内部服务名和项目专用逻辑，只保留可以沉淀为通用开源项目的核心设计。
