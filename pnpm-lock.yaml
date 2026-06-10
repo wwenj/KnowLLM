@@ -23,6 +23,12 @@ importers:
 
   apps/api:
     dependencies:
+      '@langchain/core':
+        specifier: ^1.1.48
+        version: 1.1.48(ws@8.21.0)
+      '@langchain/langgraph':
+        specifier: ^1.3.7
+        version: 1.3.7(@langchain/core@1.1.48(ws@8.21.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(zod-to-json-schema@3.25.2(zod@4.4.3))(zod@4.4.3)
       '@nestjs/common':
         specifier: ^11.1.3
         version: 11.1.26(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -38,6 +44,12 @@ importers:
       '@nestjs/swagger':
         specifier: ^11.4.4
         version: 11.4.4(@nestjs/common@11.1.26(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.26)(reflect-metadata@0.2.2)
+      flexsearch:
+        specifier: ^0.8.212
+        version: 0.8.212
+      gray-matter:
+        specifier: ^4.0.3
+        version: 4.0.3
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -104,7 +116,7 @@ importers:
         version: 4.0.1
       shadcn:
         specifier: ^4.8.0
-        version: 4.11.0(typescript@6.0.3)
+        version: 4.11.0(@cfworker/json-schema@4.1.1)(typescript@6.0.3)
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -329,6 +341,9 @@ packages:
 
   '@borewit/text-codec@0.2.2':
     resolution: {integrity: sha1-dQJfc1wJg7OocWaIBKVzh+Nkk3U=}
+
+  '@cfworker/json-schema@4.1.1':
+    resolution: {integrity: sha1-Sio5R+6fp7fCS+mBQigxuGdMO+Y=}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha1-AGKcNaaI4FqIsc2mhPudXnPwAKE=}
@@ -610,6 +625,48 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha1-ZTT9WTOlO6fL86F2FeJzoNEnP/k=}
+
+  '@langchain/core@1.1.48':
+    resolution: {integrity: sha1-3+f2pksOPnnlNX7UtALAIe4xWn8=}
+    engines: {node: '>=20'}
+
+  '@langchain/langgraph-checkpoint@1.0.4':
+    resolution: {integrity: sha1-iTqnJVsv6BD961AoH2dQo7Cm/vc=}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@langchain/core': ^1.1.44
+
+  '@langchain/langgraph-sdk@1.9.20':
+    resolution: {integrity: sha1-LMxeQiyOHo7T00I0ulYXT0xi7ZE=}
+    peerDependencies:
+      '@langchain/core': ^1.1.48
+      react: ^18 || ^19
+      react-dom: ^18 || ^19
+      svelte: ^4.0.0 || ^5.0.0
+      vue: ^3.0.0
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+      svelte:
+        optional: true
+      vue:
+        optional: true
+
+  '@langchain/langgraph@1.3.7':
+    resolution: {integrity: sha1-L3QwpCh1aJ6YlHpAYOai3kYaLrQ=}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@langchain/core': ^1.1.48
+      zod: ^3.25.32 || ^4.2.0
+      zod-to-json-schema: ^3.x
+    peerDependenciesMeta:
+      zod-to-json-schema:
+        optional: true
+
+  '@langchain/protocol@0.0.16':
+    resolution: {integrity: sha1-aLY9WP6vTwrPd0BcuPsW+cPwm2A=}
 
   '@lukeed/csprng@1.1.0':
     resolution: {integrity: sha1-Hj5L0Fwcx6Cy3b2KA/OfbktebP4=}
@@ -1549,6 +1606,9 @@ packages:
     resolution: {integrity: sha1-q7Edma620n8bVjw4FHpy1QBY4zk=}
     engines: {node: '>=18'}
 
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha1-p5tV26+GBIEvUtFAssmrQbwVC7g=}
+
   '@tailwindcss/node@4.3.0':
     resolution: {integrity: sha1-ncUxK/QcSGWFKfNgIeC0ZsTreGA=}
 
@@ -1882,6 +1942,9 @@ packages:
   arg@4.1.3:
     resolution: {integrity: sha1-Jp/HrVuOQstjyJbVZmAXJhwUQIk=}
 
+  argparse@1.0.10:
+    resolution: {integrity: sha1-vNZ5HqWuCXJeF+WtmIE0zUCz2RE=}
+
   argparse@2.0.1:
     resolution: {integrity: sha1-JG9Q88p4oyQPbJl+ipvR6sSeSzg=}
 
@@ -1902,6 +1965,9 @@ packages:
   balanced-match@4.0.4:
     resolution: {integrity: sha1-v7EGYv7tgZaixi58aOF3IMJ0F5o=}
     engines: {node: 18 || 20 || >=22}
+
+  base64-js@1.5.1:
+    resolution: {integrity: sha1-GxtEAWClv3rUC2UPCVljSBkDkwo=}
 
   baseline-browser-mapping@2.10.35:
     resolution: {integrity: sha1-8PIjLg3i0vgsxJG8+DCwXtBZN8Y=}
@@ -2288,6 +2354,12 @@ packages:
     resolution: {integrity: sha1-Qa4u62XvpiJorr/qg6x9eSmbCIc=}
     engines: {node: '>= 0.6'}
 
+  eventemitter3@4.0.7:
+    resolution: {integrity: sha1-Lem2j2Uo1WRO9cWVJqG0oHMGFp8=}
+
+  eventemitter3@5.0.4:
+    resolution: {integrity: sha1-qG1mFwQzcS3egUcHrFK1JxzrH+s=}
+
   eventsource-parser@3.1.0:
     resolution: {integrity: sha1-ThmOuRzTM9Co3cwDZQKzYYol9Ek=}
     engines: {node: '>=18.0.0'}
@@ -2313,6 +2385,10 @@ packages:
   express@5.2.1:
     resolution: {integrity: sha1-jyHRW20yf5K0eU7PjLCKcvlWrAQ=}
     engines: {node: '>= 18'}
+
+  extend-shallow@2.0.1:
+    resolution: {integrity: sha1-Ua99YUrZqfYQ6huvu5idaxxWiQ8=}
+    engines: {node: '>=0.10.0'}
 
   extend@3.0.2:
     resolution: {integrity: sha1-+LETa0Bx+9jrFAr/hYsQGewpFfo=}
@@ -2382,6 +2458,9 @@ packages:
 
   flatted@3.4.2:
     resolution: {integrity: sha1-9cI8EH8PN96NvfJPE3IrO5jVJyY=}
+
+  flexsearch@0.8.212:
+    resolution: {integrity: sha1-uVCa93ipkbk4KS42/ggJpOzkuUA=}
 
   formdata-polyfill@4.0.10:
     resolution: {integrity: sha1-JIB8McnUAuACqz2McgFEzriEhCM=}
@@ -2460,6 +2539,10 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha1-QYPk6L8Iu24Fu7L30uDI9xLKQOM=}
+
+  gray-matter@4.0.3:
+    resolution: {integrity: sha1-6JPAZIJd5z6h9ffYjHqfcnQoh5g=}
+    engines: {node: '>=6.0'}
 
   has-symbols@1.1.0:
     resolution: {integrity: sha1-/JxqeDoISVHQuXH+EBjegTcHozg=}
@@ -2567,6 +2650,10 @@ packages:
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
     hasBin: true
 
+  is-extendable@0.1.1:
+    resolution: {integrity: sha1-YrEQ4omkcUGOPsNqYX1HLjAd/Ik=}
+    engines: {node: '>=0.10.0'}
+
   is-extglob@2.1.1:
     resolution: {integrity: sha1-qIwCU1eR8C7TfHahueqXc8gz+MI=}
     engines: {node: '>=0.10.0'}
@@ -2590,6 +2677,10 @@ packages:
   is-interactive@2.0.0:
     resolution: {integrity: sha1-QMV2FFk4JtoRAK3mBZd41ZfxbpA=}
     engines: {node: '>=12'}
+
+  is-network-error@1.3.2:
+    resolution: {integrity: sha1-lGC8MPhBmkvKdxFPTeiKPuXgxRk=}
+    engines: {node: '>=16'}
 
   is-number@7.0.0:
     resolution: {integrity: sha1-dTU0W4lnNNX4DE0GxQlVUnoU8Ss=}
@@ -2652,8 +2743,15 @@ packages:
   jose@6.2.3:
     resolution: {integrity: sha1-CXUZetlzJRIhxlijzdxLlRolDC0=}
 
+  js-tiktoken@1.0.21:
+    resolution: {integrity: sha1-NoqZV1kaMKYpl90MTPMIZvAPgiE=}
+
   js-tokens@4.0.0:
     resolution: {integrity: sha1-GSA/tZmR35jjoocFDUZHzerzJJk=}
+
+  js-yaml@3.14.2:
+    resolution: {integrity: sha1-d0hc4d1/M8Bh/RsW7OojtV/LBLA=}
+    hasBin: true
 
   js-yaml@4.1.1:
     resolution: {integrity: sha1-hUwpJGdwW2mUduGi3swMijRYgGs=}
@@ -2697,6 +2795,10 @@ packages:
   keyv@4.5.4:
     resolution: {integrity: sha1-qHmpnilFL5QkOfKkBeOvizHU3pM=}
 
+  kind-of@6.0.3:
+    resolution: {integrity: sha1-B8BQNKbDSfoG4k+jWqdttFgM5N0=}
+    engines: {node: '>=0.10.0'}
+
   kleur@3.0.3:
     resolution: {integrity: sha1-p5yezIbuHOP6YgbRIWxQHxR/wH4=}
     engines: {node: '>=6'}
@@ -2704,6 +2806,26 @@ packages:
   kleur@4.1.5:
     resolution: {integrity: sha1-lRBhAXlfcFDGxlDzUMaD/r3bF4A=}
     engines: {node: '>=6'}
+
+  langsmith@0.7.5:
+    resolution: {integrity: sha1-XQ44E19qO28AYed5+nf3kgB7DdQ=}
+    peerDependencies:
+      '@opentelemetry/api': '*'
+      '@opentelemetry/exporter-trace-otlp-proto': '*'
+      '@opentelemetry/sdk-trace-base': '*'
+      openai: '*'
+      ws: '>=7'
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+      '@opentelemetry/exporter-trace-otlp-proto':
+        optional: true
+      '@opentelemetry/sdk-trace-base':
+        optional: true
+      openai:
+        optional: true
+      ws:
+        optional: true
 
   less@4.6.4:
     resolution: {integrity: sha1-P/gGjmyKWfHs6Ka5InvaKMHtaKI=}
@@ -3029,6 +3151,10 @@ packages:
     resolution: {integrity: sha1-Ei2BkkT73+4e/d2RR0JmkQFDhbc=}
     engines: {node: '>= 10.16.0'}
 
+  mustache@4.2.0:
+    resolution: {integrity: sha1-5YkjJNYKEuycKnM1ntylKXK/b2Q=}
+    hasBin: true
+
   nanoid@3.3.12:
     resolution: {integrity: sha1-qz2RLiF6bQpRTwCnKhZUOiiYLAU=}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -3106,6 +3232,10 @@ packages:
     resolution: {integrity: sha1-j7u3FRr+M7VA3RU/Fx/6i9OOmGE=}
     engines: {node: '>=18'}
 
+  p-finally@1.0.0:
+    resolution: {integrity: sha1-P7z7FbiZpEEjs0ttzBi3JDNqLK4=}
+    engines: {node: '>=4'}
+
   p-limit@3.1.0:
     resolution: {integrity: sha1-4drMvnjQ0TiMoYxk/qOOPlfjcGs=}
     engines: {node: '>=10'}
@@ -3113,6 +3243,26 @@ packages:
   p-locate@5.0.0:
     resolution: {integrity: sha1-g8gxXGeFAF470CGDlBHJ4RDm2DQ=}
     engines: {node: '>=10'}
+
+  p-queue@6.6.2:
+    resolution: {integrity: sha1-IGip3PjmfdDsPnory3aBD6qF5CY=}
+    engines: {node: '>=8'}
+
+  p-queue@9.3.0:
+    resolution: {integrity: sha1-8rvms48fo43UyM7apES2JJzyWOI=}
+    engines: {node: '>=20'}
+
+  p-retry@7.1.1:
+    resolution: {integrity: sha1-dHD97LEVK6UPEzTkg3jJ5AEzDiQ=}
+    engines: {node: '>=20'}
+
+  p-timeout@3.2.0:
+    resolution: {integrity: sha1-x+F6vJcdKnli74NiazXWNazyPf4=}
+    engines: {node: '>=8'}
+
+  p-timeout@7.0.1:
+    resolution: {integrity: sha1-lWgKaqaTxTDxSsM3uL0y1Oxq5PA=}
+    engines: {node: '>=20'}
 
   parent-module@1.0.1:
     resolution: {integrity: sha1-aR0nCeeMefrjoVZiJFLQB2LKqqI=}
@@ -3382,6 +3532,10 @@ packages:
   scheduler@0.27.0:
     resolution: {integrity: sha1-DE74LWfR5cHjWej8dtOofwRf5b0=}
 
+  section-matter@1.0.0:
+    resolution: {integrity: sha1-6QQZU1BngOwB1Z8pKhnHuFC4QWc=}
+    engines: {node: '>=4'}
+
   semver@5.7.2:
     resolution: {integrity: sha1-SNVdtzfDKHzUg14X+hP+rOHEHvg=}
     hasBin: true
@@ -3464,6 +3618,9 @@ packages:
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha1-Hs2dI1CjhEVyw/SjErzrAYNIhZ8=}
 
+  sprintf-js@1.0.3:
+    resolution: {integrity: sha1-BOaSb2YolTVPPdAVIDYzuFcpfiw=}
+
   statuses@2.0.2:
     resolution: {integrity: sha1-j3XuzvdlteHPzcCA2llAntQk44I=}
     engines: {node: '>= 0.8'}
@@ -3497,6 +3654,10 @@ packages:
   strip-ansi@7.2.0:
     resolution: {integrity: sha1-0iomlSKDamJ6+NBLXD/Sx/o+MuM=}
     engines: {node: '>=12'}
+
+  strip-bom-string@1.0.0:
+    resolution: {integrity: sha1-5SEekiQ2n7uB1jOi8ABE3IztrZI=}
+    engines: {node: '>=0.10.0'}
 
   strip-bom@3.0.0:
     resolution: {integrity: sha1-IzTBjpx1n3vdVv3vfprj1YjmjtM=}
@@ -3713,6 +3874,10 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha1-RQ1Nyfpw3nMnYvvS1KKJgUGaDM8=}
+
+  uuid@14.0.0:
+    resolution: {integrity: sha1-CviDIgFj0mT/4MCE9riom5Zmlm0=}
+    hasBin: true
 
   v8-compile-cache-lib@3.0.1:
     resolution: {integrity: sha1-Yzbo1xllyz01obu3hoRFp8BSZL8=}
@@ -4040,6 +4205,8 @@ snapshots:
 
   '@borewit/text-codec@0.2.2': {}
 
+  '@cfworker/json-schema@4.1.1': {}
+
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
@@ -4253,11 +4420,63 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@langchain/core@1.1.48(ws@8.21.0)':
+    dependencies:
+      '@cfworker/json-schema': 4.1.1
+      '@standard-schema/spec': 1.1.0
+      js-tiktoken: 1.0.21
+      langsmith: 0.7.5(ws@8.21.0)
+      mustache: 4.2.0
+      p-queue: 6.6.2
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@opentelemetry/exporter-trace-otlp-proto'
+      - '@opentelemetry/sdk-trace-base'
+      - openai
+      - ws
+
+  '@langchain/langgraph-checkpoint@1.0.4(@langchain/core@1.1.48(ws@8.21.0))':
+    dependencies:
+      '@langchain/core': 1.1.48(ws@8.21.0)
+      uuid: 14.0.0
+
+  '@langchain/langgraph-sdk@1.9.20(@langchain/core@1.1.48(ws@8.21.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@langchain/core': 1.1.48(ws@8.21.0)
+      '@langchain/protocol': 0.0.16
+      '@types/json-schema': 7.0.15
+      p-queue: 9.3.0
+      p-retry: 7.1.1
+      uuid: 14.0.0
+    optionalDependencies:
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+
+  '@langchain/langgraph@1.3.7(@langchain/core@1.1.48(ws@8.21.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(zod-to-json-schema@3.25.2(zod@4.4.3))(zod@4.4.3)':
+    dependencies:
+      '@langchain/core': 1.1.48(ws@8.21.0)
+      '@langchain/langgraph-checkpoint': 1.0.4(@langchain/core@1.1.48(ws@8.21.0))
+      '@langchain/langgraph-sdk': 1.9.20(@langchain/core@1.1.48(ws@8.21.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@langchain/protocol': 0.0.16
+      '@standard-schema/spec': 1.1.0
+      uuid: 14.0.0
+      zod: 4.4.3
+    optionalDependencies:
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+    transitivePeerDependencies:
+      - react
+      - react-dom
+      - svelte
+      - vue
+
+  '@langchain/protocol@0.0.16': {}
+
   '@lukeed/csprng@1.1.0': {}
 
   '@microsoft/tsdoc@0.16.0': {}
 
-  '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
+  '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.25)
       ajv: 8.20.0
@@ -4276,6 +4495,8 @@ snapshots:
       raw-body: 3.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
       - supports-color
 
@@ -5180,6 +5401,8 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
+  '@standard-schema/spec@1.1.0': {}
+
   '@tailwindcss/node@4.3.0':
     dependencies:
       '@jridgewell/remapping': 2.3.5
@@ -5495,6 +5718,10 @@ snapshots:
 
   arg@4.1.3: {}
 
+  argparse@1.0.10:
+    dependencies:
+      sprintf-js: 1.0.3
+
   argparse@2.0.1: {}
 
   aria-hidden@1.2.6:
@@ -5512,6 +5739,8 @@ snapshots:
   bail@2.0.2: {}
 
   balanced-match@4.0.4: {}
+
+  base64-js@1.5.1: {}
 
   baseline-browser-mapping@2.10.35: {}
 
@@ -5879,6 +6108,10 @@ snapshots:
 
   etag@1.8.1: {}
 
+  eventemitter3@4.0.7: {}
+
+  eventemitter3@5.0.4: {}
+
   eventsource-parser@3.1.0: {}
 
   eventsource@3.0.7:
@@ -5949,6 +6182,10 @@ snapshots:
       vary: 1.1.2
     transitivePeerDependencies:
       - supports-color
+
+  extend-shallow@2.0.1:
+    dependencies:
+      is-extendable: 0.1.1
 
   extend@3.0.2: {}
 
@@ -6027,6 +6264,8 @@ snapshots:
 
   flatted@3.4.2: {}
 
+  flexsearch@0.8.212: {}
+
   formdata-polyfill@4.0.10:
     dependencies:
       fetch-blob: 3.2.0
@@ -6094,6 +6333,13 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  gray-matter@4.0.3:
+    dependencies:
+      js-yaml: 3.14.2
+      kind-of: 6.0.3
+      section-matter: 1.0.0
+      strip-bom-string: 1.0.0
 
   has-symbols@1.1.0: {}
 
@@ -6200,6 +6446,8 @@ snapshots:
 
   is-docker@3.0.0: {}
 
+  is-extendable@0.1.1: {}
+
   is-extglob@2.1.1: {}
 
   is-glob@4.0.3:
@@ -6215,6 +6463,8 @@ snapshots:
       is-docker: 3.0.0
 
   is-interactive@2.0.0: {}
+
+  is-network-error@1.3.2: {}
 
   is-number@7.0.0: {}
 
@@ -6250,7 +6500,16 @@ snapshots:
 
   jose@6.2.3: {}
 
+  js-tiktoken@1.0.21:
+    dependencies:
+      base64-js: 1.5.1
+
   js-tokens@4.0.0: {}
+
+  js-yaml@3.14.2:
+    dependencies:
+      argparse: 1.0.10
+      esprima: 4.0.1
 
   js-yaml@4.1.1:
     dependencies:
@@ -6286,9 +6545,17 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
+  kind-of@6.0.3: {}
+
   kleur@3.0.3: {}
 
   kleur@4.1.5: {}
+
+  langsmith@0.7.5(ws@8.21.0):
+    dependencies:
+      p-queue: 6.6.2
+    optionalDependencies:
+      ws: 8.21.0
 
   less@4.6.4:
     dependencies:
@@ -6791,6 +7058,8 @@ snapshots:
       concat-stream: 2.0.0
       type-is: 1.6.18
 
+  mustache@4.2.0: {}
+
   nanoid@3.3.12: {}
 
   natural-compare@1.4.0: {}
@@ -6874,6 +7143,8 @@ snapshots:
       string-width: 7.2.0
       strip-ansi: 7.2.0
 
+  p-finally@1.0.0: {}
+
   p-limit@3.1.0:
     dependencies:
       yocto-queue: 0.1.0
@@ -6881,6 +7152,26 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
+
+  p-queue@6.6.2:
+    dependencies:
+      eventemitter3: 4.0.7
+      p-timeout: 3.2.0
+
+  p-queue@9.3.0:
+    dependencies:
+      eventemitter3: 5.0.4
+      p-timeout: 7.0.1
+
+  p-retry@7.1.1:
+    dependencies:
+      is-network-error: 1.3.2
+
+  p-timeout@3.2.0:
+    dependencies:
+      p-finally: 1.0.0
+
+  p-timeout@7.0.1: {}
 
   parent-module@1.0.1:
     dependencies:
@@ -7228,6 +7519,11 @@ snapshots:
 
   scheduler@0.27.0: {}
 
+  section-matter@1.0.0:
+    dependencies:
+      extend-shallow: 2.0.1
+      kind-of: 6.0.3
+
   semver@5.7.2:
     optional: true
 
@@ -7264,14 +7560,14 @@ snapshots:
 
   setprototypeof@1.2.0: {}
 
-  shadcn@4.11.0(typescript@6.0.3):
+  shadcn@4.11.0(@cfworker/json-schema@4.1.1)(typescript@6.0.3):
     dependencies:
       '@babel/core': 7.29.7
       '@babel/parser': 7.29.7
       '@babel/plugin-transform-typescript': 7.29.7(@babel/core@7.29.7)
       '@babel/preset-typescript': 7.29.7(@babel/core@7.29.7)
       '@dotenvx/dotenvx': 1.71.2
-      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@types/validate-npm-package-name': 4.0.2
       browserslist: 4.28.2
       commander: 14.0.3
@@ -7356,6 +7652,8 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
+  sprintf-js@1.0.3: {}
+
   statuses@2.0.2: {}
 
   stdin-discarder@0.2.2: {}
@@ -7390,6 +7688,8 @@ snapshots:
   strip-ansi@7.2.0:
     dependencies:
       ansi-regex: 6.2.2
+
+  strip-bom-string@1.0.0: {}
 
   strip-bom@3.0.0: {}
 
@@ -7607,6 +7907,8 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
+  uuid@14.0.0: {}
+
   v8-compile-cache-lib@3.0.1: {}
 
   validate-npm-package-name@7.0.2: {}
@@ -7674,6 +7976,11 @@ snapshots:
   zod-to-json-schema@3.25.2(zod@3.25.76):
     dependencies:
       zod: 3.25.76
+
+  zod-to-json-schema@3.25.2(zod@4.4.3):
+    dependencies:
+      zod: 4.4.3
+    optional: true
 
   zod-validation-error@4.0.2(zod@4.4.3):
     dependencies:

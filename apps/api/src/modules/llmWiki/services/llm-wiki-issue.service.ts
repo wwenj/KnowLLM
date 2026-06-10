@@ -1,130 +1,173 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
-import * as path from "node:path";
-import { nowIso, randomId, readJson, writeJson } from "../../../common/fs-json";
-import { uniqueStrings } from "../../../common/text";
+import { Injectable, OnModuleInit } from "@nestjs/common";
+import { createHash, randomUUID } from "crypto";
+import * as fs from "fs";
+import * as path from "path";
 import { llmWikiConfig } from "../llm-wiki.config";
-import type { LlmWikiIssue, LlmWikiLintMode } from "../llm-wiki.types";
-import { LlmWikiStoreService } from "./llm-wiki-store.service";
+import {
+  LlmWikiIssue,
+  LlmWikiIssueKind,
+  LlmWikiIssueSeverity,
+} from "../llm-wiki.types";
 
-type IssueDraft = Omit<LlmWikiIssue, "id" | "status" | "created_at" | "updated_at">;
+export interface LlmWikiIssueInput {
+  kind: LlmWikiIssueKind;
+  severity?: LlmWikiIssueSeverity | "low" | "medium" | "high";
+  target: string;
+  message: string;
+  details?: string;
+  source_ids?: string[];
+}
 
 @Injectable()
-export class LlmWikiIssueService {
-  constructor(private readonly store: LlmWikiStoreService) {}
-
-  runLint(mode: LlmWikiLintMode = "all") {
-    const generated: IssueDraft[] = [];
-    const sources = new Set(this.store.listSources().map((source) => source.source_id));
-    const pages = this.store.listPages();
-
-    if (!pages.some((page) => page.path === "index.md")) {
-      generated.push({
-        kind: "index_missing",
-        severity: "error",
-        target: "index.md",
-        message: "缺少 LLM Wiki Index",
-        details: "需要重建 wiki/index.md",
-        source_ids: []
-      });
-    }
-
-    for (const page of pages) {
-      if (mode !== "evidence" && !page.updated_at) {
-        generated.push({
-          kind: "missing_frontmatter",
-          severity: "warning",
-          target: page.path,
-          message: "页面缺少完整 frontmatter",
-          details: "建议通过保存页面重新生成元数据",
-          source_ids: page.sources
-        });
-      }
-      if (mode !== "structural") {
-        const missing = page.sources.filter((source) => !sources.has(source));
-        if (missing.length) {
-          generated.push({
-            kind: "missing_source",
-            severity: "warning",
-            target: page.path,
-            message: "页面引用了不存在的 source",
-            details: missing.join(", "),
-            source_ids: missing
-          });
-        }
-        if (page.path !== "index.md" && page.type !== "manual" && page.sources.length === 0) {
-          generated.push({
-            kind: "weak_evidence",
-            severity: "info",
-            target: page.path,
-            message: "页面没有 source 引用",
-            details: "如果这是人工页面可忽略，否则建议补充 sources",
-            source_ids: []
-          });
-        }
-      }
-    }
-
-    const issues = this.upsertMany(generated);
-    return { issues, total: issues.length };
+export class LlmWikiIssueService implements OnModuleInit {
+  onModuleInit(): void {
+    this.ensureDirs();
   }
 
-  upsertMany(drafts: IssueDraft[]): LlmWikiIssue[] {
-    const current = this.readIssues();
-    const byKey = new Map(current.map((issue) => [issueKey(issue), issue]));
-    const touched: LlmWikiIssue[] = [];
-    for (const draft of drafts) {
-      const key = issueKey(draft);
-      const existing = byKey.get(key);
-      const next: LlmWikiIssue = existing
-        ? {
-            ...existing,
-            ...draft,
-            status: existing.status,
-            source_ids: uniqueStrings(draft.source_ids || []),
-            updated_at: nowIso()
-          }
-        : {
-            ...draft,
-            id: randomId(),
-            status: "open",
-            source_ids: uniqueStrings(draft.source_ids || []),
-            created_at: nowIso(),
-            updated_at: nowIso()
-          };
-      byKey.set(key, next);
-      touched.push(next);
-    }
-    this.writeIssues([...byKey.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at)));
-    return touched;
-  }
-
-  list(status: "open" | "resolved" | "all" = "open") {
-    const items = this.readIssues().filter((issue) => (status === "all" ? true : issue.status === status));
+  list(status: "open" | "resolved" | "all" = "open"): { items: LlmWikiIssue[] } {
+    this.ensureDirs();
+    const items = [
+      ...(status === "resolved" ? [] : this.readFromDir(this.openRoot())),
+      ...(status === "open" ? [] : this.readFromDir(this.resolvedRoot())),
+    ].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
     return { items };
   }
 
+  upsertMany(inputs: LlmWikiIssueInput[]): LlmWikiIssue[] {
+    const issues = inputs.map((input) => this.normalizeInput(input));
+    return issues.map((issue) => this.upsert(issue));
+  }
+
+  resolveMissingOpenIssues(
+    kinds: LlmWikiIssueKind[],
+    activeIssueIds: string[],
+  ): LlmWikiIssue[] {
+    this.ensureDirs();
+    const kindSet = new Set(kinds);
+    const activeIds = new Set(activeIssueIds);
+    return this.readFromDir(this.openRoot())
+      .filter((issue) => kindSet.has(issue.kind) && !activeIds.has(issue.id))
+      .map((issue) => this.moveToResolved(issue));
+  }
+
   resolve(issueId: string): LlmWikiIssue {
-    const items = this.readIssues();
-    const idx = items.findIndex((issue) => issue.id === issueId);
-    if (idx < 0) throw new NotFoundException("issue 不存在");
-    items[idx] = { ...items[idx], status: "resolved", updated_at: nowIso() };
-    this.writeIssues(items);
-    return items[idx];
+    this.ensureDirs();
+    const id = safeIssueId(issueId);
+    const file = path.join(this.openRoot(), `${id}.json`);
+    const issue = readJson<LlmWikiIssue>(file);
+    if (!issue) throw new Error("issue 不存在");
+    return this.moveToResolved(issue);
   }
 
-  private issuesPath(): string {
-    return path.join(llmWikiConfig.root, "issues.json");
+  normalizeInput(input: LlmWikiIssueInput): LlmWikiIssue {
+    const now = nowIso();
+    return {
+      id: issueFingerprint(input),
+      kind: input.kind,
+      severity: normalizeSeverity(input.severity),
+      status: "open",
+      target: String(input.target || "wiki").trim() || "wiki",
+      message: String(input.message || input.kind).trim().slice(0, 500),
+      details: String(input.details || "").trim().slice(0, 4000),
+      source_ids: uniqueStrings(input.source_ids || []).filter((id) => /^[a-f0-9]{32}$/.test(id)),
+      created_at: now,
+      updated_at: now,
+    };
   }
 
-  private readIssues(): LlmWikiIssue[] {
-    return readJson<LlmWikiIssue[]>(this.issuesPath(), []);
+  private upsert(issue: LlmWikiIssue): LlmWikiIssue {
+    this.ensureDirs();
+    const file = path.join(this.openRoot(), `${issue.id}.json`);
+    const existing = readJson<LlmWikiIssue>(file);
+    const next: LlmWikiIssue = existing
+      ? {
+          ...existing,
+          severity: issue.severity,
+          message: issue.message,
+          details: issue.details,
+          source_ids: issue.source_ids,
+          updated_at: nowIso(),
+        }
+      : issue;
+    atomicWriteJson(file, next);
+    return next;
   }
 
-  private writeIssues(items: LlmWikiIssue[]): void {
-    writeJson(this.issuesPath(), items);
+  private readFromDir(root: string): LlmWikiIssue[] {
+    if (!fs.existsSync(root)) return [];
+    return fs
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => readJson<LlmWikiIssue>(path.join(root, entry.name)))
+      .filter((item): item is LlmWikiIssue => !!item);
+  }
+
+  private moveToResolved(issue: LlmWikiIssue): LlmWikiIssue {
+    const next: LlmWikiIssue = {
+      ...issue,
+      status: "resolved",
+      updated_at: nowIso(),
+    };
+    fs.rmSync(path.join(this.openRoot(), `${issue.id}.json`), { force: true });
+    atomicWriteJson(path.join(this.resolvedRoot(), `${next.id}.json`), next);
+    return next;
+  }
+
+  private ensureDirs(): void {
+    fs.mkdirSync(this.openRoot(), { recursive: true });
+    fs.mkdirSync(this.resolvedRoot(), { recursive: true });
+  }
+
+  private openRoot(): string {
+    return path.join(llmWikiConfig.root, "issues", "open");
+  }
+
+  private resolvedRoot(): string {
+    return path.join(llmWikiConfig.root, "issues", "resolved");
   }
 }
 
-function issueKey(issue: Pick<LlmWikiIssue, "kind" | "target">): string {
-  return `${issue.kind}:${issue.target}`;
+function issueFingerprint(input: LlmWikiIssueInput): string {
+  const text = [
+    input.kind,
+    String(input.target || "").trim(),
+    String(input.message || "").trim(),
+  ].join("\n");
+  return createHash("sha256").update(text).digest("hex").slice(0, 32);
+}
+
+function normalizeSeverity(value: LlmWikiIssueInput["severity"]): LlmWikiIssueSeverity {
+  if (value === "error" || value === "high") return "error";
+  if (value === "info" || value === "low") return "info";
+  return "warning";
+}
+
+function safeIssueId(issueId: string): string {
+  const text = String(issueId || "").trim();
+  if (!/^[a-f0-9]{32}$/.test(text)) throw new Error("issue id 非法");
+  return text;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function readJson<T>(file: string): T | null {
+  try {
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+function atomicWriteJson(file: string, payload: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  fs.renameSync(tmp, file);
 }

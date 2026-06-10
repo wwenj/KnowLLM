@@ -1,55 +1,101 @@
 import { Injectable } from "@nestjs/common";
-import { normalizeWhitespace, snippet, stripFrontmatter } from "../../../common/text";
+import { Index } from "flexsearch";
 import { llmWikiConfig } from "../llm-wiki.config";
-import type { LlmWikiSearchHit } from "../llm-wiki.types";
+import { LlmWikiPage, LlmWikiSearchHit } from "../llm-wiki.types";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";
+
+interface IndexedPage {
+  page: LlmWikiPage;
+  body: string;
+  text: string;
+}
 
 @Injectable()
 export class LlmWikiSearchService {
+  private index = new Index({ tokenize: "full", cache: false });
+  private pages = new Map<string, IndexedPage>();
+  private dirty = true;
+
   constructor(private readonly store: LlmWikiStoreService) {}
 
-  search(query: string, limit = llmWikiConfig.maxSearchResults) {
-    const q = String(query || "").trim();
+  invalidate(): void {
+    this.dirty = true;
+  }
+
+  search(query: string, limit = llmWikiConfig.maxSearchResults): {
+    query: string;
+    hits: LlmWikiSearchHit[];
+    returned: number;
+  } {
+    const q = query.trim();
     if (!q) return { query: q, hits: [], returned: 0 };
+    this.ensureIndex();
+
     const max = Math.min(Math.max(Number(limit) || llmWikiConfig.maxSearchResults, 1), 50);
-    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = this.store
-      .listPages()
-      .map((page): LlmWikiSearchHit => {
-        const body = stripFrontmatter(page.content);
-        const haystack = normalizeWhitespace([
-          page.title,
-          page.path,
-          page.type,
-          page.tags.join(" "),
-          body
-        ].join("\n")).toLowerCase();
-        const score = scorePage(haystack, page.title.toLowerCase(), page.path.toLowerCase(), terms);
-        return {
-          path: page.path,
-          title: page.title,
-          type: page.type,
-          tags: page.tags,
-          sources: page.sources,
-          schema_hash: page.schema_hash,
-          updated_at: page.updated_at,
-          snippet: snippet(body, q),
-          score
-        };
-      })
-      .filter((hit) => hit.score > 0)
+    const ids = new Set<string>();
+    const flexResults = this.index.search(q, { limit: max * 3 });
+    for (const id of flexResults) ids.add(String(id));
+
+    const lower = q.toLowerCase();
+    for (const [id, item] of this.pages) {
+      if (item.text.toLowerCase().includes(lower)) ids.add(id);
+    }
+
+    const hits = [...ids]
+      .map((id) => this.pages.get(id))
+      .filter((item): item is IndexedPage => !!item)
+      .map((item) => toHit(item, q))
       .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
       .slice(0, max);
+
     return { query: q, hits, returned: hits.length };
+  }
+
+  private ensureIndex(): void {
+    if (!this.dirty) return;
+    this.index = new Index({ tokenize: "full", cache: false });
+    this.pages.clear();
+    for (const page of this.store.listPages()) {
+      const body = stripFrontmatter(page.content);
+      const text = [page.title, page.path, page.type, page.tags.join(" "), body].join("\n");
+      this.index.add(page.path, text);
+      this.pages.set(page.path, { page, body, text });
+    }
+    this.dirty = false;
   }
 }
 
-function scorePage(haystack: string, title: string, pagePath: string, terms: string[]): number {
-  let score = 0;
-  for (const term of terms) {
-    if (title.includes(term)) score += 100;
-    if (pagePath.includes(term)) score += 40;
-    if (haystack.includes(term)) score += 20;
-  }
-  return score;
+function toHit(item: IndexedPage, query: string): LlmWikiSearchHit {
+  const lower = query.toLowerCase();
+  const titleMatched = item.page.title.toLowerCase().includes(lower);
+  const tagMatched = item.page.tags.some((tag) => tag.toLowerCase().includes(lower));
+  const pathMatched = item.page.path.toLowerCase().includes(lower);
+  const bodyMatched = item.body.toLowerCase().includes(lower);
+  return {
+    path: item.page.path,
+    title: item.page.title,
+    type: item.page.type,
+    tags: item.page.tags,
+    sources: item.page.sources,
+    snippet: snippet(item.body, query),
+    score:
+      (titleMatched ? 100 : 0) +
+      (tagMatched ? 60 : 0) +
+      (pathMatched ? 30 : 0) +
+      (bodyMatched ? 20 : 0),
+  };
+}
+
+function stripFrontmatter(content: string): string {
+  return content.replace(/^---[\s\S]*?---\s*/m, "").trim();
+}
+
+function snippet(content: string, query: string): string {
+  const text = stripFrontmatter(content).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx < 0) return text.slice(0, 180);
+  const start = Math.max(0, idx - 70);
+  const end = Math.min(text.length, idx + query.length + 110);
+  return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }

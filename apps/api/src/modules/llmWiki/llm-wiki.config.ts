@@ -6,5 +6,11 @@ export const llmWikiConfig = {
   maxUploadBytes: 10 * 1024 * 1024,
   maxSourceChars: 120_000,
   maxWikiFileBytes: 1024 * 1024,
-  maxSearchResults: 20
+  maxSearchResults: 20,
+  model:
+    process.env.LLM_WIKI_MODEL ||
+    process.env.KNOWLEDGE_MODEL ||
+    process.env.MODEL ||
+    process.env.OPENAI_MODEL ||
+    ""
 };
