@@ -13,6 +13,14 @@ export interface ChatOptions {
   signal?: AbortSignal;
 }
 
+export interface RawChatOptions {
+  model?: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  response_format?: { type: "json_object" };
+  signal?: AbortSignal;
+}
+
 interface ChatCompletionResponse {
   choices?: Array<{
     message?: {
@@ -63,6 +71,12 @@ export class ModelService {
     return Boolean(this.apiKey() && this.resolveModel(""));
   }
 
+  findModel(model: string): { model: string } | null {
+    const target = String(model || "").trim();
+    if (!target) return null;
+    return this.listModels().find((item) => item.model === target) || null;
+  }
+
   resolveModel(explicit?: string): string {
     return (
       String(explicit || "").trim() ||
@@ -92,6 +106,20 @@ export class ModelService {
     const response = await this.request(options, false);
     const payload = (await response.json()) as ChatCompletionResponse;
     return extractContent(payload);
+  }
+
+  async chat(options: RawChatOptions): Promise<ChatCompletionResponse> {
+    const response = await this.request(
+      {
+        model: options.model,
+        messages: options.messages,
+        temperature: options.temperature,
+        responseFormat: options.response_format,
+        signal: options.signal
+      },
+      false
+    );
+    return (await response.json()) as ChatCompletionResponse;
   }
 
   async *stream(options: ChatOptions): AsyncGenerator<ModelStreamChunk> {

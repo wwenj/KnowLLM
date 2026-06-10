@@ -35,7 +35,17 @@ export class AgentRunStoreService {
       input: args.input,
       errors: [],
       contentFormat: "markdown",
-      runnerMeta: {}
+      artifacts: [],
+      runnerMeta: {},
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        rounds: 0,
+        modelCalls: 0,
+        tokenLimit: null
+      },
+      stats: { modelCalls: 0, toolRounds: 0 }
     };
     ensureDir(this.runDir(meta.agentType, meta.runId));
     writeJson(this.metaPath(meta.agentType, meta.runId), meta);
@@ -59,6 +69,8 @@ export class AgentRunStoreService {
     resultJson?: Record<string, unknown>;
     errors?: string[];
     runnerMeta?: Record<string, unknown>;
+    tokens?: AgentRunMeta["tokens"];
+    stats?: AgentRunMeta["stats"];
   }): AgentRunDetail {
     const meta = this.loadMeta(args.agentType, args.runId);
     if (!meta) throw new NotFoundException("执行记录不存在");
@@ -69,14 +81,11 @@ export class AgentRunStoreService {
       status: args.status,
       endedAt: nowIso(),
       errors: args.errors || [],
-      runnerMeta: { ...(meta.runnerMeta || {}), ...(args.runnerMeta || {}) }
+      runnerMeta: { ...(meta.runnerMeta || {}), ...(args.runnerMeta || {}) },
+      tokens: args.tokens ?? meta.tokens,
+      stats: args.stats ?? meta.stats
     };
     writeJson(this.metaPath(meta.agentType, meta.runId), next);
-    this.appendEvent(meta.agentType, meta.runId, {
-      type: "result",
-      status: args.status,
-      content: args.content
-    });
     return this.loadDetail(meta.agentType, meta.runId);
   }
 
@@ -125,8 +134,45 @@ export class AgentRunStoreService {
       .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 500));
   }
 
-  private loadMeta(agentType: string, runId: string): AgentRunMeta | null {
+  loadMeta(agentType: string, runId: string): AgentRunMeta | null {
     return readJson<AgentRunMeta | null>(this.metaPath(agentType, runId), null);
+  }
+
+  updateMeta(agentType: string, runId: string, patch: Partial<AgentRunMeta>): AgentRunMeta {
+    const current = this.loadMeta(agentType, runId);
+    if (!current) throw new NotFoundException("执行记录不存在");
+    const next = { ...current, ...patch };
+    writeJson(this.metaPath(agentType, runId), next);
+    return next;
+  }
+
+  updateRunnerMeta(agentType: string, runId: string, patch: Record<string, unknown>): AgentRunMeta {
+    const current = this.loadMeta(agentType, runId);
+    if (!current) throw new NotFoundException("执行记录不存在");
+    return this.updateMeta(agentType, runId, {
+      runnerMeta: { ...(current.runnerMeta || {}), ...patch }
+    });
+  }
+
+  markRunningCancelled(): number {
+    let count = 0;
+    for (const run of this.listAllRuns(["llmWiki"], 1000)) {
+      if (run.status !== "running") continue;
+      const meta = this.loadMeta(run.agentType, run.runId);
+      if (!meta || meta.status !== "running") continue;
+      this.updateMeta(run.agentType, run.runId, {
+        status: "cancelled",
+        endedAt: meta.endedAt || nowIso(),
+        errors: [...(meta.errors || []), "服务重启,任务被自动取消"]
+      });
+      this.appendEvent(run.agentType, run.runId, {
+        type: "result",
+        status: "cancelled",
+        msg: "服务重启,任务被自动取消"
+      });
+      count += 1;
+    }
+    return count;
   }
 
   private runDir(agentType: string, runId: string): string {

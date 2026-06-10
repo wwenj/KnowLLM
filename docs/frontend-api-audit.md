@@ -1,4 +1,4 @@
-# 前后端执行流程与残留逻辑审计（第二轮）
+# 前后端执行流程与残留逻辑审计（第三轮）
 
 审计日期：2026-06-10
 
@@ -9,16 +9,21 @@
 - 共享与规划模块：`packages/core`、`packages/protocol`、`packages/cli`、`packages/mcp-server`
 - 当前本地数据：`.knowllm/`
 - 仓库状态、TypeScript、ESLint
-- 未执行复杂 UI 自动化测试，未修改业务代码
+- 未执行复杂 UI 自动化测试
+- 本轮已按 `server_copy` / 原始 `llmWiki实现说明.md` 对齐服务端核心代码
 
 ## 1. 本轮结论
 
-上一轮修改已经完成了明显收敛：
+第三轮已完成核心链路对齐：
 
 - Chat 已从单轮请求改为携带历史消息。
 - Chat 已接入 `ModelService.stream()`，不再是模型完成后模拟切块。
-- Agent 前端已删除 DeepAgent、Knowledge Graph、企业投研、多模型角色、预算、artifact 等无效配置。
-- 服务端 Agent 已收敛为唯一的 `llmWiki` runner。
+- Session Chat 内部改为 LangGraph 路由；`[assistant:llmWiki]` 不再直接做一次 Wiki search，而是先跑 `llmWiki` Agent snippets，再把 snippets 注入聊天模型。
+- 服务端 Agent 仍只注册 `llmWiki`，但 runner 已恢复为原始多轮流程：`load_manifest -> plan_query -> collect_initial_candidates -> read_page_batch -> review_evidence -> execute_next_actions -> read_raw_sources -> review_sources -> build_final_snippets -> maybe_synthesize`。
+- LLM Wiki ingest 已恢复 compiler + fusion：共享页不再简单“覆盖正文 + 合并 source”，会按同 path、同标题、搜索候选交给 fusion 决定 create/update/skip/conflict。
+- 搜索已恢复 `FlexSearch` 内存索引和 title/tag/path/body 加权。
+- Schema / issue / contribution 结构已恢复为 `schema/AGENTS.md`、`issues/open|resolved`、`meta/page-contributions`、`log/YYYY-MM-DD.md`。
+- Lint 已恢复 structural/evidence 全量检查和消失 issue 自动 resolve。
 - 前端 Skills、附件、Gateway 管理 API 已删除。
 - 模型列表已从旧 `/api/gateway/models` 改为 `/api/models`。
 - `pnpm check` 和 `pnpm lint` 当前都能通过。
@@ -33,11 +38,11 @@ LLM Wiki Source 管理与编译
 + 本地文件持久化
 ```
 
-但仍有 3 个需要优先处理的正确性问题：
+当前仍需关注的问题：
 
-1. 共享 Wiki 页面仍会“覆盖正文 + 合并 source”，证据归属可能错误。
-2. Source 重解析不是事务操作，保存中途失败会留下部分新页面、部分旧页面和错误 source 关联。
-3. fallback 编译时，中文标题容易统一退化成 `concept-1.md` 等路径，不同 source 会互相覆盖。
+1. Source 重解析仍不是事务操作，保存中途失败可能留下部分新页面、部分旧页面和错误 source 关联。
+2. `LlmWikiSearchService.search()` 对「如何设计 llmwiki」这类中文整句直接搜索仍可能为 0；Agent 路径依赖 planner 拆 query 才能改善召回。
+3. HTTP 异常仍统一返回 200，真实错误码在响应体 `code`。
 
 本轮还发现两个重要执行风险：
 
@@ -52,25 +57,25 @@ LLM Wiki Source 管理与编译
 
 ## 2. 与上一轮审计的变化
 
-| 上一轮问题                       | 当前状态                          | 结论                                 |
-| -------------------------------- | --------------------------------- | ------------------------------------ |
-| Chat 没有多轮上下文              | 已读取当前 session 全部历史消息   | 已修复，但缺少上下文长度限制         |
-| Chat 使用模拟流式                | 已接入模型 SSE 流式输出           | 已修复                               |
-| Chat Skill 选择无效              | Skill picker 和 Skills API 已删除 | 已修复                               |
-| Chat 附件只保存不理解            | 附件功能已整体删除                | 已收敛                               |
-| Agent UI 大量配置不生效          | 只保留 query、limit、model        | 已修复                               |
-| DeepAgent / KG / 企业投研残留    | 已删除相关配置与展示分支          | 已修复                               |
-| 服务端存在孤立 `chat` runner     | 已删除，只保留 `llmWiki`          | 已修复                               |
-| Gateway 管理 API 残留            | 已删除，只保留 `/api/models`      | 已修复                               |
-| 前端 Skills CRUD 残留            | 已删除                            | 已修复                               |
-| Health 前端路径错误              | 前端 Health API 已删除            | 路径错位消失，但顶部状态仍是静态文案 |
-| Wiki 共享页证据归属错误          | 未修复                            | 仍是最高优先级问题                   |
-| Wiki lint issue 生命周期错误     | 未修复                            | 仍存在                               |
-| 编译静默 fallback / 静默截断     | 未修复                            | 仍存在                               |
-| Agent run 重启恢复缺失           | 未修复                            | 仍存在                               |
-| HTTP 异常统一返回 200            | 未修复                            | 仍存在                               |
-| Web/API 类型重复并漂移           | 未修复                            | 仍存在                               |
-| CLI / MCP / core / protocol 骨架 | 未修复                            | 仍存在                               |
+| 上一轮问题                       | 当前状态                                                        | 结论                                 |
+| -------------------------------- | --------------------------------------------------------------- | ------------------------------------ |
+| Chat 没有多轮上下文              | 已读取当前 session 全部历史消息                                 | 已修复，但缺少上下文长度限制         |
+| Chat 使用模拟流式                | 已接入模型 SSE 流式输出                                         | 已修复                               |
+| Chat Skill 选择无效              | Skill picker 和 Skills API 已删除                               | 已修复                               |
+| Chat 附件只保存不理解            | 附件功能已整体删除                                              | 已收敛                               |
+| Agent UI 大量配置不生效          | 前端仍传 query/limit/model，服务端兼容映射到 budget/models      | 已修复                               |
+| DeepAgent / KG / 企业投研残留    | 已删除相关配置与展示分支                                        | 已修复                               |
+| 服务端存在孤立 `chat` runner     | 已删除，只保留 `llmWiki`                                        | 已修复                               |
+| Gateway 管理 API 残留            | 已删除，只保留 `/api/models`                                    | 已修复                               |
+| 前端 Skills CRUD 残留            | 已删除                                                          | 已修复                               |
+| Health 前端路径错误              | 前端 Health API 已删除                                          | 路径错位消失，但顶部状态仍是静态文案 |
+| Wiki 共享页证据归属错误          | 已恢复 fusion + contribution                                    | 已修复主链路，仍需事务保障           |
+| Wiki lint issue 生命周期错误     | 已恢复 open/resolved 目录和自动 resolve                         | 已修复                               |
+| 编译静默 fallback / 静默截断     | compiler 失败会标记 source failed；fusion 失败才 fallback issue | 已修复主链路                         |
+| Agent run 重启恢复缺失           | execution service 启动时取消 running run                        | 已修复基础恢复                       |
+| HTTP 异常统一返回 200            | 未修复                                                          | 仍存在                               |
+| Web/API 类型重复并漂移           | 未修复                                                          | 仍存在                               |
+| CLI / MCP / core / protocol 骨架 | 未修复                                                          | 仍存在                               |
 
 ## 3. 当前真实架构
 
@@ -102,17 +107,19 @@ LLM Wiki Source 管理与编译
 ```text
 .knowllm/
   llm-wiki/default/
-    schema.md
-    issues.json
+    schema/AGENTS.md
+    issues/open/*.json
+    issues/resolved/*.json
+    meta/page-contributions/*.json
+    log/YYYY-MM-DD.md
     sources/<sourceId>/
       meta.json
-      source.md|txt|html
+      source.md|txt
     wiki/
       index.md
       summaries/*.md
       concepts/*.md
       entities/*.md
-      comparisons/*.md
   sessions/
     sessions.json
   agents/runs/llmWiki/<runId>/
@@ -135,9 +142,10 @@ Web 选择 .md/.txt 文件
   -> 保存原文与 meta.json，状态 uploaded
   -> Web 调用 POST /sources/:sourceId/ingest
   -> 服务端状态改为 ingesting，启动进程内 Promise
-  -> 模型编译 JSON；任何模型错误都退化为 fallback 编译
+  -> compiler 模型编译 JSON；失败则 source failed
   -> detachSourceFromWiki 移除该 source 的旧关联
-  -> 逐页保存 summary / concept / entity
+  -> fusion 对 concept/entity 做 create/update/skip/conflict
+  -> saveFusionPage 写入页面和 contribution
   -> 重建 index.md
   -> source 标记 ready
   -> Web 每 1.5 秒轮询 source 列表
@@ -149,7 +157,7 @@ Web 选择 .md/.txt 文件
 - 不同 source 可以同时 ingest，但没有全局写锁。
 - 服务重启会把遗留 `ingesting` source 标记为 `failed`。
 - 前端不允许删除 `ingesting` source，但服务端 API 没有同样校验。
-- 编译只读取 source 前 120,000 字符，超出部分无提示。
+- 编译只读取 source 前 120,000 字符，并在 prompt 中标记是否截断。
 
 ### 4.2 Wiki 浏览、编辑与删除
 
@@ -168,40 +176,39 @@ Web 读取 tree
 
 ```text
 query
-  -> 按空白切 term
-  -> 遍历并读取全部 Wiki 页面
-  -> title/path/body substring 计分
+  -> FlexSearch full token 搜索
+  -> 整句 substring fallback
+  -> title/tag/path/body 加权
   -> 返回前 N 个结果
 ```
 
-当前搜索使用任意 term 命中，不做中文分词、连字符归一化、模糊匹配、BM25 或向量检索。
+当前搜索不是语义检索，不做中文分词、同义词或向量召回。
 
 当前本地数据已经体现该问题：
 
 - Wiki 中存在 `LLM Wiki`、`llm-wiki.md` 等页面。
-- 多次 Agent 查询“如何设计 llmwiki”仍返回 `insufficient`。
-- 原因是 term `如何设计` 和 `llmwiki` 都无法命中 `LLM Wiki` / `llm-wiki`。
+- 直接搜索“如何设计 llmwiki”仍可能返回 0。
+- Agent 查询不再直接使用这一条 search 结果，而是先由 planner 生成候选 path 和 searchQueries。
 
 ### 4.4 Wiki Lint 与 Issue
 
 ```text
 Web 选择 structural / evidence / all
   -> POST /api/llm-wiki/lint
-  -> 服务端生成少量 issue draft
-  -> 按 kind + target upsert 到 issues.json
+  -> 服务端生成 structural / evidence issue
+  -> 按 kind + target + message upsert 到 issues/open
+  -> 本轮消失的结构/证据 issue 移到 issues/resolved
   -> Web 再读取 open issue
 ```
 
-当前只检查：
+当前检查：
 
-- index 缺失。
-- 页面缺少更新时间。
-- 页面引用不存在的 source。
-- 非 manual 页面没有 source。
+- structural：missing frontmatter、oversized page、dead link、orphan page、index missing、duplicate title。
+- evidence：missing source、deleted source ref、missing claim source、schema drift、needs reconcile、stale source digest。
 
 Source 删除时额外生成 `needs_reconcile`。
 
-页面建议中仍出现 dead link、orphan、claim source、schema drift、conflict，但服务端没有实现这些检查。
+Fusion 产生的 conflict、weak_evidence、needs_review 等 issue 也会进入同一 issue 生命周期。
 
 ### 4.5 Chat
 
@@ -217,7 +224,9 @@ Web 初始化
   -> Web 先插入本地 user / assistant 占位消息
   -> 服务端解析 route，保存去掉 route 前缀后的 user message
   -> 读取该 session 全部历史消息
-  -> basic chat 或检索 Wiki evidence
+  -> basic chat 或 LangGraph llmWiki node
+  -> llmWiki node 运行 Agent snippets
+  -> snippets 注入 system prompt
   -> 调用模型 SSE 并实时转发 thinking / stream
   -> 完成后保存 agent message
   -> 发送 done 和 session_title
@@ -238,46 +247,49 @@ Web 初始化
 ```text
 Web 提交 query + limit + model
   -> POST /api/agents/llmWiki/runs
-  -> 校验并规范化输入
+  -> 校验并规范化为 outputMode/sourcePolicy/budget/models
   -> 创建 run 目录与 running meta
-  -> 后台执行关键词搜索
-  -> 无结果时返回 insufficient
-  -> 有结果时读取页面 evidence
-  -> 模型普通完成或 fallback 摘录
+  -> load_manifest
+  -> plan_query
+  -> collect_initial_candidates
+  -> read_page_batch / review_evidence 多轮循环
+  -> read_raw_sources / review_sources
+  -> build_final_snippets
+  -> maybe_synthesize
   -> 保存 result.md / result.json / events.jsonl / meta.json
   -> Web 每 1.5 秒轮询详情
 ```
 
-当前 Agent 前后端字段已对齐。
+当前 Agent 前端字段保持旧的 query/limit/model；服务端兼容映射到原始 runner 的 budget/models。
 
 仍存在：
 
-- 模型错误会记录 `model_error` event，但最终仍返回 `success + fallback`。
-- 服务重启不会处理遗留 `running` run。
+- 模型错误会导致当前 Agent run failed，Session llmWiki 分支会把失败结果作为最终回复。
+- 服务重启会把遗留 `running` run 标记为 cancelled。
 - 只保留进程内取消控制器，没有队列、超时、并发限制和保留策略。
-- Agent 与 Session Wiki Chat 各自重复实现检索、evidence 组装和回答合成。
+- Session Wiki Chat 已复用 Agent snippets，不再重复实现单次检索链路。
 
 ## 5. 当前前后端对齐矩阵
 
-| 能力                                 | 前端              | 服务端                     | 结论                 |
-| ------------------------------------ | ----------------- | -------------------------- | -------------------- |
-| Source 上传 / 重命名 / 删除 / ingest | 已实现            | 已实现                     | 基本对齐             |
-| `.html` Source                       | 文件选择器不允许  | 服务端允许                 | 类型与 UI 偏差       |
-| Wiki tree / page / save / delete     | 已实现            | 已实现                     | 基本对齐             |
-| Wiki `comparison/manual` 类型        | 类型未声明        | 服务端支持                 | 类型漂移             |
-| Wiki 搜索                            | 已实现            | 已实现                     | 对齐，但检索能力不足 |
-| Wiki lint / issue                    | 已实现            | 少量规则                   | 展示建议多于真实能力 |
-| 基础 Chat                            | 已实现            | 已实现                     | 对齐                 |
-| Chat 多轮上下文                      | 已实现            | 已实现                     | 对齐，但无长度限制   |
-| Chat 真流式                          | 已实现            | 已实现                     | 对齐                 |
-| Chat LLM Wiki Tool                   | 已实现            | 已实现                     | 对齐                 |
-| Chat 附件 / Skill                    | 已删除            | 已删除                     | 已收敛               |
-| LLM Wiki Agent                       | query/limit/model | query/limit/model          | 对齐                 |
-| Agent 运行历史 / 取消                | 已实现            | 已实现                     | 基本对齐             |
-| 模型列表                             | `/api/models`     | `/api/models`              | 对齐                 |
-| Health                               | 静态“服务正常”    | `/api/health`              | 未接入               |
-| shared protocol                      | Web/API 各自声明  | `packages/protocol` 未接入 | 缺失                 |
-| CLI / MCP                            | 无真实入口        | placeholder                | 未实现               |
+| 能力                                 | 前端              | 服务端                           | 结论                 |
+| ------------------------------------ | ----------------- | -------------------------------- | -------------------- |
+| Source 上传 / 重命名 / 删除 / ingest | 已实现            | 已实现                           | 基本对齐             |
+| `.html` Source                       | 文件选择器不允许  | 服务端不允许                     | 已收敛               |
+| Wiki tree / page / save / delete     | 已实现            | 已实现                           | 基本对齐             |
+| Wiki `comparison/manual` 类型        | 类型未声明        | 服务端不支持                     | 已收敛到原始类型     |
+| Wiki 搜索                            | 已实现            | 已实现                           | 对齐，但检索能力不足 |
+| Wiki lint / issue                    | 已实现            | structural/evidence 全量规则     | 对齐                 |
+| 基础 Chat                            | 已实现            | 已实现                           | 对齐                 |
+| Chat 多轮上下文                      | 已实现            | 已实现                           | 对齐，但无长度限制   |
+| Chat 真流式                          | 已实现            | 已实现                           | 对齐                 |
+| Chat LLM Wiki Tool                   | 已实现            | 已实现                           | 对齐                 |
+| Chat 附件 / Skill                    | 已删除            | 已删除                           | 已收敛               |
+| LLM Wiki Agent                       | query/limit/model | 兼容旧字段，内部为 budget/models | 对齐                 |
+| Agent 运行历史 / 取消                | 已实现            | 已实现                           | 基本对齐             |
+| 模型列表                             | `/api/models`     | `/api/models`                    | 对齐                 |
+| Health                               | 静态“服务正常”    | `/api/health`                    | 未接入               |
+| shared protocol                      | Web/API 各自声明  | `packages/protocol` 未接入       | 缺失                 |
+| CLI / MCP                            | 无真实入口        | placeholder                      | 未实现               |
 
 ## 6. 高优先级问题
 
@@ -294,48 +306,18 @@ Web 提交 query + limit + model
 - 无法安全回滚。
 - push 当前分支不会包含主要实现。
 
-#### 2. 共享 Wiki 页面仍会产生错误证据归属
+#### 2. 共享 Wiki 页面证据归属已修复主链路
 
-关键逻辑：
+第三轮已恢复原始 `LlmWikiFusionService` 和 `page-contributions`：
 
-- `LlmWikiStoreService.saveCompiledPage()` 直接用新 draft 覆盖正文。
-- 同时把旧页面 `sources` 与当前 source 合并。
+- concept/entity 不再直接覆盖写入。
+- fusion 会基于同 path、同标题、搜索候选决定 create/update/skip/conflict。
+- 页面写入时同步 contribution 记录。
+- source 删除后会移除 contribution 并为剩余共享页面生成 `needs_reconcile`。
 
-结果：
+剩余风险是 fusion 输出质量仍依赖模型；fusion 模型失败时会使用“新增来源待复核”fallback，并生成 `weak_evidence` issue。
 
-```text
-正文 = 最新 source 生成的正文
-sources = 历史 source + 最新 source
-```
-
-页面 frontmatter 会声称旧 source 也支持最新正文，但系统没有做 claim/source 映射或正文 merge。
-
-重解析时仍然存在同样问题：
-
-- 先 detach 当前 source。
-- 保留页面上的其他 source。
-- 再用当前 source 新正文覆盖页面。
-- 最后重新把当前 source 合并回 sources。
-
-#### 3. fallback 中文标题路径会跨 source 冲突
-
-fallback 编译从 Markdown 二三级标题生成 concept 路径：
-
-```text
-concepts/${slugify(heading, `concept-${index + 1}`)}.md
-```
-
-`slugify()` 只保留 ASCII 字符。纯中文标题会退化为：
-
-```text
-concepts/concept-1.md
-concepts/concept-2.md
-...
-```
-
-不同 source 的 fallback 页面会反复写入同一路径，最终继续触发“覆盖正文 + 合并 sources”。
-
-#### 4. ingest 不是事务操作
+#### 3. ingest 不是事务操作
 
 当前顺序是：
 
@@ -358,7 +340,7 @@ compile 完成
 
 ### P1：核心体验与可维护性问题
 
-#### 5. Chat 多轮历史无上限
+#### 4. Chat 多轮历史无上限
 
 `SessionGateway` 保存当前 user message 后，直接读取 `detail(sessionId).messages` 的全部消息传给模型。
 
@@ -371,11 +353,11 @@ compile 完成
 
 长会话会越来越慢，并最终触发模型上下文超限。
 
-#### 6. 搜索不足以支撑 Agent 查询
+#### 5. 搜索不足以直接支撑自然语言查询
 
-当前搜索是按空白拆词后的 substring scan。中文自然语言、空格差异、连字符差异、同义词都会导致漏召回。
+当前搜索已恢复 FlexSearch，但仍不是语义检索。中文自然语言、空格差异、连字符差异、同义词仍会导致漏召回。
 
-当前本地 Agent 运行记录已经出现多次“Wiki 明明存在相关页面，但查询返回 insufficient”。
+直接 `GET /api/llm-wiki/search?q=如何设计 llmwiki` 仍返回 0；Agent 路径已改为 planner 拆 query，因此不再等同于这次直接搜索。
 
 至少应补：
 
@@ -384,42 +366,27 @@ compile 完成
 - 查询词权重与命中覆盖率。
 - 标题、标签、正文的明确分层计分。
 
-#### 7. Lint issue 生命周期仍错误
+#### 6. Lint issue 生命周期已修复主链路
 
-`runLint()` 只 upsert 本轮生成的问题：
+第三轮已恢复：
 
-- 本轮消失的问题不会自动关闭。
-- 已手动 resolved 的问题再次出现时仍保持 resolved。
-- `structural` 和 `evidence` 分模式运行也没有记录规则覆盖范围。
+- `issues/open/*.json` 与 `issues/resolved/*.json`。
+- structural/evidence 分模式 active issue 集合。
+- 本轮消失的结构/证据 issue 自动 move 到 resolved。
 
-Schema 保存后也不会：
+剩余风险：`needs_reconcile` 仍是人工处理型 issue，不应自动关闭。
 
-- 标记旧页面 schema drift。
-- 标记 source stale。
-- 提示重新编译。
+#### 7. fallback 与截断状态
 
-#### 8. fallback 与截断仍不可见
+Compiler 模型异常不再静默 fallback，source 会标记 `failed`。Fusion 模型异常仍会 fallback merge，并生成 `weak_evidence` issue。
 
-Compiler 的任意模型异常都会被吞掉并 fallback，source 最终仍标记 `ready`。
+仍建议继续补充：
 
-问题：
+- 在 source meta 或 ingest log 中记录 `input_chars` / `compiled_chars`。
+- 在 UI 上提示 source 是否被截断。
+- 在 issue 列表里突出 fusion fallback。
 
-- 用户无法区分模型编译成功与 fallback。
-- fallback 文案固定写“当前未配置模型”，即使真实原因是模型调用失败或 JSON 解析失败。
-- Source 超过 120,000 字符时会静默截断。
-
-建议至少记录：
-
-```text
-compiler_mode: model | fallback
-compiler_warning
-model_error
-input_chars
-compiled_chars
-truncated
-```
-
-#### 9. Session / WS 存在任务生命周期竞态
+#### 8. Session / WS 存在任务生命周期竞态
 
 - 任意 WS 连接关闭都会取消 session 当前任务，多标签页会互相影响。
 - 删除正在回复的 session 时，REST 会先软删除 session；后台 WS 随后保存 agent message 会失败。
@@ -434,16 +401,16 @@ truncated
 
 当前实现混合了这三种生命周期。
 
-#### 10. Agent run 恢复和状态语义不足
+#### 9. Agent run 恢复和状态语义
 
-- 服务重启后遗留 `running` run 永远保持 running。
-- 模型错误后返回 fallback，run 仍标记 `success`。
+- 服务重启后遗留 `running` run 会标记 `cancelled`。
+- 模型错误会导致 run `failed`。
 - 没有超时、重试、并发限制、运行清理。
 - 前端只读取最近 50 个 run。
 
 ### P2：部署和扩展前处理
 
-#### 11. HTTP 异常仍全部返回 200
+#### 10. HTTP 异常仍全部返回 200
 
 `ApiExceptionFilter` 对所有异常执行：
 
@@ -453,7 +420,7 @@ response.status(200).json(...)
 
 这会影响监控、代理、Swagger、缓存和通用客户端行为。
 
-#### 12. 配置和安全边界未收敛
+#### 11. 配置和安全边界未收敛
 
 - REST Base 固定为 `http://localhost:39247`。
 - WS Base 固定为 `ws://localhost:39247`。
@@ -464,16 +431,15 @@ response.status(200).json(...)
 - 模型参数允许 API 调用方传任意 model 字符串，没有白名单。
 - 模型调用没有 timeout、retry、usage、限流。
 
-#### 13. Web/API 类型仍漂移
+#### 12. Web/API 类型仍漂移
 
 例如：
 
-- 前端 `LlmWikiSource.ext` 只声明 `.md | .txt`，服务端支持 `.html`。
-- 前端 `LlmWikiPageType` 缺少 `comparison | manual`。
+- Agent defaults 返回原始 runner 配置，但前端仍只展示 query/limit/model。
 - `packages/protocol` 的 source 状态与当前 API 不一致。
 - Web/API 没有真正依赖 `@knowllm/protocol`。
 
-#### 14. 文件持久化缺少数据治理
+#### 13. 文件持久化缺少数据治理
 
 - Session 软删除后消息永久保留。
 - Source、run、issue 没有保留与清理策略。
@@ -510,17 +476,9 @@ response.status(200).json(...)
 
 这些接口可以作为正式 API 保留，但需要明确是“外部 API”还是“当前孤立代码”，避免继续双重维护。
 
-### 7.3 重复实现
+### 7.3 LLM Wiki 查询链路
 
-以下逻辑在 `SessionChatService` 与 `LlmWikiAgentRunner` 中重复：
-
-- 搜索 Wiki。
-- 读取页面。
-- 截取 evidence。
-- 构建 prompt。
-- 模型失败后的 fallback 回答。
-
-建议抽取统一 `LlmWikiQueryService`，Chat 只负责会话和流式输出，Agent 只负责运行记录。
+Session LLM Wiki Chat 已复用 `LlmWikiAgentRunner` 的 `outputMode=snippets`，不再重复实现一次搜索和 evidence 组装。当前需要继续关注的是 Agent runner 逻辑较长，后续可再拆出 planner/reviewer/source review 的内部 helper service。
 
 ### 7.4 骨架与文档残留
 
