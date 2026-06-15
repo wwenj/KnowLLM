@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { NotFound } from "@/components/NotFound";
 import { DeepAgent } from "@/pages/DeepAgent";
 import { LlmWiki } from "@/pages/LlmWiki";
+import { LlmWikiEvaluation } from "@/pages/LlmWikiEvaluation";
 
 export const router = createBrowserRouter([
   {
@@ -12,6 +13,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/llm-wiki" replace /> },
       { path: "agents", element: <DeepAgent /> },
       { path: "llm-wiki", element: <LlmWiki /> },
+      { path: "evaluations/llm-wiki-compile", element: <LlmWikiEvaluation /> },
     ],
   },
   { path: "*", element: <NotFound /> },

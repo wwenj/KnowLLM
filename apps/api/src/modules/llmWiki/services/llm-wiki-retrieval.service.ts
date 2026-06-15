@@ -32,11 +32,13 @@ export class LlmWikiRetrievalService {
       schema: this.schema.read(),
       index,
       pages,
-      sources: sources.map(({ source_id, filename, status, touched_pages }) => ({
+      sources: sources.map(({ source_id, filename, status, touched_pages, sha256, ingested_at }) => ({
         source_id,
         filename,
         status,
         touched_pages,
+        sha256,
+        ingested_at,
       })),
     };
   }
