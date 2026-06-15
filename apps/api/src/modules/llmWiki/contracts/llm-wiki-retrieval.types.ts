@@ -15,7 +15,12 @@ export interface LlmWikiRetrievalManifest {
   schema: LlmWikiSchema;
   index: string;
   pages: LlmWikiPageRef[];
-  sources: Array<Pick<LlmWikiSourceMeta, "source_id" | "filename" | "status" | "touched_pages">>;
+  sources: Array<
+    Pick<
+      LlmWikiSourceMeta,
+      "source_id" | "filename" | "status" | "touched_pages" | "sha256" | "ingested_at"
+    >
+  >;
 }
 
 export interface LlmWikiSearchResult {

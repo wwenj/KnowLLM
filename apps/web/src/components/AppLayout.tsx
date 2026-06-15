@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  ClipboardCheck,
   Sparkles,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
@@ -7,6 +8,7 @@ import { NavLink, Outlet } from "react-router-dom";
 const navItems = [
   { to: "/agents", label: "调试中心", icon: Sparkles },
   { to: "/llm-wiki", label: "LLM Wiki 管理", icon: BookOpen },
+  { to: "/evaluations/llm-wiki-compile", label: "编译评测", icon: ClipboardCheck },
 ];
 
 export function AppLayout() {
