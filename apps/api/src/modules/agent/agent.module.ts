@@ -24,6 +24,5 @@ import { AgentService } from "./services/agent.service";
     LlmWikiAgentWorkflow,
     LlmWikiAgentRunner
   ],
-  exports: [AgentRunExecutionService, AgentRunStoreService, AgentService]
 })
 export class AgentModule {}

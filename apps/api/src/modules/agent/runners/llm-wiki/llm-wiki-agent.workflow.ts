@@ -28,7 +28,6 @@ import {
   KeptPage,
   KnowledgeSnippet,
   LlmWikiModels,
-  LlmWikiOutputMode,
   LlmWikiSourcePolicy,
   PageHitReason,
   PlannedPageHit,
@@ -48,7 +47,6 @@ import {
 
 const State = Annotation.Root({
   query: Annotation<string>(),
-  outputMode: Annotation<LlmWikiOutputMode>(),
   sourcePolicy: Annotation<LlmWikiSourcePolicy>(),
   budget: Annotation<LlmWikiBudget>(),
   models: Annotation<LlmWikiModels>(),
@@ -97,7 +95,6 @@ export class LlmWikiAgentWorkflow {
 
   getDefaults(): Record<string, unknown> {
     return {
-      outputMode: "summary",
       sourcePolicy: "auto",
       budget: defaultBudget(),
       models: defaultModels(),
@@ -109,7 +106,6 @@ export class LlmWikiAgentWorkflow {
     const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
     const query = stringField(raw.query);
     if (!query) throw new Error("query 不能为空");
-    const outputMode = raw.outputMode === "snippets" ? "snippets" : "summary";
     const sourcePolicy = normalizeInputSourcePolicy(raw.sourcePolicy);
     const legacyLimit = Number(raw.limit);
     const budgetInput =
@@ -127,7 +123,7 @@ export class LlmWikiAgentWorkflow {
         : raw.models;
     const models = resolveModels(modelsInput);
     this.assertModelsAvailable(models);
-    return { query, outputMode, sourcePolicy, budget, models };
+    return { query, sourcePolicy, budget, models };
   }
 
   title(input: LlmWikiAgentInput): string {
@@ -139,7 +135,6 @@ export class LlmWikiAgentWorkflow {
     const graph = this.buildGraph(ctx);
     const initial: LlmWikiAgentState = {
       query: ctx.input.query,
-      outputMode: ctx.input.outputMode,
       sourcePolicy: ctx.input.sourcePolicy,
       budget: ctx.input.budget,
       models: ctx.input.models,
@@ -168,7 +163,6 @@ export class LlmWikiAgentWorkflow {
       type: "start",
       msg: "开始执行 LLM Wiki Agent",
       query: ctx.input.query,
-      outputMode: ctx.input.outputMode,
       sourcePolicy: ctx.input.sourcePolicy,
       budget: ctx.input.budget,
       models: ctx.input.models,
@@ -180,7 +174,6 @@ export class LlmWikiAgentWorkflow {
       content: finalState.answerMarkdown || "未生成有效结果。",
       resultJson: finalState.resultJson,
       runnerMeta: {
-        outputMode: ctx.input.outputMode,
         sourcePolicy: ctx.input.sourcePolicy,
         budget: ctx.input.budget,
         pageCount: finalState.pages.length,
@@ -281,7 +274,6 @@ export class LlmWikiAgentWorkflow {
         reason: "string",
       },
       query: state.query,
-      outputMode: state.outputMode,
       sourcePolicy: state.sourcePolicy,
       budget: state.budget,
       manifest: manifestForPrompt(state.manifest),
@@ -851,7 +843,6 @@ export class LlmWikiAgentWorkflow {
     state: LlmWikiAgentState,
   ): Promise<Partial<LlmWikiAgentState>> {
     this.assertActive(ctx);
-    if (state.outputMode === "snippets") return {};
     if (!state.knowledgeSnippets.length) {
       const answerMarkdown = fallbackMarkdown(state);
       return {
@@ -932,7 +923,6 @@ export class LlmWikiAgentWorkflow {
       type: "result",
       msg: "LLM Wiki Agent 多轮证据检索完成",
       status: "success",
-      outputMode: state.outputMode,
       stopReason: state.stopReason,
       rounds: state.round,
       pageCount: state.pages.length,

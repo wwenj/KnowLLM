@@ -5,20 +5,11 @@ export interface ChatMessage {
   content: unknown;
 }
 
-export interface ChatOptions {
-  model?: string;
-  messages: ChatMessage[];
-  temperature?: number;
-  responseFormat?: { type: "json_object" };
-  signal?: AbortSignal;
-}
-
 export interface RawChatOptions {
   model?: string;
   messages: ChatMessage[];
   temperature?: number;
   response_format?: { type: "json_object" };
-  signal?: AbortSignal;
 }
 
 interface ChatCompletionResponse {
@@ -29,11 +20,6 @@ interface ChatCompletionResponse {
     };
     text?: unknown;
   }>;
-}
-
-export interface ModelStreamChunk {
-  type: "stream" | "thinking";
-  content: string;
 }
 
 @Injectable()
@@ -48,8 +34,7 @@ export class ModelService {
     const configured = unique([
       process.env.OPENAI_MODEL,
       process.env.MODEL,
-      process.env.LLM_WIKI_MODEL,
-      process.env.SESSION_DEFAULT_MODEL
+      process.env.LLM_WIKI_MODEL
     ]);
     const models = configured.length ? configured : ["local-fallback"];
     return models.map((model) => ({
@@ -82,69 +67,16 @@ export class ModelService {
       String(explicit || "").trim() ||
       String(process.env.OPENAI_MODEL || "").trim() ||
       String(process.env.MODEL || "").trim() ||
-      String(process.env.LLM_WIKI_MODEL || "").trim() ||
-      String(process.env.SESSION_DEFAULT_MODEL || "").trim()
+      String(process.env.LLM_WIKI_MODEL || "").trim()
     );
-  }
-
-  resolveLlmWikiModel(): string {
-    return (
-      String(process.env.LLM_WIKI_MODEL || "").trim() ||
-      this.resolveModel("")
-    );
-  }
-
-  resolveSessionModel(explicit?: string): string {
-    return (
-      String(explicit || "").trim() ||
-      String(process.env.SESSION_DEFAULT_MODEL || "").trim() ||
-      this.resolveModel("")
-    );
-  }
-
-  async complete(options: ChatOptions): Promise<string> {
-    const response = await this.request(options, false);
-    const payload = (await response.json()) as ChatCompletionResponse;
-    return extractContent(payload);
   }
 
   async chat(options: RawChatOptions): Promise<ChatCompletionResponse> {
-    const response = await this.request(
-      {
-        model: options.model,
-        messages: options.messages,
-        temperature: options.temperature,
-        responseFormat: options.response_format,
-        signal: options.signal
-      },
-      false
-    );
+    const response = await this.request(options);
     return (await response.json()) as ChatCompletionResponse;
   }
 
-  async *stream(options: ChatOptions): AsyncGenerator<ModelStreamChunk> {
-    try {
-      const response = await this.request(options, true);
-      if (!response.body) throw new Error("模型流式响应缺少响应体");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for await (const raw of response.body as unknown as AsyncIterable<Uint8Array>) {
-        if (options.signal?.aborted) return;
-        buffer += decoder.decode(raw, { stream: true });
-        const parsed = consumeSseBuffer(buffer);
-        buffer = parsed.rest;
-        yield* parsed.chunks;
-      }
-      const final = consumeSseBuffer(`${buffer}\n`);
-      yield* final.chunks;
-    } catch (error) {
-      if (options.signal?.aborted) return;
-      throw error;
-    }
-  }
-
-  private async request(options: ChatOptions, stream: boolean): Promise<Response> {
+  private async request(options: RawChatOptions): Promise<Response> {
     const model = this.resolveModel(options.model);
     const key = this.apiKey();
     if (!model) throw new Error("未配置模型名称");
@@ -154,9 +86,9 @@ export class ModelService {
       model,
       messages: options.messages,
       temperature: options.temperature ?? 0.2,
-      stream
+      stream: false
     };
-    if (options.responseFormat) body.response_format = options.responseFormat;
+    if (options.response_format) body.response_format = options.response_format;
 
     const response = await fetch(`${this.baseUrl()}/chat/completions`, {
       method: "POST",
@@ -164,8 +96,7 @@ export class ModelService {
         "content-type": "application/json",
         authorization: `Bearer ${key}`
       },
-      body: JSON.stringify(body),
-      signal: options.signal
+      body: JSON.stringify(body)
     });
     if (!response.ok) {
       const text = await response.text();
@@ -185,69 +116,4 @@ export class ModelService {
 
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
-}
-
-function extractContent(payload: ChatCompletionResponse): string {
-  const choice = payload.choices?.[0];
-  const content = choice?.message?.content ?? choice?.text;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object" && "text" in part) {
-          return String((part as { text?: unknown }).text || "");
-        }
-        return "";
-      })
-      .join("");
-  }
-  return "";
-}
-
-function parseStreamChunk(raw: string): { content: string; thinking: string } {
-  try {
-    const payload = JSON.parse(raw) as {
-      choices?: Array<{
-        delta?: {
-          content?: unknown;
-          reasoning_content?: unknown;
-        };
-      }>;
-    };
-    const delta = payload.choices?.[0]?.delta;
-    return {
-      content: normalizeText(delta?.content),
-      thinking: normalizeText(delta?.reasoning_content)
-    };
-  } catch {
-    return { content: "", thinking: "" };
-  }
-}
-
-function consumeSseBuffer(buffer: string): { chunks: ModelStreamChunk[]; rest: string } {
-  const lines = buffer.split(/\r?\n/);
-  const rest = lines.pop() || "";
-  const chunks: ModelStreamChunk[] = [];
-  for (const line of lines) {
-    const text = line.trim();
-    if (!text.startsWith("data:")) continue;
-    const data = text.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
-    const chunk = parseStreamChunk(data);
-    if (chunk.thinking) chunks.push({ type: "thinking", content: chunk.thinking });
-    if (chunk.content) chunks.push({ type: "stream", content: chunk.content });
-  }
-  return { chunks, rest };
-}
-
-function normalizeText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value.map(normalizeText).join("");
-  }
-  if (value && typeof value === "object" && "text" in value) {
-    return String((value as { text?: unknown }).text || "");
-  }
-  return "";
 }

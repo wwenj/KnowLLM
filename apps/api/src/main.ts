@@ -19,7 +19,7 @@ async function bootstrap() {
   if (process.env.NODE_ENV !== "production") {
     const swaggerConfig = new DocumentBuilder()
       .setTitle("KnowLLM API")
-      .setDescription("KnowLLM 本地 LLM Wiki、Agent、Session 和调试接口")
+      .setDescription("KnowLLM 本地 LLM Wiki、Agent 和调试接口")
       .setVersion("1.0")
       .addServer(`http://localhost:${port}`, "本地开发服务")
       .build();

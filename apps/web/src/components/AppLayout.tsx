@@ -1,12 +1,10 @@
 import {
   BookOpen,
-  MessageSquareText,
   Sparkles,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 
 const navItems = [
-  { to: "/chat", label: "对话", icon: MessageSquareText },
   { to: "/agents", label: "调试中心", icon: Sparkles },
   { to: "/llm-wiki", label: "LLM Wiki 管理", icon: BookOpen },
 ];
