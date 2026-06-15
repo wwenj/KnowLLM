@@ -1,4 +1,11 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   ChevronRight,
@@ -7,6 +14,7 @@ import {
   FileText,
   FolderOpen,
   Loader2,
+  Pencil,
   RefreshCw,
   Save,
   Search,
@@ -15,10 +23,9 @@ import {
   Upload,
   Wrench,
 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { toast } from "sonner";
-import { PageHead } from "@/components/PageHead";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Pagination } from "@/components/ui/pagination";
 import {
   LlmWikiIssue,
   LlmWikiLintMode,
@@ -56,26 +64,26 @@ const emptyStats: LlmWikiStats = {
   page_count: 0,
 };
 
-const statCards = [
+const statusStats = [
   {
     key: "uploaded",
     label: "待解析",
-    className: "border-amber-200/80 bg-amber-50/80 text-amber-700",
+    dotClassName: "bg-amber-500",
   },
   {
     key: "ingesting",
     label: "解析中",
-    className: "border-indigo-200/80 bg-indigo-50/80 text-indigo-700",
+    dotClassName: "bg-indigo-500",
   },
   {
     key: "ready",
     label: "已解析",
-    className: "border-emerald-200/80 bg-emerald-50/80 text-emerald-700",
+    dotClassName: "bg-emerald-500",
   },
   {
     key: "failed",
     label: "失败",
-    className: "border-rose-200/80 bg-rose-50/80 text-rose-700",
+    dotClassName: "bg-rose-500",
   },
 ] as const;
 
@@ -87,6 +95,10 @@ const wikiStatusLabels = {
 };
 
 type StatusFilter = "all" | LlmWikiSource["status"];
+type BulkAction = "ingest" | "delete" | null;
+
+const sourcePageSizeOptions = [10, 20, 50];
+const defaultSourcePageSize = 20;
 
 export function LlmWiki() {
   const [sources, setSources] = useState<LlmWikiSource[]>([]);
@@ -100,6 +112,12 @@ export function LlmWiki() {
   const [renameSource, setRenameSource] = useState<LlmWikiSource | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteSource, setDeleteSource] = useState<LlmWikiSource | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [sourcePage, setSourcePage] = useState(1);
+  const [sourcePageSize, setSourcePageSize] = useState(defaultSourcePageSize);
+  const [bulkAction, setBulkAction] = useState<BulkAction>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [rawSource, setRawSource] = useState<{
     source_id: string;
     filename: string;
@@ -131,8 +149,15 @@ export function LlmWiki() {
     if (!silent) setLoading(true);
     try {
       const res = await llmWikiApi.listSources(silent);
-      setSources(res.items || []);
+      const nextSources = res.items || [];
+      const selectableIds = new Set(
+        nextSources
+          .filter((source) => source.status !== "ingesting")
+          .map((source) => source.source_id),
+      );
+      setSources(nextSources);
       setStats(res.stats || emptyStats);
+      setSelectedSourceIds((ids) => ids.filter((id) => selectableIds.has(id)));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -165,6 +190,41 @@ export function LlmWiki() {
     });
   }, [nameFilter, sources, statusFilter]);
 
+  const sourceTotalPages = Math.max(
+    1,
+    Math.ceil(filteredSources.length / sourcePageSize),
+  );
+  const currentSourcePage = Math.min(sourcePage, sourceTotalPages);
+  const pagedSources = useMemo(() => {
+    const start = (currentSourcePage - 1) * sourcePageSize;
+    return filteredSources.slice(start, start + sourcePageSize);
+  }, [currentSourcePage, filteredSources, sourcePageSize]);
+  const selectedSourceIdSet = useMemo(
+    () => new Set(selectedSourceIds),
+    [selectedSourceIds],
+  );
+  const selectedSources = useMemo(
+    () =>
+      filteredSources.filter(
+        (source) =>
+          source.status !== "ingesting" &&
+          selectedSourceIdSet.has(source.source_id),
+      ),
+    [filteredSources, selectedSourceIdSet],
+  );
+  const pageSelectableSources = useMemo(
+    () => pagedSources.filter((source) => source.status !== "ingesting"),
+    [pagedSources],
+  );
+  const pageSelectedCount = pageSelectableSources.filter((source) =>
+    selectedSourceIdSet.has(source.source_id),
+  ).length;
+  const allPageSelected =
+    pageSelectableSources.length > 0 &&
+    pageSelectedCount === pageSelectableSources.length;
+  const somePageSelected = pageSelectedCount > 0 && !allPageSelected;
+  const bulkBusy = bulkAction !== null;
+
   const handleUpload = async (files?: FileList | null) => {
     const selected = Array.from(files || []);
     if (!selected.length) return;
@@ -173,7 +233,9 @@ export function LlmWiki() {
       for (const file of selected) {
         await llmWikiApi.uploadSource(file);
       }
-      toast.success(selected.length > 1 ? `已上传 ${selected.length} 个文档` : "上传完成");
+      toast.success(
+        selected.length > 1 ? `已上传 ${selected.length} 个文档` : "上传完成",
+      );
       await refresh(true);
     } finally {
       setUploading(false);
@@ -185,6 +247,65 @@ export function LlmWiki() {
     await llmWikiApi.ingestSource(source.source_id);
     toast.success(source.status === "ready" ? "已启动重新解析" : "已启动解析");
     await refresh(true);
+  };
+
+  const setSourceSelected = (source: LlmWikiSource, selected: boolean) => {
+    if (source.status === "ingesting") return;
+    setSelectedSourceIds((ids) => {
+      if (selected) {
+        return ids.includes(source.source_id)
+          ? ids
+          : [...ids, source.source_id];
+      }
+      return ids.filter((id) => id !== source.source_id);
+    });
+  };
+
+  const togglePageSelected = (selected: boolean) => {
+    const pageIds = pageSelectableSources.map((source) => source.source_id);
+    setSelectedSourceIds((ids) => {
+      if (selected) {
+        const next = new Set(ids);
+        pageIds.forEach((id) => next.add(id));
+        return Array.from(next);
+      }
+      return ids.filter((id) => !pageIds.includes(id));
+    });
+  };
+
+  const clearSelection = () => setSelectedSourceIds([]);
+
+  const toggleSelectionMode = () => {
+    if (selectionMode) clearSelection();
+    setSelectionMode(!selectionMode);
+  };
+
+  const applySourceFilters = () => {
+    setNameFilter(nameDraft);
+    setStatusFilter(statusDraft);
+    setSourcePage(1);
+    clearSelection();
+  };
+
+  const handleBulkIngest = async () => {
+    const targets = selectedSources.filter(
+      (source) => source.status !== "ingesting",
+    );
+    if (!targets.length) {
+      toast.info("没有可解析的已选文档");
+      return;
+    }
+    setBulkAction("ingest");
+    try {
+      for (const source of targets) {
+        await llmWikiApi.ingestSource(source.source_id);
+      }
+      toast.success(`已启动 ${targets.length} 个文档解析`);
+      clearSelection();
+      await refresh(true);
+    } finally {
+      setBulkAction(null);
+    }
   };
 
   const handleRename = (source: LlmWikiSource) => {
@@ -210,9 +331,36 @@ export function LlmWiki() {
     if (!deleteSource) return;
     await llmWikiApi.deleteSource(deleteSource.source_id);
     toast.success("删除完成");
+    setSelectedSourceIds((ids) =>
+      ids.filter((id) => id !== deleteSource.source_id),
+    );
     setDeleteSource(null);
     await refresh(true);
     if (wikiOpen) await reloadTree();
+  };
+
+  const confirmBulkDelete = async () => {
+    const targets = selectedSources.filter(
+      (source) => source.status !== "ingesting",
+    );
+    if (!targets.length) {
+      setBulkDeleteOpen(false);
+      toast.info("没有可删除的已选文档");
+      return;
+    }
+    setBulkAction("delete");
+    try {
+      for (const source of targets) {
+        await llmWikiApi.deleteSource(source.source_id);
+      }
+      toast.success(`已删除 ${targets.length} 个文档`);
+      clearSelection();
+      setBulkDeleteOpen(false);
+      await refresh(true);
+      if (wikiOpen) await reloadTree();
+    } finally {
+      setBulkAction(null);
+    }
   };
 
   const openRaw = async (source: LlmWikiSource) => {
@@ -365,149 +513,280 @@ export function LlmWiki() {
   };
 
   return (
-    <div className="space-y-5 p-4 sm:p-5">
-      <PageHead title="LLM Wiki" />
-
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {statCards.map((card) => (
-          <div
-            key={card.key}
-            className={`rounded-lg border p-4 shadow-sm backdrop-blur ${card.className}`}
-          >
-            <div className="text-2xl font-semibold">{stats[card.key]}</div>
-            <div className="mt-1 text-xs opacity-80">{card.label}</div>
-          </div>
-        ))}
-      </section>
-
-      <Card className="border-slate-200/70 bg-white/85 backdrop-blur">
-        <CardHeader className="flex flex-row items-center justify-between border-b border-slate-100">
-          <CardTitle className="text-sm font-semibold">Source 列表</CardTitle>
-          <span className="text-xs text-slate-500">
-            显示 {filteredSources.length} 个，共 {stats.total} 个，wiki 页面 {stats.page_count} 个
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <header className="flex flex-none flex-col gap-3 border-b border-slate-200 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-baseline gap-3">
+          <h1 className="shrink-0 text-base font-semibold text-slate-950">
+            LLM Wiki
+          </h1>
+          <span className="truncate text-xs text-slate-500">
+            {stats.total} 个文档 · {stats.page_count} 个 Wiki 页面
           </span>
-        </CardHeader>
-        <CardContent className="px-0 py-0">
-          <div className="flex flex-col gap-2 border-b border-slate-100 p-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept=".md,.txt,text/markdown,text/plain"
+            className="hidden"
+            onChange={(event) => handleUpload(event.target.files)}
+          />
+          <Button disabled={uploading} onClick={() => fileRef.current?.click()}>
+            {uploading ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Upload className="size-4" />
+            )}
+            上传文档
+          </Button>
+          <Button variant="outline" onClick={() => openWiki()}>
+            <FolderOpen className="size-4" />
+            Wiki
+          </Button>
+          <Button variant="outline" onClick={() => setSearchOpen(true)}>
+            <Search className="size-4" />
+            搜索
+          </Button>
+          <Button variant="outline" onClick={openSchema}>
+            <Settings2 className="size-4" />
+            Schema
+          </Button>
+          <Button variant="outline" onClick={openDiagnostics}>
+            <AlertTriangle className="size-4" />
+            诊断
+          </Button>
+          <Button
+            size="icon"
+            variant="outline"
+            disabled={loading}
+            title="刷新文档列表"
+            aria-label="刷新文档列表"
+            onClick={() => refresh()}
+          >
+            <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
+          </Button>
+        </div>
+      </header>
+
+      <section className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-none flex-col gap-2 border-b border-slate-200 bg-slate-50/70 px-3 py-2.5 2xl:flex-row 2xl:items-center 2xl:justify-between">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-slate-500" />
+              全部{" "}
+              <strong className="font-semibold text-slate-900">
+                {stats.total}
+              </strong>
+            </span>
+            {statusStats.map((item) => (
+              <span key={item.key} className="inline-flex items-center gap-1.5">
+                <span
+                  className={`size-1.5 rounded-full ${item.dotClassName}`}
+                />
+                {item.label}{" "}
+                <strong className="font-semibold text-slate-900">
+                  {stats[item.key]}
+                </strong>
+              </span>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="relative min-w-0 sm:w-[260px]">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
               <Input
                 value={nameDraft}
                 onChange={(event) => setNameDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
-                    setNameFilter(nameDraft);
-                    setStatusFilter(statusDraft);
+                    applySourceFilters();
                   }
                 }}
                 placeholder="按文档名搜索"
-                className="h-8 sm:max-w-[320px]"
+                className="h-8 bg-white pl-8"
               />
-              <Select
-                value={statusDraft}
-                onValueChange={(value) => setStatusDraft(value as StatusFilter)}
-              >
-                <SelectTrigger className="h-8 w-full bg-white sm:w-[140px]">
-                  <SelectValue placeholder="全部状态" />
-                </SelectTrigger>
-                <SelectContent position="popper" align="start">
-                  <SelectItem value="all">全部状态</SelectItem>
-                  <SelectItem value="uploaded">待解析</SelectItem>
-                  <SelectItem value="ingesting">解析中</SelectItem>
-                  <SelectItem value="ready">已解析</SelectItem>
-                  <SelectItem value="failed">失败</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                disabled={loading}
-                onClick={() => {
-                  setNameFilter(nameDraft);
-                  setStatusFilter(statusDraft);
-                }}
-              >
-                {loading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Search className="size-4" />
-                )}
-                搜索
-              </Button>
+            </div>
+            <Select
+              value={statusDraft}
+              onValueChange={(value) => setStatusDraft(value as StatusFilter)}
+            >
+              <SelectTrigger className="h-8 w-full bg-white sm:w-[112px]">
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="uploaded">待解析</SelectItem>
+                <SelectItem value="ingesting">解析中</SelectItem>
+                <SelectItem value="ready">已解析</SelectItem>
+                <SelectItem value="failed">失败</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading}
+              onClick={applySourceFilters}
+            >
+              {loading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+              筛选
+            </Button>
+            <Select
+              value={String(sourcePageSize)}
+              onValueChange={(value) => {
+                setSourcePageSize(Number(value));
+                setSourcePage(1);
+              }}
+            >
+              <SelectTrigger className="h-8 w-full bg-white sm:w-[112px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                {sourcePageSizeOptions.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    每页 {size}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant={selectionMode ? "secondary" : "outline"}
+              size="sm"
+              onClick={toggleSelectionMode}
+            >
+              {selectionMode ? "退出多选" : "多选"}
+            </Button>
+          </div>
+        </div>
+        {selectionMode && selectedSources.length > 0 && (
+          <div className="flex flex-none flex-col gap-2 border-b border-indigo-100 bg-indigo-50/60 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-slate-600">
+              已选{" "}
+              <span className="font-semibold text-slate-900">
+                {selectedSources.length}
+              </span>{" "}
+              个文档
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept=".md,.txt,text/markdown,text/plain"
-                className="hidden"
-                onChange={(event) => handleUpload(event.target.files)}
-              />
               <Button
-                disabled={uploading}
-                onClick={() => fileRef.current?.click()}
+                size="sm"
+                variant="outline"
+                disabled={bulkBusy}
+                onClick={handleBulkIngest}
               >
-                {uploading ? (
-                  <Loader2 className="size-4 animate-spin" />
+                {bulkAction === "ingest" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                  <Upload size={14} />
+                  <RefreshCw className="size-3.5" />
                 )}
-                上传文档
+                批量解析
               </Button>
-              <Button variant="outline" onClick={() => openWiki()}>
-                <FolderOpen className="size-4" />
-                查看 Wiki
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={bulkBusy}
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                {bulkAction === "delete" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                批量删除
               </Button>
-              <Button variant="outline" onClick={() => setSearchOpen(true)}>
-                <Search className="size-4" />
-                Wiki 搜索
-              </Button>
-              <Button variant="outline" onClick={openSchema}>
-                <Settings2 className="size-4" />
-                Schema
-              </Button>
-              <Button variant="outline" onClick={openDiagnostics}>
-                <AlertTriangle className="size-4" />
-                诊断
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={bulkBusy}
+                onClick={clearSelection}
+              >
+                清空选择
               </Button>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                <tr>
-                  <th className="w-[260px] px-4 py-2 text-center font-medium">文档</th>
-                  <th className="min-w-[96px] px-4 py-2 text-center font-medium">状态</th>
-                  <th className="min-w-[96px] px-4 py-2 text-center font-medium">大小</th>
-                  <th className="min-w-[180px] px-4 py-2 text-center font-medium">上传时间</th>
-                  <th className="min-w-[96px] px-4 py-2 text-center font-medium">生成页面</th>
-                  <th className="min-w-[320px] px-4 py-2 text-center font-medium">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredSources.length ? (
-                  filteredSources.map((source) => (
-                    <SourceRow
-                      key={source.source_id}
-                      source={source}
-                      onIngest={handleIngest}
-                      onOpenRaw={openRaw}
-                      onOpenWiki={openWiki}
-                      onRename={handleRename}
-                      onDelete={setDeleteSource}
+        )}
+        <div className="min-h-0 flex-1 overflow-auto bg-white">
+          <table className="w-full min-w-[1080px] table-fixed text-sm">
+            <colgroup>
+              {selectionMode && <col className="w-[44px]" />}
+              <col className="w-[31%]" />
+              <col className="w-[104px]" />
+              <col className="w-[96px]" />
+              <col className="w-[180px]" />
+              <col className="w-[100px]" />
+              <col className="w-[252px]" />
+            </colgroup>
+            <thead className="sticky top-0 z-10 bg-slate-100/95 text-xs text-slate-600 shadow-[0_1px_0_rgb(203_213_225)] backdrop-blur">
+              <tr>
+                {selectionMode && (
+                  <th className="px-2 py-2.5 text-center font-medium">
+                    <SelectionCheckbox
+                      checked={allPageSelected}
+                      indeterminate={somePageSelected}
+                      disabled={!pageSelectableSources.length || bulkBusy}
+                      ariaLabel="选择当前页文档"
+                      onChange={(checked) => togglePageSelected(checked)}
                     />
-                  ))
-                ) : (
-                  <tr>
-                    <td className="px-4 py-10 text-center text-slate-400" colSpan={6}>
-                      没有匹配文档
-                    </td>
-                  </tr>
+                  </th>
                 )}
-              </tbody>
-            </table>
+                <th className="px-3 py-2.5 text-center font-medium">文档</th>
+                <th className="px-3 py-2.5 text-center font-medium">状态</th>
+                <th className="px-3 py-2.5 text-center font-medium">大小</th>
+                <th className="px-3 py-2.5 text-center font-medium">
+                  上传时间
+                </th>
+                <th className="px-3 py-2.5 text-center font-medium">页面数</th>
+                <th className="px-3 py-2.5 text-center font-medium">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pagedSources.length ? (
+                pagedSources.map((source) => (
+                  <SourceRow
+                    key={source.source_id}
+                    source={source}
+                    selectionMode={selectionMode}
+                    selected={selectedSourceIdSet.has(source.source_id)}
+                    selectionDisabled={
+                      source.status === "ingesting" || bulkBusy
+                    }
+                    onSelectChange={setSourceSelected}
+                    onIngest={handleIngest}
+                    onOpenRaw={openRaw}
+                    onOpenWiki={openWiki}
+                    onRename={handleRename}
+                    onDelete={setDeleteSource}
+                  />
+                ))
+              ) : (
+                <tr>
+                  <td
+                    className="px-4 py-10 text-center text-slate-400"
+                    colSpan={selectionMode ? 7 : 6}
+                  >
+                    没有匹配文档
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {filteredSources.length > 0 && (
+          <div className="flex-none border-t border-slate-200 bg-white px-3 py-2">
+            <Pagination
+              page={currentSourcePage}
+              pageSize={sourcePageSize}
+              total={filteredSources.length}
+              onPageChange={setSourcePage}
+              ariaLabel="Source 列表分页"
+              className="w-full py-0"
+            />
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </section>
 
       <WikiDialog
         open={wikiOpen}
@@ -525,7 +804,10 @@ export function LlmWiki() {
         onDelete={deletePage}
       />
 
-      <RawDialog source={rawSource} onOpenChange={(open) => !open && setRawSource(null)} />
+      <RawDialog
+        source={rawSource}
+        onOpenChange={(open) => !open && setRawSource(null)}
+      />
 
       <SearchDialog
         open={searchOpen}
@@ -581,12 +863,57 @@ export function LlmWiki() {
         }}
         onConfirm={confirmDelete}
       />
+
+      <BulkDeleteDialog
+        open={bulkDeleteOpen}
+        sources={selectedSources}
+        busy={bulkAction === "delete"}
+        onOpenChange={setBulkDeleteOpen}
+        onConfirm={confirmBulkDelete}
+      />
     </div>
+  );
+}
+
+function SelectionCheckbox({
+  checked,
+  indeterminate = false,
+  disabled = false,
+  ariaLabel,
+  onChange,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  ariaLabel: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={inputRef}
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      aria-checked={indeterminate ? "mixed" : checked}
+      onChange={(event) => onChange(event.target.checked)}
+      className="size-4 rounded border-slate-300 text-indigo-600 accent-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
+    />
   );
 }
 
 function SourceRow({
   source,
+  selectionMode,
+  selected,
+  selectionDisabled,
+  onSelectChange,
   onIngest,
   onOpenRaw,
   onOpenWiki,
@@ -594,6 +921,10 @@ function SourceRow({
   onDelete,
 }: {
   source: LlmWikiSource;
+  selectionMode: boolean;
+  selected: boolean;
+  selectionDisabled: boolean;
+  onSelectChange: (source: LlmWikiSource, selected: boolean) => void;
   onIngest: (source: LlmWikiSource) => void;
   onOpenRaw: (source: LlmWikiSource) => void;
   onOpenWiki: (path?: string) => void;
@@ -605,72 +936,144 @@ function SourceRow({
   const uploadedTime = formatTime(source.uploaded_at);
   const ingestedTime = formatTime(source.ingested_at) || "-";
   return (
-    <tr className="border-t border-slate-100 align-middle">
-      <td className="w-[260px] max-w-[260px] px-4 py-3 text-center">
-        <button
-          className={[
-            "mx-auto block max-w-[220px] truncate whitespace-nowrap text-center font-medium hover:underline",
-            source.status === "ready"
-              ? "text-indigo-600 hover:text-indigo-700"
-              : "text-slate-900 hover:text-slate-700",
-          ].join(" ")}
-          onClick={() => onOpenWiki(source.status === "ready" ? summaryPath : "index.md")}
-          title={source.filename}
-        >
-          {source.filename}
-        </button>
-        <div className="mx-auto mt-0.5 max-w-[220px] truncate whitespace-nowrap font-mono text-xs text-slate-400" title={source.source_id}>
-          {source.source_id}
+    <tr
+      className={[
+        "align-middle transition-colors hover:bg-slate-50/80",
+        selectionMode && selected ? "bg-indigo-50/50" : "",
+      ].join(" ")}
+    >
+      {selectionMode && (
+        <td className="px-2 py-2.5 text-center">
+          <SelectionCheckbox
+            checked={selected}
+            disabled={selectionDisabled}
+            ariaLabel={`选择 ${source.filename}`}
+            onChange={(checked) => onSelectChange(source, checked)}
+          />
+        </td>
+      )}
+      <td className="px-3 py-2 text-center">
+        <div className="mx-auto flex max-w-[300px] items-center justify-center gap-1.5">
+          <button
+            className={[
+              "block min-w-0 max-w-full truncate whitespace-nowrap text-center font-medium underline-offset-4 hover:underline",
+              source.status === "ready"
+                ? "text-indigo-700 hover:text-indigo-800"
+                : "text-slate-900 hover:text-slate-700",
+            ].join(" ")}
+            onClick={() =>
+              onOpenWiki(source.status === "ready" ? summaryPath : "index.md")
+            }
+            title={source.filename}
+          >
+            {source.filename}
+          </button>
+          {source.error && (
+            <span
+              className="shrink-0"
+              title={source.error}
+              aria-label={`解析错误：${source.error}`}
+              tabIndex={0}
+            >
+              <AlertTriangle className="size-3.5 text-rose-500" aria-hidden />
+            </span>
+          )}
         </div>
-        {source.error && (
-          <div className="mx-auto mt-1 max-w-[220px] truncate rounded bg-rose-50 px-2 py-1 text-xs text-rose-600" title={source.error}>
-            {source.error}
-          </div>
-        )}
       </td>
-      <td className="min-w-[96px] px-4 py-3 text-center">
+      <td className="px-3 py-2 text-center">
         <WikiStatusTag status={source.status} />
       </td>
-      <td className="min-w-[96px] whitespace-nowrap px-4 py-3 text-center text-slate-600">{formatBytes(source.size)}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-center text-slate-600">
+        {formatBytes(source.size)}
+      </td>
       <td
-        className="min-w-[180px] whitespace-nowrap px-4 py-3 text-center text-slate-500"
+        className="whitespace-nowrap px-3 py-2 text-center text-slate-500"
         title={`上传时间：${uploadedTime || "-"}\n解析时间：${ingestedTime}`}
       >
         {uploadedTime}
       </td>
-      <td className="min-w-[96px] whitespace-nowrap px-4 py-3 text-center">{source.touched_pages.length || "-"}</td>
-      <td className="min-w-[320px] px-4 py-3 text-center">
-        <div className="inline-flex items-center justify-center gap-3 whitespace-nowrap text-xs">
-          <button
-            className="whitespace-nowrap text-indigo-600 disabled:text-slate-300"
+      <td className="whitespace-nowrap px-3 py-2 text-center">
+        {source.touched_pages.length || "-"}
+      </td>
+      <td className="px-3 py-2 text-center">
+        <div className="inline-flex items-center justify-center gap-1 whitespace-nowrap">
+          <Button
+            size="xs"
+            variant="ghost"
+            className="min-w-[68px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
             disabled={ingesting}
             onClick={() => onIngest(source)}
           >
             {source.status === "ready" ? "重新解析" : "解析"}
-          </button>
-          <button className="whitespace-nowrap text-slate-600" onClick={() => onOpenRaw(source)}>
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            className="min-w-[54px] bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800"
+            onClick={() => onOpenRaw(source)}
+          >
             源文
-          </button>
-          <button
-            className="whitespace-nowrap text-emerald-600 disabled:text-slate-300"
-            disabled={source.status !== "ready"}
-            onClick={() => onOpenWiki(summaryPath)}
-          >
-            Wiki
-          </button>
-          <button className="whitespace-nowrap text-slate-600" onClick={() => onRename(source)}>
-            重命名
-          </button>
-          <button
-            className="whitespace-nowrap text-rose-600 disabled:text-slate-300"
-            disabled={ingesting}
-            onClick={() => onDelete(source)}
-          >
-            删除
-          </button>
+          </Button>
+          <SourceActionsMenu
+            source={source}
+            deleteDisabled={ingesting}
+            onRename={onRename}
+            onDelete={onDelete}
+          />
         </div>
       </td>
     </tr>
+  );
+}
+
+function SourceActionsMenu({
+  source,
+  deleteDisabled,
+  onRename,
+  onDelete,
+}: {
+  source: LlmWikiSource;
+  deleteDisabled: boolean;
+  onRename: (source: LlmWikiSource) => void;
+  onDelete: (source: LlmWikiSource) => void;
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="min-w-[54px] bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-800"
+          aria-label={`${source.filename} 更多操作`}
+          title="更多操作"
+        >
+          更多
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={4}
+          className="z-50 min-w-[132px] rounded-lg bg-white p-1 text-sm text-slate-700 shadow-md ring-1 ring-slate-900/10 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+        >
+          <DropdownMenu.Item
+            className="flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 outline-none focus:bg-slate-100"
+            onSelect={() => onRename(source)}
+          >
+            <Pencil className="size-3.5" />
+            重命名
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            disabled={deleteDisabled}
+            className="flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-rose-600 outline-none focus:bg-rose-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
+            onSelect={() => onDelete(source)}
+          >
+            <Trash2 className="size-3.5" />
+            删除
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
@@ -682,7 +1085,9 @@ function WikiStatusTag({ status }: { status: LlmWikiSource["status"] }) {
     failed: "border-rose-200 bg-rose-50 text-rose-700",
   };
   return (
-    <span className={`inline-flex min-w-[68px] items-center justify-center rounded-md border px-2 py-0.5 text-xs ${statusClasses[status]}`}>
+    <span
+      className={`inline-flex min-w-[64px] items-center justify-center rounded-md border px-2 py-0.5 text-xs ${statusClasses[status]}`}
+    >
       {wikiStatusLabels[status]}
     </span>
   );
@@ -739,7 +1144,9 @@ function WikiDialog({
                       onClick={() => onSelectPage(item.path)}
                     >
                       <FileText className="size-3 shrink-0" />
-                      <span className="truncate">{item.title || item.path}</span>
+                      <span className="truncate">
+                        {item.title || item.path}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -756,7 +1163,9 @@ function WikiDialog({
                   {activePath}
                 </div>
               </div>
-              {loading && <Loader2 className="size-4 animate-spin text-slate-400" />}
+              {loading && (
+                <Loader2 className="size-4 animate-spin text-slate-400" />
+              )}
             </div>
             <Textarea
               value={page?.content || ""}
@@ -779,7 +1188,11 @@ function WikiDialog({
             删除页面
           </Button>
           <Button disabled={!page || saving} onClick={onSave}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {saving ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
             保存
           </Button>
         </DialogFooter>
@@ -847,7 +1260,11 @@ function SearchDialog({
             autoFocus
           />
           <Button disabled={searching} onClick={onSearch}>
-            {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            {searching ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Search className="size-4" />
+            )}
             搜索
           </Button>
         </div>
@@ -860,8 +1277,12 @@ function SearchDialog({
                 onClick={() => onOpenHit(hit)}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-slate-900">{hit.title}</span>
-                  <span className="font-mono text-xs text-slate-400">{hit.path}</span>
+                  <span className="font-medium text-slate-900">
+                    {hit.title}
+                  </span>
+                  <span className="font-mono text-xs text-slate-400">
+                    {hit.path}
+                  </span>
                 </div>
                 <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
                   {hit.snippet || "无片段"}
@@ -916,13 +1337,34 @@ function DiagnosticsDialog({
         </DialogHeader>
         <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <IssueCountBadge label="Open" value={issues.length} className="border-slate-200 bg-white text-slate-700" />
-            <IssueCountBadge label="Error" value={counts.error} className="border-rose-200 bg-rose-50 text-rose-700" />
-            <IssueCountBadge label="Warning" value={counts.warning} className="border-amber-200 bg-amber-50 text-amber-700" />
-            <IssueCountBadge label="Info" value={counts.info} className="border-sky-200 bg-sky-50 text-sky-700" />
+            <IssueCountBadge
+              label="Open"
+              value={issues.length}
+              className="border-slate-200 bg-white text-slate-700"
+            />
+            <IssueCountBadge
+              label="Error"
+              value={counts.error}
+              className="border-rose-200 bg-rose-50 text-rose-700"
+            />
+            <IssueCountBadge
+              label="Warning"
+              value={counts.warning}
+              className="border-amber-200 bg-amber-50 text-amber-700"
+            />
+            <IssueCountBadge
+              label="Info"
+              value={counts.info}
+              className="border-sky-200 bg-sky-50 text-sky-700"
+            />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={lintMode} onValueChange={(value) => onLintModeChange(value as LlmWikiLintMode)}>
+            <Select
+              value={lintMode}
+              onValueChange={(value) =>
+                onLintModeChange(value as LlmWikiLintMode)
+              }
+            >
               <SelectTrigger className="h-9 w-[130px] bg-white">
                 <SelectValue />
               </SelectTrigger>
@@ -932,12 +1374,24 @@ function DiagnosticsDialog({
                 <SelectItem value="evidence">证据检查</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" disabled={issuesLoading || lintLoading} onClick={onRefresh}>
-              {issuesLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            <Button
+              variant="outline"
+              disabled={issuesLoading || lintLoading}
+              onClick={onRefresh}
+            >
+              {issuesLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
               刷新
             </Button>
             <Button disabled={lintLoading} onClick={onRunLint}>
-              {lintLoading ? <Loader2 className="size-4 animate-spin" /> : <Wrench className="size-4" />}
+              {lintLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Wrench className="size-4" />
+              )}
               立即检查
             </Button>
           </div>
@@ -957,7 +1411,10 @@ function DiagnosticsDialog({
             <tbody>
               {issuesLoading && !issues.length ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
+                  <td
+                    colSpan={6}
+                    className="px-3 py-10 text-center text-slate-400"
+                  >
                     <Loader2 className="mx-auto mb-2 size-4 animate-spin" />
                     加载中
                   </td>
@@ -972,18 +1429,26 @@ function DiagnosticsDialog({
                         <td className="px-3 py-2">
                           <IssueSeverityBadge severity={issue.severity} />
                         </td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-600">{issue.kind}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-slate-600">
+                          {issue.kind}
+                        </td>
                         <td className="max-w-[220px] px-3 py-2 font-mono text-xs text-slate-500">
-                          <span className="line-clamp-2 break-all">{issue.target}</span>
+                          <span className="line-clamp-2 break-all">
+                            {issue.target}
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-slate-700">
                           <div>{issue.message}</div>
                           {issue.details && (
                             <button
                               className="mt-1 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700"
-                              onClick={() => setExpandedId(expanded ? null : issue.id)}
+                              onClick={() =>
+                                setExpandedId(expanded ? null : issue.id)
+                              }
                             >
-                              <ChevronRight className={`size-3 transition ${expanded ? "rotate-90" : ""}`} />
+                              <ChevronRight
+                                className={`size-3 transition ${expanded ? "rotate-90" : ""}`}
+                              />
                               详情
                             </button>
                           )}
@@ -1002,27 +1467,52 @@ function DiagnosticsDialog({
                               <ExternalLink className="size-3" />
                               {targetIsPage ? "打开页面" : "不可定位"}
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => onCopyTarget(issue)}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onCopyTarget(issue)}
+                            >
                               <Copy className="size-3" />
                               复制
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => onResolve(issue)}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onResolve(issue)}
+                            >
                               标记解决
                             </Button>
                           </div>
                         </td>
                       </tr>
                       {expanded && (
-                        <tr key={`${issue.id}-details`} className="border-t border-slate-100 bg-slate-50/60">
-                          <td colSpan={6} className="px-3 py-3 text-xs leading-5 text-slate-500">
+                        <tr
+                          key={`${issue.id}-details`}
+                          className="border-t border-slate-100 bg-slate-50/60"
+                        >
+                          <td
+                            colSpan={6}
+                            className="px-3 py-3 text-xs leading-5 text-slate-500"
+                          >
                             <div className="grid gap-2 md:grid-cols-[1fr_260px]">
                               <pre className="whitespace-pre-wrap break-words rounded-md bg-white p-3 font-mono text-xs text-slate-600">
                                 {issue.details || "无详情"}
                               </pre>
                               <div className="space-y-1 rounded-md bg-white p-3">
-                                <div>source_ids: {issue.source_ids.length ? issue.source_ids.join(", ") : "-"}</div>
-                                <div>created_at: {formatTime(issue.created_at) || "-"}</div>
-                                <div>updated_at: {formatTime(issue.updated_at) || "-"}</div>
+                                <div>
+                                  source_ids:{" "}
+                                  {issue.source_ids.length
+                                    ? issue.source_ids.join(", ")
+                                    : "-"}
+                                </div>
+                                <div>
+                                  created_at:{" "}
+                                  {formatTime(issue.created_at) || "-"}
+                                </div>
+                                <div>
+                                  updated_at:{" "}
+                                  {formatTime(issue.updated_at) || "-"}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -1033,7 +1523,10 @@ function DiagnosticsDialog({
                 })
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-slate-400">
+                  <td
+                    colSpan={6}
+                    className="px-3 py-10 text-center text-slate-400"
+                  >
                     暂无 open issue
                   </td>
                 </tr>
@@ -1056,14 +1549,20 @@ function IssueCountBadge({
   className: string;
 }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 ${className}`}>
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 ${className}`}
+    >
       <span>{label}</span>
       <span className="font-semibold">{value}</span>
     </span>
   );
 }
 
-function IssueSeverityBadge({ severity }: { severity: LlmWikiIssue["severity"] }) {
+function IssueSeverityBadge({
+  severity,
+}: {
+  severity: LlmWikiIssue["severity"];
+}) {
   const className =
     severity === "error"
       ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -1091,7 +1590,8 @@ function issueAdvice(kind: string): string {
   const advice: Record<string, string> = {
     dead_link: "打开页面，修正或删除对应 wikilink。",
     orphan_page: "从相关页面增加链接，或确认该页可独立存在后标记解决。",
-    index_missing: "打开页面核对后手动维护 index，或重新 ingest/rebuild index。",
+    index_missing:
+      "打开页面核对后手动维护 index，或重新 ingest/rebuild index。",
     missing_claim_source: "在正文关键结论旁补充 source id 标注。",
     schema_drift: "按当前 schema 重新 ingest，或人工确认后标记解决。",
     conflict: "人工回读 source，对冲突结论做保留、改写或标注未确认。",
@@ -1140,8 +1640,15 @@ function SchemaDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             关闭
           </Button>
-          <Button disabled={loading || saving || !draft.trim()} onClick={onSave}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+          <Button
+            disabled={loading || saving || !draft.trim()}
+            onClick={onSave}
+          >
+            {saving ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
             保存
           </Button>
         </DialogFooter>
@@ -1205,13 +1712,76 @@ function DeleteDialog({
           <DialogTitle>删除文档</DialogTitle>
         </DialogHeader>
         <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          确认删除 {source?.filename || "该文档"}？对应 summary 和只引用该 source 的页面会一起删除。
+          确认删除 {source?.filename || "该文档"}？对应 summary 和只引用该
+          source 的页面会一起删除。
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
           <Button variant="destructive" onClick={onConfirm}>
+            删除
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BulkDeleteDialog({
+  open,
+  sources,
+  busy,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  sources: LlmWikiSource[];
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[460px]">
+        <DialogHeader>
+          <DialogTitle>批量删除文档</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            确认删除已选 {sources.length} 个文档？对应 summary 和只引用这些
+            source 的页面会一起删除。
+          </div>
+          <div className="max-h-[180px] overflow-auto rounded-lg border border-slate-200 bg-white p-2">
+            {sources.map((source) => (
+              <div
+                key={source.source_id}
+                className="truncate px-2 py-1 text-xs text-slate-600"
+                title={source.filename}
+              >
+                {source.filename}
+              </div>
+            ))}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={busy || !sources.length}
+            onClick={onConfirm}
+          >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
             删除
           </Button>
         </DialogFooter>

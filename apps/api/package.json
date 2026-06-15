@@ -10,7 +10,8 @@
     "start:prod": "NODE_ENV=production node dist/main.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test -r ts-node/register src/modules/llmWiki/services/llm-wiki-retrieval.service.spec.ts src/modules/llmWiki/services/llm-wiki-management.service.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.tools.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.workflow.spec.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.1.48",

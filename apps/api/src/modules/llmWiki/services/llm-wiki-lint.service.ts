@@ -4,7 +4,8 @@ import {
   LlmWikiIssueKind,
   LlmWikiLintMode,
   LlmWikiPage,
-} from "../llm-wiki.types";
+} from "../contracts/llm-wiki.types";
+import { extractWikiLinks } from "../llm-wiki-page.utils";
 import { LlmWikiIssueService, LlmWikiIssueInput } from "./llm-wiki-issue.service";
 import { LlmWikiSchemaService } from "./llm-wiki-schema.service";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";
@@ -215,18 +216,6 @@ function hasRequiredFrontmatter(page: LlmWikiPage): boolean {
   return raw.startsWith("---") && !!page.title && !!page.type && !!page.updated_at;
 }
 
-function extractWikiLinks(content: string): string[] {
-  const links: string[] = [];
-  const text = stripInlineCode(stripFencedCode(content));
-  const regex = /\[\[([^\]]+)\]\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text))) {
-    const target = (match[1] || "").split("|")[0].split("#")[0].trim();
-    if (target) links.push(target);
-  }
-  return links;
-}
-
 function resolveLinkTarget(
   link: string,
   pagePaths: Set<string>,
@@ -242,14 +231,6 @@ function resolveLinkTarget(
 function isStrictWikiLink(link: string, titleToPath: Map<string, string>): boolean {
   const target = link.trim();
   return target.endsWith(".md") || target.includes("/") || titleToPath.has(target.toLowerCase());
-}
-
-function stripFencedCode(content: string): string {
-  return String(content || "").replace(/```[\s\S]*?```/g, "");
-}
-
-function stripInlineCode(content: string): string {
-  return String(content || "").replace(/`[^`\n]*`/g, "");
 }
 
 function stripFrontmatter(content: string): string {

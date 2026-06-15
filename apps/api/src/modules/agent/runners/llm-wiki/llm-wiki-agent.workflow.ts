@@ -1,211 +1,50 @@
 import { Injectable } from "@nestjs/common";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
-import { ModelService } from "../../model/model.service";
-import {
-  LlmWikiPage,
-  LlmWikiPageRef,
-  LlmWikiSchema,
-  LlmWikiSearchHit,
-  LlmWikiSourceMeta,
-} from "../../llmWiki/llm-wiki.types";
-import { LlmWikiSchemaService } from "../../llmWiki/services/llm-wiki-schema.service";
-import { LlmWikiService } from "../../llmWiki/services/llm-wiki.service";
-import { agentConfig } from "../agent.config";
+import { ModelService } from "../../../model/model.service";
+import { LlmWikiPage, LlmWikiPageRef } from "../../../llmWiki/contracts/llm-wiki.types";
+import { agentConfig } from "../../agent.config";
 import {
   AgentRunTokens,
-  AgentRunner,
   AgentRunnerContext,
   AgentRunnerResult,
-} from "../agent.types";
-
-type LlmWikiOutputMode = "summary" | "snippets";
-type LlmWikiSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
-type StopReason = "complete" | "max_rounds" | "token_limit" | "no_new_actions" | "insufficient_evidence";
-type QueryIntent = "overview" | "specific" | "compare" | "howto" | "debug";
-type PageHitReason = "required_path" | "optional_path" | "search_hit" | "linked_page";
-type SourceSupport = "verified" | "wiki-only" | "partial" | "conflict" | "unknown";
-
-interface LlmWikiBudget {
-  maxRounds: number;
-  maxEvidencePages: number;
-  maxRawSources: number;
-  tokenLimit: number | null;
-}
-
-interface LlmWikiModels {
-  plannerModel: string;
-  reviewerModel: string;
-  synthesizerModel: string;
-}
-
-interface LlmWikiAgentInput extends Record<string, unknown> {
-  query: string;
-  outputMode: LlmWikiOutputMode;
-  sourcePolicy: LlmWikiSourcePolicy;
-  budget: LlmWikiBudget;
-  models: LlmWikiModels;
-}
-
-interface WikiManifest {
-  stats: {
-    sourceCount: number;
-    pageCount: number;
-    readySources: number;
-  };
-  schema: LlmWikiSchema;
-  index: string;
-  pages: LlmWikiPageRef[];
-  sources: Array<Pick<LlmWikiSourceMeta, "source_id" | "filename" | "status" | "touched_pages">>;
-}
-
-interface QueryTask {
-  goal: string;
-  requiredPaths: string[];
-  optionalPaths: string[];
-  searchQueries: string[];
-  expectedContribution: string;
-}
-
-interface QueryCoverage {
-  coreTopics: string[];
-  optionalTopics: string[];
-  excludedTopics: string[];
-}
-
-interface QueryPlan {
-  queryIntent: QueryIntent;
-  keywords: string[];
-  entities: string[];
-  tasks: QueryTask[];
-  coverage: QueryCoverage;
-  candidatePaths: string[];
-  searchQueries: string[];
-  reason: string;
-}
-
-interface PlannedPageHit extends LlmWikiSearchHit {
-  taskIndex: number;
-  taskGoal: string;
-  taskContribution: string;
-  why: PageHitReason;
-  required: boolean;
-  order: number;
-}
-
-interface RetrievedPage {
-  path: string;
-  title: string;
-  type: string;
-  tags: string[];
-  sources: string[];
-  content: string;
-  score: number;
-  why: PageHitReason | string;
-  taskIndex: number;
-  taskGoal: string;
-  taskContribution: string;
-  required: boolean;
-  readInRound: number;
-}
-
-interface RetrievalAction {
-  type: "read_page" | "search_wiki" | "follow_link" | "read_source" | "stop";
-  path?: string;
-  query?: string;
-  fromPath?: string;
-  sourceId?: string;
-  reason?: string;
-  taskIndex?: number;
-  taskGoal?: string;
-  taskContribution?: string;
-  why?: PageHitReason;
-  score?: number;
-  required?: boolean;
-}
-
-interface KeptPage {
-  path: string;
-  taskGoals: string[];
-  relevanceScore: number;
-  evidenceScore: number;
-  selectedInRound: number;
-  whyKept: string;
-}
-
-interface DiscardedPage {
-  path: string;
-  title: string;
-  reason: string;
-  round: number;
-}
-
-interface RetrievalRound {
-  round: number;
-  readPages: string[];
-  keptPages: string[];
-  droppedPages: string[];
-  nextActions: RetrievalAction[];
-  coverage: unknown;
-  stopReason: string | null;
-}
-
-interface SourceEvidence {
-  source_id: string;
-  filename: string;
-  content: string;
-  taskGoals: string[];
-  pagePaths: string[];
-  supportSummary: string;
-}
-
-interface SourceReview {
-  path: string;
-  sourceSupport: SourceSupport;
-  supportSummary: string;
-}
-
-interface KnowledgeSnippet {
-  path: string;
-  title: string;
-  type: "summary" | "concept" | "entity" | "index";
-  tags: string[];
-  sources: string[];
-  content: string;
-  taskGoals: string[];
-  relevanceScore: number;
-  evidenceScore: number;
-  selectedInRound: number;
-  whyKept: string;
-  sourceSupport: SourceSupport;
-}
-
-interface LlmWikiAgentState {
-  query: string;
-  outputMode: LlmWikiOutputMode;
-  sourcePolicy: LlmWikiSourcePolicy;
-  budget: LlmWikiBudget;
-  models: LlmWikiModels;
-  manifest: WikiManifest | null;
-  plan: QueryPlan | null;
-  round: number;
-  candidatePages: PlannedPageHit[];
-  pendingActions: RetrievalAction[];
-  requestedSourceIds: string[];
-  pages: RetrievedPage[];
-  lastReadPages: string[];
-  keptPages: KeptPage[];
-  discardedPages: DiscardedPage[];
-  retrievalRounds: RetrievalRound[];
-  sources: SourceEvidence[];
-  sourceReviews: SourceReview[];
-  knowledgeSnippets: KnowledgeSnippet[];
-  answerMarkdown: string;
-  resultJson: Record<string, unknown>;
-  stopReason: StopReason | null;
-  gaps: string[];
-  coverageSummary: string;
-  tokens: AgentRunTokens;
-}
+} from "../../agent.types";
+import { LlmWikiAgentTools } from "./llm-wiki-agent.tools";
+import {
+  buildKnowledgeSnippets,
+  coverageSummaryFromState,
+  defaultSourceReviewForPath,
+  ensureAnswerMarkdownSections,
+  fallbackMarkdown,
+  normalizeSynthesis,
+  pagesForKept,
+  renderSnippetsMarkdown,
+  resultJsonFromState,
+} from "./llm-wiki-agent-result";
+import {
+  LlmWikiAgentInput,
+  LlmWikiAgentState,
+  LlmWikiBudget,
+  DiscardedPage,
+  KeptPage,
+  KnowledgeSnippet,
+  LlmWikiModels,
+  LlmWikiOutputMode,
+  LlmWikiSourcePolicy,
+  PageHitReason,
+  PlannedPageHit,
+  QueryCoverage,
+  QueryIntent,
+  QueryPlan,
+  QueryTask,
+  RetrievalAction,
+  RetrievedPage,
+  RetrievalRound,
+  SourceEvidence,
+  SourceReview,
+  SourceSupport,
+  StopReason,
+  WikiManifest,
+} from "./llm-wiki-agent.types";
 
 const State = Annotation.Root({
   query: Annotation<string>(),
@@ -240,13 +79,12 @@ const DEFAULT_MAX_EVIDENCE_PAGES = 48;
 const DEFAULT_MAX_RAW_SOURCES = 12;
 
 @Injectable()
-export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
+export class LlmWikiAgentWorkflow {
   readonly agentType = "llmWiki";
 
   constructor(
-    private readonly wiki: LlmWikiService,
+    private readonly tools: LlmWikiAgentTools,
     private readonly model: ModelService,
-    private readonly schema: LlmWikiSchemaService,
   ) {}
 
   getProfile() {
@@ -414,32 +252,8 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
     state: LlmWikiAgentState,
   ): Promise<Partial<LlmWikiAgentState>> {
     this.assertActive(ctx);
-    const sourceRes = this.wiki.listSources();
-    const tree = this.wiki.wikiTree();
-    const pages = tree.groups.flatMap((group) => group.pages);
-    let index = "";
-    try {
-      index = this.wiki.getPage("index.md").content;
-    } catch {
-      index = "";
-    }
-    const schema = this.schema.read();
-    const manifest: WikiManifest = {
-      stats: {
-        sourceCount: sourceRes.items.length,
-        readySources: sourceRes.items.filter((item) => item.status === "ready").length,
-        pageCount: pages.length,
-      },
-      schema,
-      index: truncate(index, 8000),
-      pages,
-      sources: sourceRes.items.map((item) => ({
-        source_id: item.source_id,
-        filename: item.filename,
-        status: item.status,
-        touched_pages: item.touched_pages,
-      })),
-    };
+    const loaded = this.tools.getManifest();
+    const manifest: WikiManifest = { ...loaded, index: truncate(loaded.index, 8000) };
     ctx.appendEvent({
       type: "manifest_loaded",
       msg: "已加载 LLM Wiki 导航索引",
@@ -517,7 +331,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
     };
 
     const addPath = (task: QueryTask, taskIndex: number, path: string, why: PageHitReason) => {
-      if (!isValidWikiPath(state.manifest, path)) {
+      if (!isKnownWikiPath(state.manifest, path)) {
         ctx.appendEvent({
           type: "candidate_skipped",
           msg: `跳过非法或不存在的 wiki 页面: ${path}`,
@@ -549,9 +363,9 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
       for (const path of task.requiredPaths) addPath(task, taskIndex, path, "required_path");
       for (const query of task.searchQueries.slice(0, 4)) {
         queries.push(query);
-        const res = this.wiki.searchWiki(query, Math.min(Math.max(state.budget.maxEvidencePages, 12), 60));
+        const res = this.tools.searchWiki(query, Math.min(Math.max(state.budget.maxEvidencePages, 12), 60));
         for (const hit of res.hits) {
-          if (!isValidWikiPath(state.manifest, hit.path)) continue;
+          if (!isKnownWikiPath(state.manifest, hit.path)) continue;
           upsert({
             ...hit,
             score: scorePlannedPage({
@@ -608,7 +422,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
 
     for (const action of readActions) {
       const path = String(action.path || "");
-      if (!isValidWikiPath(state.manifest, path)) {
+      if (!isKnownWikiPath(state.manifest, path)) {
         ctx.appendEvent({
           type: "page_read",
           msg: `跳过非法或不存在的 wiki 页面: ${path}`,
@@ -618,7 +432,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
         continue;
       }
       try {
-        const page = this.wiki.getPage(path);
+        const page = this.tools.readWikiPage(path);
         const retrieved = toRetrievedPage(page, action, state.round + 1);
         pages.push(retrieved);
         seen.add(page.path);
@@ -761,14 +575,14 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
         return { stopReason: "complete", pendingActions: [] };
       }
       if (action.type === "read_source") {
-        if (isValidSourceId(state.manifest, action.sourceId)) requestedSourceIds.add(String(action.sourceId));
+        if (isKnownSourceId(state.manifest, action.sourceId)) requestedSourceIds.add(String(action.sourceId));
         continue;
       }
       if (nextPageActions.length >= remaining) break;
       if (action.type === "search_wiki") {
         const query = stringField(action.query);
         if (!query) continue;
-        const res = this.wiki.searchWiki(query, Math.min(remaining + 8, 24));
+        const res = this.tools.searchWiki(query, Math.min(remaining + 8, 24));
         ctx.appendEvent({
           type: "action_search_done",
           msg: `执行 reviewer 检索: ${query}`,
@@ -778,7 +592,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
         });
         for (const hit of res.hits) {
           if (nextPageActions.length >= remaining) break;
-          if (seen.has(hit.path) || !isValidWikiPath(state.manifest, hit.path)) continue;
+          if (seen.has(hit.path) || !isKnownWikiPath(state.manifest, hit.path)) continue;
           nextPageActions.push({
             type: "read_page",
             path: hit.path,
@@ -803,8 +617,8 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
         const fromPath = stringField(action.fromPath);
         const path = stringField(action.path);
         const fromPage = state.pages.find((page) => page.path === fromPath);
-        if (!fromPage || !path || seen.has(path) || !isValidWikiPath(state.manifest, path)) continue;
-        if (!extractWikiLinks(fromPage.content).includes(path)) continue;
+        if (!fromPage || !path || seen.has(path) || !isKnownWikiPath(state.manifest, path)) continue;
+        if (!fromPage.links.includes(path)) continue;
         nextPageActions.push({
           ...action,
           type: "read_page",
@@ -825,7 +639,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
       }
       if (action.type === "read_page") {
         const path = stringField(action.path);
-        if (!path || seen.has(path) || !isValidWikiPath(state.manifest, path)) continue;
+        if (!path || seen.has(path) || !isKnownWikiPath(state.manifest, path)) continue;
         nextPageActions.push({
           ...action,
           taskIndex: action.taskIndex ?? inferTaskIndexForPath(path, state.plan),
@@ -902,7 +716,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
     const sources: SourceEvidence[] = [];
     for (const source of selected) {
       try {
-        const raw = this.wiki.rawSource(source.source_id);
+        const raw = this.tools.readRawSource(source.source_id);
         sources.push({
           source_id: raw.source_id,
           filename: raw.filename,
@@ -1016,12 +830,7 @@ export class LlmWikiAgentRunner implements AgentRunner<LlmWikiAgentInput> {
     state: LlmWikiAgentState,
   ): Promise<Partial<LlmWikiAgentState>> {
     this.assertActive(ctx);
-    const knowledgeSnippets = state.keptPages
-      .map((kept) => {
-        const page = state.pages.find((item) => item.path === kept.path);
-        return page ? toKnowledgeSnippet(page, kept, state) : null;
-      })
-      .filter((item): item is KnowledgeSnippet => Boolean(item));
+    const knowledgeSnippets = buildKnowledgeSnippets(state);
     const answerMarkdown = renderSnippetsMarkdown(state, knowledgeSnippets);
     const resultJson = resultJsonFromState(state, answerMarkdown, knowledgeSnippets);
     ctx.appendEvent({
@@ -1287,7 +1096,7 @@ function normalizePlan(value: Record<string, unknown> | null, query: string): Qu
   );
   const candidatePaths = uniqueStrings([
     ...tasks.flatMap((task) => [...task.requiredPaths, ...task.optionalPaths]),
-    ...stringArray(value?.candidatePaths).filter(isWikiMarkdownPath),
+    ...stringArray(value?.candidatePaths),
   ]).slice(0, 64);
   return {
     queryIntent: normalizeQueryIntent(value?.queryIntent),
@@ -1332,9 +1141,8 @@ function normalizeTasks(value: unknown, query: string): QueryTask[] {
     .map((item): QueryTask | null => {
       const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
       const goal = stringField(raw.goal);
-      const requiredPaths = stringArray(raw.requiredPaths).filter(isWikiMarkdownPath).slice(0, 16);
+      const requiredPaths = stringArray(raw.requiredPaths).slice(0, 16);
       const optionalPaths = stringArray(raw.optionalPaths)
-        .filter(isWikiMarkdownPath)
         .filter((path) => !requiredPaths.includes(path))
         .slice(0, 16);
       const searchQueries = uniqueStrings([...stringArray(raw.searchQueries), goal || query]).slice(0, 8);
@@ -1441,7 +1249,7 @@ function normalizeActions(value: unknown, state: LlmWikiAgentState): RetrievalAc
         return query ? { type, query, reason: stringField(raw.reason) } : null;
       }
       const path = stringField(raw.path);
-      if (!path || !isWikiMarkdownPath(path)) return null;
+      if (!path) return null;
       return {
         type,
         path,
@@ -1515,7 +1323,7 @@ function mergeRequestedSourceIds(
 ): string[] {
   const requested = new Set(prev);
   for (const action of actions) {
-    if (action.type === "read_source" && isValidSourceId(manifest, action.sourceId)) {
+    if (action.type === "read_source" && isKnownSourceId(manifest, action.sourceId)) {
       requested.add(String(action.sourceId));
     }
   }
@@ -1568,7 +1376,7 @@ function pageHitToAction(hit: PlannedPageHit): RetrievalAction {
   };
 }
 
-function toRetrievedPage(page: LlmWikiPage, action: RetrievalAction, readInRound: number): RetrievedPage {
+function toRetrievedPage(page: LlmWikiPage & { links: string[] }, action: RetrievalAction, readInRound: number): RetrievedPage {
   return {
     path: page.path,
     title: page.title,
@@ -1583,6 +1391,7 @@ function toRetrievedPage(page: LlmWikiPage, action: RetrievalAction, readInRound
     taskContribution: action.taskContribution || "",
     required: Boolean(action.required),
     readInRound,
+    links: page.links,
   };
 }
 
@@ -1607,23 +1416,18 @@ function compareHits(a: PlannedPageHit, b: PlannedPageHit): number {
   return b.score - a.score || a.order - b.order || a.path.localeCompare(b.path);
 }
 
-function isValidWikiPath(manifest: WikiManifest | null, path: unknown): path is string {
+function isKnownWikiPath(manifest: WikiManifest | null, path: unknown): path is string {
   const value = stringField(path);
-  if (!isWikiMarkdownPath(value)) return false;
-  return Boolean(manifest?.pages.some((page) => page.path === value));
+  return Boolean(value && manifest?.pages.some((page) => page.path === value));
 }
 
-function isValidSourceId(manifest: WikiManifest | null, sourceId: unknown): sourceId is string {
+function isKnownSourceId(manifest: WikiManifest | null, sourceId: unknown): sourceId is string {
   const value = stringField(sourceId);
   return Boolean(value && manifest?.sources.some((source) => source.source_id === value));
 }
 
 function pageRef(manifest: WikiManifest | null, path: string): LlmWikiPageRef | undefined {
   return manifest?.pages.find((page) => page.path === path);
-}
-
-function isWikiMarkdownPath(value: string): boolean {
-  return /^(index|summaries\/[A-Za-z0-9._-]+|concepts\/[A-Za-z0-9._-]+|entities\/[A-Za-z0-9._-]+)\.md$/.test(value);
 }
 
 function inferTaskIndexForPath(path: string, plan: QueryPlan | null): number {
@@ -1654,14 +1458,9 @@ function pageForReviewPrompt(page: RetrievedPage) {
     taskContribution: page.taskContribution,
     score: page.score,
     readInRound: page.readInRound,
-    links: extractWikiLinks(page.content).slice(0, 24),
+    links: page.links.slice(0, 24),
     content: truncate(stripFrontmatter(page.content), 4500),
   };
-}
-
-function pagesForKept(state: LlmWikiAgentState): RetrievedPage[] {
-  const kept = new Set(state.keptPages.map((page) => page.path));
-  return state.pages.filter((page) => kept.has(page.path));
 }
 
 function rankSourceRefs(pages: RetrievedPage[]): Array<{
@@ -1732,184 +1531,6 @@ function selectKeySourcePagePaths(pages: RetrievedPage[]): Set<string> {
 
 function defaultSourceReviews(state: LlmWikiAgentState): SourceReview[] {
   return state.keptPages.map((kept) => defaultSourceReviewForPath(state, kept.path));
-}
-
-function defaultSourceReviewForPath(state: LlmWikiAgentState, path: string): SourceReview {
-  return {
-    path,
-    sourceSupport: state.sourcePolicy === "wiki-only" ? "wiki-only" : "unknown",
-    supportSummary:
-      state.sourcePolicy === "wiki-only"
-        ? "本次策略只读取 Wiki 页面，未核验 raw source。"
-        : "未获得 reviewer 的 raw source 支持判断。",
-  };
-}
-
-function toKnowledgeSnippet(page: RetrievedPage, kept: KeptPage, state: LlmWikiAgentState): KnowledgeSnippet {
-  const sourceReview = state.sourceReviews.find((review) => review.path === page.path) || defaultSourceReviewForPath(state, page.path);
-  return {
-    path: page.path,
-    title: page.title,
-    type: normalizePageType(page.type),
-    tags: page.tags,
-    sources: page.sources,
-    content: stripFrontmatter(page.content),
-    taskGoals: kept.taskGoals.length ? kept.taskGoals : [page.taskGoal].filter(Boolean),
-    relevanceScore: kept.relevanceScore,
-    evidenceScore: kept.evidenceScore,
-    selectedInRound: kept.selectedInRound,
-    whyKept: kept.whyKept,
-    sourceSupport: sourceReview.sourceSupport,
-  };
-}
-
-function normalizePageType(value: string): KnowledgeSnippet["type"] {
-  return value === "summary" || value === "concept" || value === "entity" || value === "index" ? value : "concept";
-}
-
-function resultJsonFromState(
-  state: LlmWikiAgentState,
-  answerMarkdown: string,
-  knowledgeSnippets: KnowledgeSnippet[],
-): Record<string, unknown> {
-  const keptPages = pagesForKept(state);
-  return {
-    outputMode: state.outputMode,
-    answerMarkdown,
-    knowledgeSnippets,
-    discardedPages: state.discardedPages,
-    retrievalRounds: state.retrievalRounds,
-    rawSources: state.sources.map((source) => ({
-      source_id: source.source_id,
-      filename: source.filename,
-      pagePaths: source.pagePaths,
-      supportSummary: source.supportSummary,
-    })),
-    citations: citationsFromPages(keptPages),
-    gaps: state.gaps.length ? state.gaps : keptPages.length ? [] : ["未在当前 LLM Wiki 中检索到足够证据。"],
-    coverageSummary: state.coverageSummary || coverageSummaryFromState(state),
-    stopReason: state.stopReason || "complete",
-    plan: state.plan,
-    sourcePolicy: state.sourcePolicy,
-    pageCount: state.pages.length,
-    keptPageCount: keptPages.length,
-    sourceCount: state.sources.length,
-  };
-}
-
-function normalizeSynthesis(value: Record<string, unknown>, state: LlmWikiAgentState): Record<string, unknown> {
-  const answerMarkdown = stringField(value.answerMarkdown) || fallbackMarkdown(state);
-  const base = resultJsonFromState(state, answerMarkdown, state.knowledgeSnippets);
-  return {
-    ...base,
-    citations: Array.isArray(value.citations) ? value.citations : base.citations,
-    gaps: Array.isArray(value.gaps) ? value.gaps : base.gaps,
-    coverageSummary: stringField(value.coverageSummary) || base.coverageSummary,
-  };
-}
-
-function renderSnippetsMarkdown(state: LlmWikiAgentState, snippets: KnowledgeSnippet[]): string {
-  if (!snippets.length) {
-    return "# LLM Wiki 知识片段\n\n未在当前 LLM Wiki 中检索到足够证据。\n";
-  }
-  const lines = [
-    "# LLM Wiki 知识片段",
-    "",
-    `- 查询：${state.query}`,
-    `- 片段数：${snippets.length}`,
-    `- 停止原因：${state.stopReason || "complete"}`,
-    `- 检索轮次：${state.round}`,
-    "",
-  ];
-  for (const snippet of snippets) {
-    lines.push(`## ${snippet.title}`, "");
-    lines.push(`- 路径：${snippet.path}`);
-    lines.push(`- Source 支持：${snippet.sourceSupport}`);
-    lines.push(`- 保留原因：${snippet.whyKept}`);
-    if (snippet.taskGoals.length) lines.push(`- 任务：${snippet.taskGoals.join("；")}`);
-    if (snippet.sources.length) lines.push(`- Sources：${snippet.sources.join(", ")}`);
-    if (snippet.tags.length) lines.push(`- Tags：${snippet.tags.join(", ")}`);
-    lines.push("", truncate(snippet.content, 12000).trim(), "");
-  }
-  lines.push("## 检索轨迹");
-  for (const round of state.retrievalRounds) {
-    lines.push(
-      `- Round ${round.round}: read=${round.readPages.length}, keep=${round.keptPages.length}, drop=${round.droppedPages.length}, stop=${round.stopReason || "-"}`,
-    );
-  }
-  lines.push("", "## 未覆盖/不确定点");
-  if (state.gaps.length) {
-    for (const gap of state.gaps.slice(0, 12)) lines.push(`- ${gap}`);
-  } else {
-    lines.push("- 当前 reviewer 未报告额外缺口。");
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-function fallbackMarkdown(state: LlmWikiAgentState): string {
-  const lines = ["# LLM Wiki 检索结果", ""];
-  if (state.knowledgeSnippets.length) {
-    for (const snippet of state.knowledgeSnippets) lines.push(`- ${snippet.title} (${snippet.path})`);
-  } else {
-    lines.push("未在当前 LLM Wiki 中检索到足够证据。");
-  }
-  lines.push("", "## 未覆盖/不确定点");
-  for (const gap of state.gaps.length ? state.gaps : ["证据不足，未生成汇总答案。"]) lines.push(`- ${gap}`);
-  return `${lines.join("\n")}\n`;
-}
-
-function ensureAnswerMarkdownSections(
-  markdown: string,
-  resultJson: Record<string, unknown>,
-  state: LlmWikiAgentState,
-): string {
-  const lines = [markdown.trim()];
-  if (!/##\s*依据/.test(markdown)) {
-    const citations = Array.isArray(resultJson.citations) ? resultJson.citations : citationsFromPages(pagesForKept(state));
-    lines.push("", "## 依据");
-    for (const citation of citations.slice(0, 12)) {
-      const item = citation && typeof citation === "object" ? (citation as Record<string, unknown>) : {};
-      const title = stringField(item.title) || stringField(item.path) || "未命名页面";
-      const path = stringField(item.path);
-      lines.push(`- ${path ? `${title} (${path})` : title}`);
-    }
-  }
-  if (!/未覆盖|不确定点/.test(markdown)) {
-    const gaps = Array.isArray(resultJson.gaps) ? stringArray(resultJson.gaps) : state.gaps;
-    lines.push("", "## 未覆盖/不确定点");
-    if (gaps.length > 0) {
-      for (const gap of gaps.slice(0, 8)) lines.push(`- ${gap}`);
-    } else {
-      lines.push("- 当前检索证据未报告额外缺口。");
-    }
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-function coverageSummaryFromState(state: LlmWikiAgentState): string {
-  const plan = state.plan;
-  if (!plan) return "未生成检索计划。";
-  const keptTaskGoals = new Set(state.keptPages.flatMap((page) => page.taskGoals));
-  return `完成 ${state.round} 轮证据审查，保留 ${state.keptPages.length} 个 Wiki 页面，读取 ${state.sources.length} 个 raw source，覆盖 ${keptTaskGoals.size}/${plan.tasks.length} 个规划任务。`;
-}
-
-function citationsFromPages(pages: RetrievedPage[]) {
-  return pages.map((page) => ({
-    path: page.path,
-    title: page.title,
-    sources: page.sources,
-  }));
-}
-
-function extractWikiLinks(content: string): string[] {
-  const out: string[] = [];
-  const re = /\[\[([^\]\|]+)(?:\|[^\]]+)?\]\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(content))) {
-    const path = match[1].trim();
-    if (isWikiMarkdownPath(path)) out.push(path);
-  }
-  return uniqueStrings(out);
 }
 
 function compactPayloadForBudget(state: LlmWikiAgentState, payload: Record<string, unknown>): Record<string, unknown> | null {

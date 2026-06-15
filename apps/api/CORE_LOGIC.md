@@ -118,8 +118,11 @@ SESSION_DEFAULT_MODEL
 
 ### 5.1 模块结构
 
-- `llm-wiki.controller.ts`：REST 接口。
-- `llm-wiki.service.ts`：业务编排。
+- `llm-wiki-management.controller.ts`：Source、Schema、页面和诊断管理接口。
+- `llm-wiki-retrieval.controller.ts`：标准只读检索接口。
+- `llm-wiki-management.service.ts`：管理能力入口。
+- `llm-wiki-ingest.service.ts`：Source 编译与融合编排。
+- `llm-wiki-retrieval.service.ts`：Manifest、搜索、页面和 Source 读取契约。
 - `llm-wiki-store.service.ts`：本地文件存储和 Wiki 页面读写。
 - `llm-wiki-compiler.service.ts`：source 到 Wiki draft 的编译。
 - `llm-wiki-fusion.service.ts`：draft 与已有 Wiki 页面融合。
@@ -127,7 +130,8 @@ SESSION_DEFAULT_MODEL
 - `llm-wiki-lint.service.ts`：结构和证据诊断。
 - `llm-wiki-issue.service.ts`：issue open/resolved 生命周期。
 - `llm-wiki-schema.service.ts`：`schema/AGENTS.md` 读写。
-- `llm-wiki.types.ts`：服务端内部类型。
+- `contracts/llm-wiki.types.ts`：服务端领域类型。
+- `contracts/llm-wiki-retrieval.types.ts`：标准检索契约类型。
 - `llm-wiki.config.ts`：数据目录和大小限制。
 
 ### 5.2 数据结构
@@ -154,7 +158,7 @@ SESSION_DEFAULT_MODEL
 入口：
 
 ```text
-POST /api/llm-wiki/sources/upload
+POST /api/llm-wiki/manage/sources/upload
 ```
 
 处理逻辑：
@@ -172,10 +176,10 @@ FileInterceptor 接收 file
 入口：
 
 ```text
-POST /api/llm-wiki/sources/:sourceId/ingest
+POST /api/llm-wiki/manage/sources/:sourceId/ingest
 ```
 
-业务编排在 `LlmWikiService.ingestSource()`：
+业务编排在 `LlmWikiManagementService.ingestSource()` 和 `LlmWikiIngestService`：
 
 ```text
 读取 source meta
@@ -259,7 +263,7 @@ query trim
 - structural：`missing_frontmatter`、`oversized_page`、`dead_link`、`orphan_page`、`index_missing`、`duplicate_title`。
 - evidence：`missing_source`、`deleted_source_ref`、`missing_claim_source`、`schema_drift`、`needs_reconcile`、`stale_source_digest`。
 
-Source 删除时，`LlmWikiService.deleteSource()` 会为剩余共享页面生成 `needs_reconcile` issue。
+Source 删除时，`LlmWikiManagementService.deleteSource()` 会为剩余共享页面生成 `needs_reconcile` issue。
 
 Lint 会把本轮消失的结构/证据 issue 移到 `issues/resolved/`；`needs_reconcile` 仍需要人工处理。
 
@@ -407,6 +411,10 @@ POST /api/agents/llmWiki/runs
 
 当前 runner 只注册 `llmWiki`。旧前端传入的 `limit/model` 仍兼容，会映射到 `budget.maxEvidencePages` 和三类模型。
 
+LLM Wiki Agent 的 Graph 和查询策略位于 `runners/llm-wiki/`。Workflow 只能通过
+`LlmWikiAgentTools` 调用 `LlmWikiRetrievalService`，不直接依赖 Store、Search、
+Schema 或编译服务。
+
 ## 8. Debug 与 Health
 
 Health：
@@ -421,10 +429,10 @@ Debug：
 
 ```text
 GET /api/debug/llm-wiki/summary
-GET /api/debug/llm-wiki/search
 ```
 
-Debug 模块当前始终注册，会暴露本地数据根目录。进入部署前应只在开发环境启用。
+Debug summary 复用标准 Retrieval Manifest。搜索调试统一使用
+`GET /api/llm-wiki/retrieval/search`。
 
 ## 9. 维护注意事项
 

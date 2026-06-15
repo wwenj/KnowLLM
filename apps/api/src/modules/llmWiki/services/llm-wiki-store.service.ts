@@ -6,6 +6,7 @@ import * as path from "path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import matter = require("gray-matter");
 import { llmWikiConfig } from "../llm-wiki.config";
+import { assertWikiMarkdownPath, isWikiMarkdownPath } from "../llm-wiki-page.utils";
 import {
   LlmWikiPageContribution,
   LlmWikiNormalizedPage,
@@ -16,7 +17,7 @@ import {
   LlmWikiSourceStatus,
   LlmWikiStats,
   LlmWikiTree,
-} from "../llm-wiki.types";
+} from "../contracts/llm-wiki.types";
 
 const VALID_STATUSES = new Set<LlmWikiSourceStatus>([
   "uploaded",
@@ -469,7 +470,7 @@ export class LlmWikiStoreService implements OnModuleInit {
     const files = walkMarkdownFiles(this.wikiRoot());
     return files
       .map((file) => normalizeSlash(path.relative(this.wikiRoot(), file)))
-      .filter((relPath) => isValidWikiPath(relPath))
+      .filter((relPath) => isWikiMarkdownPath(relPath))
       .map((relPath) => this.readPageParsed(relPath))
       .sort((a, b) => pageTypeOrder(a.type) - pageTypeOrder(b.type) || a.path.localeCompare(b.path));
   }
@@ -654,23 +655,7 @@ function safeSourceId(sourceId: string): string {
 }
 
 function validateWikiPath(relPath: string): void {
-  if (!isValidWikiPath(relPath)) {
-    throw new Error("wiki page path 非法");
-  }
-}
-
-function isValidWikiPath(relPath: string): boolean {
-  const norm = String(relPath || "").replace(/\\/g, "/");
-  if (norm !== relPath) return false;
-  if (norm === "index.md") return true;
-  const parts = norm.split("/");
-  if (parts.length !== 2 || parts.some((part) => !part || part === "." || part === "..")) {
-    return false;
-  }
-  const [dir, file] = parts;
-  if (dir === "summaries") return /^[a-f0-9]{32}\.md$/.test(file);
-  if (dir !== "concepts" && dir !== "entities") return false;
-  return /^[A-Za-z0-9._-]+\.md$/.test(file);
+  assertWikiMarkdownPath(relPath);
 }
 
 function pageTypeForPath(relPath: string): LlmWikiPageType {

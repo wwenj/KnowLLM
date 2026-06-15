@@ -8,7 +8,7 @@ import {
   LlmWikiNormalizedPage,
   LlmWikiPageRef,
   LlmWikiSchema,
-} from "../llm-wiki.types";
+} from "../contracts/llm-wiki.types";
 
 interface ChatChoice {
   message?: { content?: unknown };

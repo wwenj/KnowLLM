@@ -11,7 +11,7 @@ import {
   LlmWikiPageType,
   LlmWikiSchema,
   LlmWikiSourceMeta,
-} from "../llm-wiki.types";
+} from "../contracts/llm-wiki.types";
 import { LlmWikiIssueService } from "./llm-wiki-issue.service";
 import { LlmWikiSearchService } from "./llm-wiki-search.service";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";

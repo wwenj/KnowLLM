@@ -7,7 +7,7 @@ import {
   LlmWikiIssue,
   LlmWikiIssueKind,
   LlmWikiIssueSeverity,
-} from "../llm-wiki.types";
+} from "../contracts/llm-wiki.types";
 
 export interface LlmWikiIssueInput {
   kind: LlmWikiIssueKind;

@@ -137,7 +137,7 @@ LLM Wiki Source 管理与编译
 
 ```text
 Web 选择 .md/.txt 文件
-  -> POST /api/llm-wiki/sources/upload
+  -> POST /api/llm-wiki/manage/sources/upload
   -> 校验扩展名、大小、空文件、简单二进制特征
   -> 保存原文与 meta.json，状态 uploaded
   -> Web 调用 POST /sources/:sourceId/ingest
@@ -194,7 +194,7 @@ query
 
 ```text
 Web 选择 structural / evidence / all
-  -> POST /api/llm-wiki/lint
+  -> POST /api/llm-wiki/manage/lint
   -> 服务端生成 structural / evidence issue
   -> 按 kind + target + message upsert 到 issues/open
   -> 本轮消失的结构/证据 issue 移到 issues/resolved
@@ -357,7 +357,7 @@ compile 完成
 
 当前搜索已恢复 FlexSearch，但仍不是语义检索。中文自然语言、空格差异、连字符差异、同义词仍会导致漏召回。
 
-直接 `GET /api/llm-wiki/search?q=如何设计 llmwiki` 仍返回 0；Agent 路径已改为 planner 拆 query，因此不再等同于这次直接搜索。
+直接 `GET /api/llm-wiki/retrieval/search?q=如何设计 llmwiki` 仍返回 0；Agent 路径已改为 planner 拆 query，因此不再等同于这次直接搜索。
 
 至少应补：
 
@@ -467,11 +467,11 @@ response.status(200).json(...)
 ### 7.2 服务端未被前端使用
 
 - `GET /api/health`。
-- `GET /api/llm-wiki/overview`。
+- `GET /api/llm-wiki/manage/overview`。
 - `POST /api/session/update`。
 - `POST /api/session/message/:message_id/op_status`。
 - `GET /api/debug/llm-wiki/summary`。
-- `GET /api/debug/llm-wiki/search`。
+- `GET /api/llm-wiki/retrieval/search`。
 - Agent defaults 返回的 `modelOptions`，前端另外调用 `/api/models`，没有使用该字段。
 
 这些接口可以作为正式 API 保留，但需要明确是“外部 API”还是“当前孤立代码”，避免继续双重维护。
