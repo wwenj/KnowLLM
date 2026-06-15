@@ -6,9 +6,9 @@ import {
 import { NavLink, Outlet } from "react-router-dom";
 
 const navItems = [
-  { to: "/llm-wiki", label: "LLM Wiki", icon: BookOpen },
-  { to: "/chat", label: "Chat", icon: MessageSquareText },
-  { to: "/agents", label: "Agent 调试", icon: Sparkles },
+  { to: "/chat", label: "对话", icon: MessageSquareText },
+  { to: "/agents", label: "调试中心", icon: Sparkles },
+  { to: "/llm-wiki", label: "LLM Wiki 管理", icon: BookOpen },
 ];
 
 export function AppLayout() {
@@ -22,7 +22,6 @@ export function AppLayout() {
             <span className="zspace-brand-subtitle">LLM Wiki · Agent · Workspace</span>
           </div>
         </div>
-        <ServiceState />
       </header>
 
       <div className="zspace-scroll">
@@ -50,17 +49,5 @@ export function AppLayout() {
         </div>
       </div>
     </div>
-  );
-}
-
-function ServiceState() {
-  return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200/70 bg-emerald-50/80 px-3 py-1 text-xs font-medium text-emerald-700 shadow-[0_2px_8px_rgba(16,185,129,0.18)] backdrop-blur">
-      <span className="relative flex size-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-        <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-      </span>
-      服务正常
-    </span>
   );
 }

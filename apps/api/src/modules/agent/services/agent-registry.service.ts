@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { LlmWikiAgentRunner } from "../runners/llm-wiki-agent.runner";
+import { LlmWikiAgentRunner } from "../runners/llm-wiki/llm-wiki-agent.runner";
 import type { AgentProfile, AgentRunner } from "../agent.types";
 
 @Injectable()

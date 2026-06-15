@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { llmWikiConfig } from "../llm-wiki.config";
-import { LlmWikiSchema } from "../llm-wiki.types";
+import { LlmWikiSchema } from "../contracts/llm-wiki.types";
 
 const SCHEMA_FILE = "AGENTS.md";
 

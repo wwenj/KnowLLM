@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { Index } from "flexsearch";
 import { llmWikiConfig } from "../llm-wiki.config";
-import { LlmWikiPage, LlmWikiSearchHit } from "../llm-wiki.types";
+import { LlmWikiPage, LlmWikiSearchHit } from "../contracts/llm-wiki.types";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";
 
 interface IndexedPage {

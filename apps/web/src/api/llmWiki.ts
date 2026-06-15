@@ -38,6 +38,7 @@ export interface LlmWikiPageRef {
 
 export interface LlmWikiPage extends LlmWikiPageRef {
   content: string;
+  links?: string[];
 }
 
 export interface LlmWikiTreeGroup {
@@ -65,6 +66,18 @@ export interface LlmWikiSchema {
   updated_at: string;
 }
 
+export interface LlmWikiManifest {
+  stats: {
+    sourceCount: number;
+    readySources: number;
+    pageCount: number;
+  };
+  schema: LlmWikiSchema;
+  index: string;
+  pages: LlmWikiPageRef[];
+  sources: Array<Pick<LlmWikiSource, "source_id" | "filename" | "status" | "touched_pages">>;
+}
+
 export type LlmWikiLintMode = "structural" | "evidence" | "all";
 
 export interface LlmWikiIssue {
@@ -83,57 +96,67 @@ export interface LlmWikiIssue {
 export const llmWikiApi = {
   overview: (silent = false) =>
     http.get<{ stats: LlmWikiStats; recent: LlmWikiSource[] }>(
-      "/api/llm-wiki/overview",
+      "/api/llm-wiki/manage/overview",
       undefined,
       silent ? { silent: true } : undefined,
     ),
   listSources: (silent = false) =>
     http.get<{ items: LlmWikiSource[]; stats: LlmWikiStats }>(
-      "/api/llm-wiki/sources",
+      "/api/llm-wiki/manage/sources",
       undefined,
       silent ? { silent: true } : undefined,
     ),
   uploadSource: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return http.postForm<LlmWikiSource>("/api/llm-wiki/sources/upload", form);
+    return http.postForm<LlmWikiSource>("/api/llm-wiki/manage/sources/upload", form);
   },
-  schema: () => http.get<LlmWikiSchema>("/api/llm-wiki/schema"),
+  schema: () => http.get<LlmWikiSchema>("/api/llm-wiki/manage/schema"),
   saveSchema: (content: string) =>
-    http.post<LlmWikiSchema>("/api/llm-wiki/schema/save", { content }),
+    http.post<LlmWikiSchema>("/api/llm-wiki/manage/schema/save", { content }),
   ingestSource: (sourceId: string) =>
     http.post<LlmWikiSource>(
-      `/api/llm-wiki/sources/${encodeURIComponent(sourceId)}/ingest`,
+      `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/ingest`,
     ),
   renameSource: (sourceId: string, filename: string) =>
     http.post<LlmWikiSource>(
-      `/api/llm-wiki/sources/${encodeURIComponent(sourceId)}/rename`,
+      `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/rename`,
       { filename },
     ),
   deleteSource: (sourceId: string) =>
     http.post<{ ok: boolean; source_id: string }>(
-      `/api/llm-wiki/sources/${encodeURIComponent(sourceId)}/delete`,
+      `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/delete`,
     ),
   rawSource: (sourceId: string) =>
     http.get<{ source_id: string; filename: string; content: string }>(
-      `/api/llm-wiki/sources/${encodeURIComponent(sourceId)}/raw`,
+      `/api/llm-wiki/retrieval/source/${encodeURIComponent(sourceId)}`,
     ),
-  tree: () => http.get<LlmWikiTree>("/api/llm-wiki/wiki/tree"),
+  manifest: () => http.get<LlmWikiManifest>("/api/llm-wiki/retrieval/manifest"),
+  tree: async (): Promise<LlmWikiTree> => {
+    const manifest = await http.get<LlmWikiManifest>("/api/llm-wiki/retrieval/manifest");
+    const groups = [
+      { group: "Root", pages: manifest.pages.filter((page) => page.path === "index.md") },
+      { group: "Summaries", pages: manifest.pages.filter((page) => page.path.startsWith("summaries/")) },
+      { group: "Concepts", pages: manifest.pages.filter((page) => page.path.startsWith("concepts/")) },
+      { group: "Entities", pages: manifest.pages.filter((page) => page.path.startsWith("entities/")) },
+    ].filter((group) => group.pages.length > 0);
+    return { groups };
+  },
   page: (path: string) =>
-    http.get<LlmWikiPage>("/api/llm-wiki/wiki/page", { path }),
+    http.get<LlmWikiPage>("/api/llm-wiki/retrieval/page", { path }),
   savePage: (path: string, content: string) =>
-    http.post<LlmWikiPage>("/api/llm-wiki/wiki/page/save", { path, content }),
+    http.post<LlmWikiPage>("/api/llm-wiki/manage/pages/save", { path, content }),
   deletePage: (path: string) =>
-    http.post<{ ok: boolean; path: string }>("/api/llm-wiki/wiki/page/delete", { path }),
+    http.post<{ ok: boolean; path: string }>("/api/llm-wiki/manage/pages/delete", { path }),
   search: (q: string, limit = 20) =>
     http.get<{ query: string; hits: LlmWikiSearchHit[]; returned: number }>(
-      "/api/llm-wiki/search",
+      "/api/llm-wiki/retrieval/search",
       { q, limit },
     ),
   lint: (mode: LlmWikiLintMode = "all") =>
-    http.post<{ issues: LlmWikiIssue[]; total: number }>("/api/llm-wiki/lint", { mode }),
+    http.post<{ issues: LlmWikiIssue[]; total: number }>("/api/llm-wiki/manage/lint", { mode }),
   issues: (status: "open" | "resolved" | "all" = "open") =>
-    http.get<{ items: LlmWikiIssue[] }>("/api/llm-wiki/issues", { status }),
+    http.get<{ items: LlmWikiIssue[] }>("/api/llm-wiki/manage/issues", { status }),
   resolveIssue: (issueId: string) =>
-    http.post<LlmWikiIssue>(`/api/llm-wiki/issues/${encodeURIComponent(issueId)}/resolve`),
+    http.post<LlmWikiIssue>(`/api/llm-wiki/manage/issues/${encodeURIComponent(issueId)}/resolve`),
 };
