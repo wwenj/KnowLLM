@@ -1,13 +1,12 @@
 # KnowLLM API
 
-`apps/api` 是从 `server_copy` 精简后的 Nest 服务端，只保留：
+`apps/api` 是 KnowLLM 的 NestJS 服务端，当前只提供：
 
-- LLM Wiki source / wiki / search / lint / issue 接口。
-- LLM Wiki Agent 与基础 Chat Agent。
-- 基础 Session REST 和 WebSocket 对话。
-- Health、Debug LLM Wiki、OpenAI-compatible 模型调用封装。
+- LLM Wiki source 管理、编译、页面读写、搜索与诊断。
+- 独立 LLM Wiki Agent 的提交、运行记录、结果查询与取消。
+- Health、Debug 和 OpenAI-compatible 模型调用封装。
 
-本地数据默认写入仓库根目录 `.knowllm/`。敏感配置只放 `env/.env.*`，这些文件已被根 `.gitignore` 忽略。
+本地业务数据默认写入仓库根目录 `.knowllm/`。Session、WebSocket 对话和基础 Chat 已删除。
 
 ## 本地配置
 
@@ -24,12 +23,10 @@ OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_API_KEY=你的本地密钥
 OPENAI_MODEL=deepseek-v4-pro
 MODEL=deepseek-v4-pro
-
 LLM_WIKI_MODEL=deepseek-v4-pro
-SESSION_DEFAULT_MODEL=deepseek-v4-flash
 ```
 
-模型调用使用 OpenAI-compatible `POST /chat/completions` 和 Bearer API key。未配置模型时，LLM Wiki 编译和问答会使用本地确定性 fallback。
+模型调用使用 OpenAI-compatible `POST /chat/completions`。这里的 `chat/completions` 是模型协议，不是产品 Chat 模块。
 
 ## 接口文档
 
@@ -37,9 +34,3 @@ SESSION_DEFAULT_MODEL=deepseek-v4-flash
 
 - Swagger UI: `http://localhost:39247/api-docs`
 - OpenAPI JSON: `http://localhost:39247/api-docs-json`
-
-Session WebSocket 不属于 OpenAPI，地址为：
-
-```text
-ws://localhost:39247/api/session/ws/session/:sessionId
-```

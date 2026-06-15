@@ -6,7 +6,6 @@ import type {
   LlmWikiSourceMeta,
 } from "../../../llmWiki/contracts/llm-wiki.types";
 
-export type LlmWikiOutputMode = "summary" | "snippets";
 export type LlmWikiSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
 export type StopReason = "complete" | "max_rounds" | "token_limit" | "no_new_actions" | "insufficient_evidence";
 export type QueryIntent = "overview" | "specific" | "compare" | "howto" | "debug";
@@ -28,7 +27,6 @@ export interface LlmWikiModels {
 
 export interface LlmWikiAgentInput extends Record<string, unknown> {
   query: string;
-  outputMode: LlmWikiOutputMode;
   sourcePolicy: LlmWikiSourcePolicy;
   budget: LlmWikiBudget;
   models: LlmWikiModels;
@@ -166,7 +164,6 @@ export interface KnowledgeSnippet {
 
 export interface LlmWikiAgentState {
   query: string;
-  outputMode: LlmWikiOutputMode;
   sourcePolicy: LlmWikiSourcePolicy;
   budget: LlmWikiBudget;
   models: LlmWikiModels;

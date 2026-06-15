@@ -51,6 +51,8 @@ test("workflow keeps the planner -> page -> source review flow behind llmWiki to
     },
   };
   const model = {
+    findModel: (modelName: string) => ({ model: modelName }),
+    hasConfiguredModel: () => true,
     chat: async ({ messages }: { messages: Array<{ content: unknown }> }) => {
       const system = String(messages[0]?.content || "");
       const value = system.includes("查询规划器")
@@ -76,7 +78,14 @@ test("workflow keeps the planner -> page -> source review flow behind llmWiki to
               stop: true,
               stopReason: "complete",
             }
-          : {
+          : system.includes("Knowledge Agent")
+            ? {
+                answerMarkdown: "# Synthesized answer\n\nVerified fact.",
+                citations: [{ path: "concepts/agent.md", title: "Agent", sources: [sourceId] }],
+                gaps: [],
+                coverageSummary: "complete",
+              }
+            : {
               sourceReviews: [{ path: "concepts/agent.md", sourceSupport: "verified", supportSummary: "verified" }],
               gaps: [],
               coverageSummary: "complete",
@@ -88,13 +97,15 @@ test("workflow keeps the planner -> page -> source review flow behind llmWiki to
     tools as unknown as LlmWikiAgentTools,
     model as unknown as ModelService,
   );
-  const input: LlmWikiAgentInput = {
+  const legacyModeKey = ["output", "Mode"].join("");
+  const input = workflow.validateInput({
     query: "What is the fact?",
-    outputMode: "snippets",
+    [legacyModeKey]: "snippets",
     sourcePolicy: "key-sources",
     budget: { maxRounds: 2, maxEvidencePages: 8, maxRawSources: 2, tokenLimit: null },
     models: { plannerModel: "test", reviewerModel: "test", synthesizerModel: "test" },
-  };
+  });
+  assert.equal(input[legacyModeKey], undefined);
   const events: string[] = [];
   const result = await workflow.start({
     runId: "a".repeat(32),
@@ -107,6 +118,7 @@ test("workflow keeps the planner -> page -> source review flow behind llmWiki to
 
   assert.deepEqual(calls, ["search", `page:concepts/agent.md`, `source:${sourceId}`]);
   assert.equal(result.status, "success");
+  assert.match(result.content, /Synthesized answer/);
   assert.equal((result.resultJson?.knowledgeSnippets as unknown[]).length, 1);
   assert.ok(events.includes("plan_created"));
   assert.ok(events.includes("sources_reviewed"));

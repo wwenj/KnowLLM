@@ -54,7 +54,6 @@ export function resultJsonFromState(
 ): Record<string, unknown> {
   const keptPages = pagesForKept(state);
   return {
-    outputMode: state.outputMode,
     answerMarkdown,
     knowledgeSnippets,
     discardedPages: state.discardedPages,

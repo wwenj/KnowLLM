@@ -10,11 +10,6 @@ import { AgentRegistryService } from "./agent-registry.service";
 import { AgentResultRendererService } from "./agent-result-renderer.service";
 import { AgentRunStoreService } from "./agent-run-store.service";
 
-export interface AgentRunExecutionStartOptions {
-  signal?: AbortSignal;
-  onEvent?: (event: AgentRunEvent) => void;
-}
-
 export interface AgentRunExecution {
   runId: string;
   agentType: string;
@@ -38,7 +33,7 @@ export class AgentRunExecutionService implements OnModuleInit {
     if (recovered > 0) this.logger.warn(`startup recovery: ${recovered} stale agent run(s) marked cancelled`);
   }
 
-  start(agentType: string, input: unknown, options: AgentRunExecutionStartOptions = {}): AgentRunExecution {
+  start(agentType: string, input: unknown): AgentRunExecution {
     const runner = this.registry.get(agentType);
     const validated = runner.validateInput(input);
     const runId = this.store.newRunId();
@@ -53,22 +48,8 @@ export class AgentRunExecutionService implements OnModuleInit {
     const key = jobKey(runner.agentType, runId);
     this.jobs.set(key, controller);
 
-    const abortFromParent = () => {
-      void this.cancel(runner.agentType, runId);
-    };
-    if (options.signal) {
-      if (options.signal.aborted) abortFromParent();
-      else options.signal.addEventListener("abort", abortFromParent, { once: true });
-    }
-
     const appendEvent = (event: AgentRunEvent) => {
       this.store.appendEvent(runner.agentType, runId, event);
-      try {
-        options.onEvent?.(event);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`agent ${runner.agentType} run ${runId} event callback failed: ${message}`);
-      }
     };
 
     const done = runner
@@ -100,7 +81,6 @@ export class AgentRunExecutionService implements OnModuleInit {
         });
       })
       .finally(() => {
-        if (options.signal) options.signal.removeEventListener("abort", abortFromParent);
         this.jobs.delete(key);
       });
 

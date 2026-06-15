@@ -9,7 +9,6 @@ import { DebugModule } from "./modules/debug/debug.module";
 import { HealthModule } from "./modules/health/health.module";
 import { LlmWikiModule } from "./modules/llmWiki/llm-wiki.module";
 import { ModelModule } from "./modules/model/model.module";
-import { SessionModule } from "./modules/session/session.module";
 
 @Module({
   imports: [
@@ -21,7 +20,6 @@ import { SessionModule } from "./modules/session/session.module";
     ModelModule,
     LlmWikiModule,
     AgentModule,
-    SessionModule,
     DebugModule
   ],
   providers: [
