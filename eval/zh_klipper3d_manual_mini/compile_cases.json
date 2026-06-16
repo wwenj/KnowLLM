@@ -1,0 +1,687 @@
+{
+  "datasetId": "zh_klipper3d_manual_mini",
+  "name": "Klipper 3D 打印机中文手册评测集：编译事实保留评测",
+  "sourceDir": "sources",
+  "cases": [
+    {
+      "id": "C001",
+      "name": "安装 关键事实保留",
+      "sourceFiles": [
+        "01-安装.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C001-F01",
+          "fact": "大多数 Klipper 设置由“打印机配置文件”printer.cfg 决定，该文件将存储在主机上。通常可以通过在 Klipper config 目录 中查找以“printer-”前缀开头且与目标打印机相对应的文件来找到适当的配置文件。Klipper 配置文件包含安装过程中需要的有关打印机的技术信息。",
+          "sourceFile": "01-安装.md",
+          "evidence": "大多数 Klipper 设置由“打印机配置文件”printer.cfg 决定，该文件将存储在主机上。通常可以通过在 Klipper [config 目录](../config/) 中查找以“printer-”前缀开头且与目标打印机相对应的文件来找到适当的配置文件。Klipper 配置文件包含安装过程中需要的有关打印机的技术信息。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C002",
+      "name": "配置检查 关键事实保留",
+      "sourceFiles": [
+        "02-配置检查.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C002-F01",
+          "fact": "本文档提供了一系列帮助验证 Klipper printer.cfg 文件中的引脚设置的步骤。推荐在完成安装文档 中的步骤后执行本文档中的步骤。",
+          "sourceFile": "02-配置检查.md",
+          "evidence": "本文档提供了一系列帮助验证 Klipper printer.cfg 文件中的引脚设置的步骤。推荐在完成[安装文档](Installation.md) 中的步骤后执行本文档中的步骤。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C003",
+      "name": "打印床调平 关键事实保留",
+      "sourceFiles": [
+        "03-打印床调平.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C003-F01",
+          "fact": "打印床调平（有时也被称为 \"bed tramming\"）对于获得高质量的打印结果至关重要。错误\"调平\"的打印床会造成附着力差、\"翘曲\"，以及整个打印过程中的细微问题。本文档是在 Klipper 中进行调平的指南。",
+          "sourceFile": "03-打印床调平.md",
+          "evidence": "打印床调平（有时也被称为 \"bed tramming\"）对于获得高质量的打印结果至关重要。错误\"调平\"的打印床会造成附着力差、\"翘曲\"，以及整个打印过程中的细微问题。本文档是在 Klipper 中进行调平的指南。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C004",
+      "name": "手动调平 关键事实保留",
+      "sourceFiles": [
+        "04-手动调平.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C004-F01",
+          "fact": "本文介绍了用于校准Z限位和对打印床调品螺丝进行调整的工具。",
+          "sourceFile": "04-手动调平.md",
+          "evidence": "本文介绍了用于校准Z限位和对打印床调品螺丝进行调整的工具。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C005",
+      "name": "探针校准 关键事实保留",
+      "sourceFiles": [
+        "05-探针校准.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C005-F01",
+          "fact": "本文档介绍了在 Klipper 中校准\"自动 Z 探针\" X、Y 和 Z 偏移的流程。这对于配置文件中具有 [probe] 或 [bltouch] 部分的打印机非常有用。",
+          "sourceFile": "05-探针校准.md",
+          "evidence": "本文档介绍了在 Klipper 中校准\"自动 Z 探针\" X、Y 和 Z 偏移的流程。这对于配置文件中具有 `[probe]` 或 `[bltouch]` 部分的打印机非常有用。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C006",
+      "name": "三角校正 关键事实保留",
+      "sourceFiles": [
+        "06-三角校正.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C006-F01",
+          "fact": "本文将介绍在Klipper中对“三角洲”运动模式的打印机进行自动校准的操作。",
+          "sourceFile": "06-三角校正.md",
+          "evidence": "本文将介绍在Klipper中对“三角洲”运动模式的打印机进行自动校准的操作。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C007",
+      "name": "床网 关键事实保留",
+      "sourceFiles": [
+        "07-床网.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C007-F01",
+          "fact": "床网模块可以用于补偿床面的不规则性，以实现更好的首层均一性。需要注意的是，基于软件的校正无法达到完美的结果，它只能近似地模拟床面的形状。床网模块也无法对机械和电气问题进行补偿。如果一个轴倾斜或探针不准确，那么床网模块将无法从探测过程中获得准确的结果。",
+          "sourceFile": "07-床网.md",
+          "evidence": "床网模块可以用于补偿床面的不规则性，以实现更好的首层均一性。需要注意的是，基于软件的校正无法达到完美的结果，它只能近似地模拟床面的形状。床网模块也无法对机械和电气问题进行补偿。如果一个轴倾斜或探针不准确，那么床网模块将无法从探测过程中获得准确的结果。",
+          "type": "limit",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C008",
+      "name": "BL-Touch 关键事实保留",
+      "sourceFiles": [
+        "08-bl-touch.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C008-F01",
+          "fact": "警告！：在你开始前请避免用你的手指接触 BL-Touch 的探针，因为它对手指的油脂相当敏感。如果你真的触摸需要触碰它，请尽可能小心，以避免弯曲或推动任何东西。",
+          "sourceFile": "08-bl-touch.md",
+          "evidence": "**警告！**：在你开始前请避免用你的手指接触 BL-Touch 的探针，因为它对手指的油脂相当敏感。如果你真的触摸需要触碰它，请尽可能小心，以避免弯曲或推动任何东西。",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C009",
+      "name": "TMC 驱动器 关键事实保留",
+      "sourceFiles": [
+        "09-tmc-驱动器.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C009-F01",
+          "fact": "这个文档提供了在Klipper上以SPI/UART模式使用Trinamic步进电机驱动器的信息。",
+          "sourceFile": "09-tmc-驱动器.md",
+          "evidence": "这个文档提供了在Klipper上以SPI/UART模式使用Trinamic步进电机驱动器的信息。",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C010",
+      "name": "压力提前 关键事实保留",
+      "sourceFiles": [
+        "10-压力提前.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C010-F01",
+          "fact": "本文档提供了关于调整特定喷嘴和耗材“压力提前”配置变量的方法。压力提前功能可以减少漏料。关于如何实现压力提前的更多信息，见运动学文件。",
+          "sourceFile": "10-压力提前.md",
+          "evidence": "本文档提供了关于调整特定喷嘴和耗材“压力提前”配置变量的方法。压力提前功能可以减少漏料。关于如何实现压力提前的更多信息，见[运动学](Kinematics.md)文件。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C011",
+      "name": "共振补偿 关键事实保留",
+      "sourceFiles": [
+        "11-共振补偿.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C011-F01",
+          "fact": "Klipper支持输入整形 -一种可以用来减少打印件上振纹（也被称为echo、ghosting或ripping）的技术。振纹是一种表面打印缺陷，通常在边角的位置表面重复出现，成为一种微妙的水波状纹路：",
+          "sourceFile": "11-共振补偿.md",
+          "evidence": "Klipper支持输入整形 -一种可以用来减少打印件上振纹（也被称为echo、ghosting或ripping）的技术。振纹是一种表面打印缺陷，通常在边角的位置表面重复出现，成为一种微妙的水波状纹路：",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C012",
+      "name": "共振值测量 关键事实保留",
+      "sourceFiles": [
+        "12-共振值测量.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C012-F01",
+          "fact": "MCU Family  微控制器(S)测试  支持的微控制器(S)",
+          "sourceFile": "12-共振值测量.md",
+          "evidence": "| MCU Family | 微控制器(S)测试 | 支持的微控制器(S) |",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C013",
+      "name": "旋转距离 关键事实保留",
+      "sourceFiles": [
+        "13-旋转距离.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C013-F01",
+          "fact": "Klipper 上的步进电机驱动器在每个 stepper 配置分段 中都需要定义一个 rotationdistance 参数。 rotationdistance 是步进电机旋转一整圈时轴移动的距离。本文档描述了如何配置此值。",
+          "sourceFile": "13-旋转距离.md",
+          "evidence": "Klipper 上的步进电机驱动器在每个 [stepper 配置分段](Config_Reference.md#stepper) 中都需要定义一个 `rotation_distance` 参数。 `rotation_distance` 是步进电机旋转一整圈时轴移动的距离。本文档描述了如何配置此值。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C014",
+      "name": "偏斜校正 关键事实保留",
+      "sourceFiles": [
+        "14-偏斜校正.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C014-F01",
+          "fact": "基于软件的偏斜校正可以帮助解决打印机装配不完全方形造成的尺寸不准确问题。请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。",
+          "sourceFile": "14-偏斜校正.md",
+          "evidence": "基于软件的偏斜校正可以帮助解决打印机装配不完全方形造成的尺寸不准确问题。请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C015",
+      "name": "限位相位 关键事实保留",
+      "sourceFiles": [
+        "15-限位相位.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C015-F01",
+          "fact": "该文档介绍了Klipper的步进电机相态校准限位位置的功能（下称：相态修正）。该功能可以增强传统限位开关的准确性。使用带有运行期间设置的步进电机驱动器，如Trinamic，可发挥该功能的最大作用。",
+          "sourceFile": "15-限位相位.md",
+          "evidence": "该文档介绍了Klipper的步进电机相态校准限位位置的功能（下称：相态修正）。该功能可以增强传统限位开关的准确性。使用带有运行期间设置的步进电机驱动器，如Trinamic，可发挥该功能的最大作用。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C016",
+      "name": "CAN 总线 关键事实保留",
+      "sourceFiles": [
+        "16-can-总线.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C016-F01",
+          "fact": "Klipper目前支持STM32、SAME5x和rp2040芯片上的CAN。此外，微控制器芯片必须位于具有CAN收发器的板上。",
+          "sourceFile": "16-can-总线.md",
+          "evidence": "Klipper目前支持STM32、SAME5x和rp2040芯片上的CAN。此外，微控制器芯片必须位于具有CAN收发器的板上。",
+          "type": "limit",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C017",
+      "name": "CanBus故障排除 关键事实保留",
+      "sourceFiles": [
+        "17-canbus故障排除.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C017-F01",
+          "fact": "确认CAN总线接线上的所有插头和线夹都已完全固定。打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。",
+          "sourceFile": "17-canbus故障排除.md",
+          "evidence": "确认CAN总线接线上的所有插头和线夹都已完全固定。打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C018",
+      "name": "底层引导程序 关键事实保留",
+      "sourceFiles": [
+        "18-底层引导程序.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C018-F01",
+          "fact": "本文档介绍Klipper支持的用于微控制器的底层引导程序（bootloader）。",
+          "sourceFile": "18-底层引导程序.md",
+          "evidence": "本文档介绍Klipper支持的用于微控制器的底层引导程序（bootloader）。",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C019",
+      "name": "引导加载程序条目 关键事实保留",
+      "sourceFiles": [
+        "19-引导加载程序条目.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C019-F01",
+          "fact": "可以通过以下方式之一指示Klipper重新启动到BootLoader：",
+          "sourceFile": "19-引导加载程序条目.md",
+          "evidence": "可以通过以下方式之一指示Klipper重新启动到[BootLoader](Bootloaders.md)：",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C020",
+      "name": "通过SD卡更新 关键事实保留",
+      "sourceFiles": [
+        "20-通过sd卡更新.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C020-F01",
+          "fact": "当今许多流行的控制器板都带有能够通过 SD 卡更新固件的引导加载程序。 虽然这在很多情况下都很方便，但这些引导加载程序通常不提供其他方式来更新固件。 如果您的电路板安装在很难插入SD卡的位置或者您需要经常更新固件，这可能会很麻烦。 在 Klipper 最初刷入控制器后，可以将新固件通过网络传输到 SD 卡并通过 ssh 启动刷写过程。",
+          "sourceFile": "20-通过sd卡更新.md",
+          "evidence": "当今许多流行的控制器板都带有能够通过 SD 卡更新固件的引导加载程序。 虽然这在很多情况下都很方便，但这些引导加载程序通常不提供其他方式来更新固件。 如果您的电路板安装在很难插入SD卡的位置或者您需要经常更新固件，这可能会很麻烦。 在 Klipper 最初刷入控制器后，可以将新固件通过网络传输到 SD 卡并通过 ssh 启动刷写过程。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C021",
+      "name": "RPi 微控制器 关键事实保留",
+      "sourceFiles": [
+        "21-rpi-微控制器.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C021-F01",
+          "fact": "通常情况下，专门用于控制3D打印机的MCU有有限的、预先配置好的引脚来管理主要的打印功能（热敏电阻、挤出机、步进器...）。使用安装了Klipper的RPi作为辅助MCU，可以直接使用klipper内的GPIO和RPi的总线（i2c，spi），而不需要使用Octoprint插件（如果使用的话）或外部程序，从而能够控制打印GCODE内的一切。",
+          "sourceFile": "21-rpi-微控制器.md",
+          "evidence": "通常情况下，专门用于控制3D打印机的MCU有有限的、预先配置好的引脚来管理主要的打印功能（热敏电阻、挤出机、步进器...）。使用安装了Klipper的RPi作为辅助MCU，可以直接使用klipper内的GPIO和RPi的总线（i2c，spi），而不需要使用Octoprint插件（如果使用的话）或外部程序，从而能够控制打印GCODE内的一切。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C022",
+      "name": "OctoPrint for Klipper 关键事实保留",
+      "sourceFiles": [
+        "22-octoprint-for-klipper.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C022-F01",
+          "fact": "Klipper 有几个不同的前端选择，Octoprint 是最早也是最原始的Klipper 前端。这篇文档会给一个大致的概览关于如何在Octoprint 上安装Klipper。",
+          "sourceFile": "22-octoprint-for-klipper.md",
+          "evidence": "Klipper 有几个不同的前端选择，Octoprint 是最早也是最原始的Klipper 前端。这篇文档会给一个大致的概览关于如何在Octoprint 上安装Klipper。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C023",
+      "name": "切片软件 关键事实保留",
+      "sourceFiles": [
+        "23-切片软件.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C023-F01",
+          "fact": "本文档提供了与 Klipper 一起使用的一些切片软件配置技巧。 Klipper 常用的切片软件有 Slic3r、Cura、Simplify3D 等。",
+          "sourceFile": "23-切片软件.md",
+          "evidence": "本文档提供了与 Klipper 一起使用的一些切片软件配置技巧。 Klipper 常用的切片软件有 Slic3r、Cura、Simplify3D 等。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C024",
+      "name": "G-Codes 关键事实保留",
+      "sourceFiles": [
+        "24-g-codes.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C024-F01",
+          "fact": "本文档描述了 Klipper 支持的命令。这些命令可以输入到 OctoPrint 终端中。",
+          "sourceFile": "24-g-codes.md",
+          "evidence": "本文档描述了 Klipper 支持的命令。这些命令可以输入到 OctoPrint 终端中。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C025",
+      "name": "配置参考 关键事实保留",
+      "sourceFiles": [
+        "25-配置参考.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C025-F01",
+          "fact": "本文档是 Klipper 配置文件中可用配置分段的参考。",
+          "sourceFile": "25-配置参考.md",
+          "evidence": "本文档是 Klipper 配置文件中可用配置分段的参考。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C026",
+      "name": "配置变更 关键事实保留",
+      "sourceFiles": [
+        "26-配置变更.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C026-F01",
+          "fact": "本文档涵盖了软件更新中对配置文件不向后兼容的部分。在升级 Klipper 时，最好也查看一下这份文档。",
+          "sourceFile": "26-配置变更.md",
+          "evidence": "本文档涵盖了软件更新中对配置文件不向后兼容的部分。在升级 Klipper 时，最好也查看一下这份文档。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C027",
+      "name": "状态参考 关键事实保留",
+      "sourceFiles": [
+        "27-状态参考.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C027-F01",
+          "fact": "本文档是可用于 Klipper 宏、显示字段以及API服务器 的打印机状态信息的参考。",
+          "sourceFile": "27-状态参考.md",
+          "evidence": "本文档是可用于 Klipper [宏](Command_Templates.md)、[显示字段](Config_Reference.md#display)以及[API服务器](API_Server.md) 的打印机状态信息的参考。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C028",
+      "name": "常见问题 关键事实保留",
+      "sourceFiles": [
+        "28-常见问题.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C028-F01",
+          "fact": "在上述命令中找到的名称是稳定的，可以在配置文件中使用它，同时可用于刷写微控制器的代码。 例如，一个 flash 命令：",
+          "sourceFile": "28-常见问题.md",
+          "evidence": "在上述命令中找到的名称是稳定的，可以在配置文件中使用它，同时可用于刷写微控制器的代码。 例如，一个 flash 命令：",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C029",
+      "name": "功能 关键事实保留",
+      "sourceFiles": [
+        "29-功能.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C029-F01",
+          "fact": "高精度步进运动。Klipper使用一个应用处理器（例如低成本的树莓派）来计算打印机运动。应用处理器决定何时对每个步进电机发出步进信号，压缩这些事件，并将它们发送到微控制器。微处理器将会把每个事件按请求时间执行。每一个步进事件被以25毫秒或更高的精度安排。Klipper不使用运动估计，例如 Bresenham算法，而是通过加速度与机械运动物理计算精确的步进时间。更精准的步进电机运动意味着打印机更安静和稳定的运行。",
+          "sourceFile": "29-功能.md",
+          "evidence": "* 高精度步进运动。Klipper使用一个应用处理器（例如低成本的树莓派）来计算打印机运动。应用处理器决定何时对每个步进电机发出步进信号，压缩这些事件，并将它们发送到微控制器。微处理器将会把每个事件按请求时间执行。每一个步进事件被以25毫秒或更高的精度安排。Klipper不使用运动估计，例如 Bresenham算法，而是通过加速度与机械运动物理计算精确的步进时间。更精准的步进电机运动意味着打印机更安静和稳定的运行。",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C030",
+      "name": "概述 关键事实保留",
+      "sourceFiles": [
+        "30-概述.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C030-F01",
+          "fact": "欢迎使用Klipper文档。如果刚接触Klipper，请从特性和安装文档开始阅读。",
+          "sourceFile": "30-概述.md",
+          "evidence": "欢迎使用Klipper文档。如果刚接触Klipper，请从[特性](features.md)和[安装](installation.md)文档开始阅读。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C031",
+      "name": "API 服务器 关键事实保留",
+      "sourceFiles": [
+        "31-api-服务器.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C031-F01",
+          "fact": "要启用API服务器，klipper.py运行时应加上 -a 参数。例如：",
+          "sourceFile": "31-api-服务器.md",
+          "evidence": "要启用API服务器，klipper.py运行时应加上 `-a` 参数。例如：",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C032",
+      "name": "Beaglebone 关键事实保留",
+      "sourceFiles": [
+        "32-beaglebone.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C032-F01",
+          "fact": "首先安装 [Debian 11.7 2023-09-02 4GB microSD IoT]（https://beagleboard.org/latest-images） 镜像。可以从 micro-SD 卡或内置 eMMC 运行映像。如果使用 eMMC，请按照上述链接中的说明立即将其安装到 eMMC。",
+          "sourceFile": "32-beaglebone.md",
+          "evidence": "首先安装 [Debian 11.7 2023-09-02 4GB microSD IoT]（https://beagleboard.org/latest-images） 镜像。可以从 micro-SD 卡或内置 eMMC 运行映像。如果使用 eMMC，请按照上述链接中的说明立即将其安装到 eMMC。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C033",
+      "name": "基准测试 关键事实保留",
+      "sourceFiles": [
+        "33-基准测试.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C033-F01",
+          "fact": "步进率(stepping rate)基准是为了找到硬件和软件可以达到的最大步进率。这个基准步进率在日常使用中是无法实现的，因为Klipper在任何实际使用中都需要执行其他任务（例如，MCU/主机通信、温度读取、限位检查）。",
+          "sourceFile": "33-基准测试.md",
+          "evidence": "步进率(stepping rate)基准是为了找到硬件和软件可以达到的最大步进率。这个基准步进率在日常使用中是无法实现的，因为Klipper在任何实际使用中都需要执行其他任务（例如，MCU/主机通信、温度读取、限位检查）。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C034",
+      "name": "CANBUS 协议 (CANBUS protocol) 关键事实保留",
+      "sourceFiles": [
+        "34-canbus-协议-canbus-protocol.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C034-F01",
+          "fact": "本文档描述了 Klipper 通过CAN总线进行通信的协议。参见了解如何在 Klipper 中配置 CAN 总线。",
+          "sourceFile": "34-canbus-协议-canbus-protocol.md",
+          "evidence": "本文档描述了 Klipper 通过[CAN总线](https://en.wikipedia.org/wiki/CAN_bus)进行通信的协议。参见<CANBUS.md>了解如何在 Klipper 中配置 CAN 总线。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C035",
+      "name": "代码总览 关键事实保留",
+      "sourceFiles": [
+        "35-代码总览.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C035-F01",
+          "fact": "其中一个主要的任务函数为src/command.c 中的commanddispatch()。上述函数经由微处理器特定的 输入/输出 代码调用(即src/avr/serial.c, src/generic/serialirq.c)，并执行输入流中的命令所对应的命令函数。命令函数通过 DECLCOMMAND() 宏进行定义 (详情参照协议 文档)。",
+          "sourceFile": "35-代码总览.md",
+          "evidence": "其中一个主要的任务函数为**src/command.c** 中的command_dispatch()。上述函数经由微处理器特定的 输入/输出 代码调用(即**src/avr/serial.c**, **src/generic/serial_irq.c**)，并执行输入流中的命令所对应的命令函数。命令函数通过 DECL_COMMAND() 宏进行定义 (详情参照[协议](Protocol.md) 文档)。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C036",
+      "name": "命令模板 关键事实保留",
+      "sourceFiles": [
+        "36-命令模板.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C036-F01",
+          "fact": "本文档描述了 gcodemacro（和其他类似）配置分段中实现 G-Code 命令序列的方法。",
+          "sourceFile": "36-命令模板.md",
+          "evidence": "本文档描述了 gcode_macro（和其他类似）配置分段中实现 G-Code 命令序列的方法。",
+          "type": "config",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C037",
+      "name": "联系方式 关键事实保留",
+      "sourceFiles": [
+        "37-联系方式.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C037-F01",
+          "fact": "也可以在 Klipper 社区论坛中搜索类似的问题。",
+          "sourceFile": "37-联系方式.md",
+          "evidence": "也可以在[ Klipper 社区论坛](#community-forum)中搜索类似的问题。",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C038",
+      "name": "为 Klipper 做贡献 关键事实保留",
+      "sourceFiles": [
+        "38-为-klipper-做贡献.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C038-F01",
+          "fact": "1. 当 审核者可以 审核提交时，他们将把自己分配给 GitHub 上的拉取请求。审核的目的是寻找缺陷并检查提交是否遵循记录在案的准则。",
+          "sourceFile": "38-为-klipper-做贡献.md",
+          "evidence": "1. 当 [审核者](#reviewers)可以 [审核](#what-to-expect-in-a-review)提交时，他们将把自己分配给 GitHub 上的拉取请求。审核的目的是寻找缺陷并检查提交是否遵循记录在案的准则。",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C039",
+      "name": "调试 关键事实保留",
+      "sourceFiles": [
+        "39-调试.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C039-F01",
+          "fact": "源代码“whitespace check(空白检查)”可以使用以下代码运行：",
+          "sourceFile": "39-调试.md",
+          "evidence": "源代码“whitespace check(空白检查)”可以使用以下代码运行：",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C040",
+      "name": "Eddy 感应涡流探针 关键事实保留",
+      "sourceFiles": [
+        "40-eddy-感应涡流探针.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C040-F01",
+          "fact": "这个文档解释了如何在klipper 中使用 eddy 涡流传感器。",
+          "sourceFile": "40-eddy-感应涡流探针.md",
+          "evidence": "这个文档解释了如何在klipper 中使用 [eddy 涡流传感器](https://en.wikipedia.org/wiki/Eddy_current)。",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    }
+  ]
+}

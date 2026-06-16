@@ -1,0 +1,772 @@
+{
+  "datasetId": "farmbot_genesis_v18_manual_mini",
+  "name": "FarmBot Genesis v1.8 硬件手册评测集：编译事实保留评测",
+  "sourceDir": "sources",
+  "cases": [
+    {
+      "id": "C001",
+      "name": "Cross-Slide and Z-Axis 关键事实保留",
+      "sourceFiles": [
+        "01-cross-slide-and-z-axis.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C001-F01",
+          "fact": "content=\"This is the estimated time it will take to assemble the cross-slide and Z-axis onto the gantry.\"",
+          "sourceFile": "01-cross-slide-and-z-axis.md",
+          "evidence": "content=\"This is the estimated time it will take to assemble the cross-slide and Z-axis onto the gantry.\"",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C002",
+      "name": "Electronics 关键事实保留",
+      "sourceFiles": [
+        "02-electronics.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C002-F01",
+          "fact": "The [[Farmduino]] and [[Raspberry Pi]] are the central components of the FarmBot from an electronic systems perspective. The diagram below shows how the other electronic components connect to these boards, as well as how the two are connected to each other.",
+          "sourceFile": "02-electronics.md",
+          "evidence": "The [[Farmduino]] and [[Raspberry Pi]] are the central components of the FarmBot from an electronic systems perspective. The diagram below shows how the other electronic components connect to these boards, as well as how the two are connected to each other.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C003",
+      "name": "Final Steps 关键事实保留",
+      "sourceFiles": [
+        "03-final-steps.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C003-F01",
+          "fact": "- Configure FarmBot to connect to your WiFi network and web app account",
+          "sourceFile": "03-final-steps.md",
+          "evidence": "- Configure FarmBot to connect to your WiFi network and web app account",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C004",
+      "name": "Gantry 关键事实保留",
+      "sourceFiles": [
+        "04-gantry.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C004-F01",
+          "fact": "content=\"This is the estimated time it will take to assemble the gantry.\"",
+          "sourceFile": "04-gantry.md",
+          "evidence": "content=\"This is the estimated time it will take to assemble the gantry.\"",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C005",
+      "name": "Intro to FarmBot Genesis 关键事实保留",
+      "sourceFiles": [
+        "05-intro-to-farmbot-genesis.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C005-F01",
+          "fact": "content=\"As of June 5, 2025, the default version of the Genesis documentation is for v1.8. If you have an older kit, please use the version picker dropdown menu in the top left of the documentation hub's navigation to select an older version of the docs.\"",
+          "sourceFile": "05-intro-to-farmbot-genesis.md",
+          "evidence": "content=\"As of June 5, 2025, the default version of the Genesis documentation is for v1.8. If you have an older kit, please use the version picker dropdown menu in the top left of the documentation hub's navigation to select an older version of the docs.\"",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C006",
+      "name": "Assembly Preparation 关键事实保留",
+      "sourceFiles": [
+        "06-assembly-preparation.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C006-F01",
+          "fact": "Watch the short video below to understand how to provide power, water, and an internet connection to your FarmBot in a safe a reliable way.",
+          "sourceFile": "06-assembly-preparation.md",
+          "evidence": "Watch the short video below to understand how to provide **power**, **water**, and an **internet connection** to your FarmBot in a safe a reliable way.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C007",
+      "name": "Change Log 关键事实保留",
+      "sourceFiles": [
+        "07-change-log.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C007-F01",
+          "fact": "New [[gantry main beams]] are now significantly lighter weight without compromising on strength, while offering a refined aesthetic on the front face. The new beams are also now shorter and more numerous (two 0.75m beams for Genesis and three 1m beams for Genesis (XL)) in order to be co-packaged with the rest of the FarmBot kit.",
+          "sourceFile": "07-change-log.md",
+          "evidence": "New [[gantry main beams]] are now significantly lighter weight without compromising on strength, while offering a refined aesthetic on the front face. The new beams are also now shorter and more numerous (two 0.75m beams for Genesis and three 1m beams for Genesis (XL)) in order to be co-packaged with the rest of the FarmBot kit.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C008",
+      "name": "Frequently Asked Questions 关键事实保留",
+      "sourceFiles": [
+        "08-frequently-asked-questions.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C008-F01",
+          "fact": "Please note that FarmBot is not waterproof, in the sense that you cannot fully submerge it underwater, like in an aquarium. Ultra humid areas may pose a risk for FarmBot's electronics as well, requiring you to take extra precautions and measures during your installation.",
+          "sourceFile": "08-frequently-asked-questions.md",
+          "evidence": "Please note that FarmBot is not waterproof, in the sense that you cannot fully submerge it underwater, like in an aquarium. Ultra humid areas may pose a risk for FarmBot's electronics as well, requiring you to take extra precautions and measures during your installation.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C009",
+      "name": "High Level Overview 关键事实保留",
+      "sourceFiles": [
+        "09-high-level-overview.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C009-F01",
+          "fact": "content=\"We've gone through great lengths to design FarmBot Genesis to be durable, easily assembled and modified with common tools, and upgradeable. Nothing about FarmBot speaks obsolescence or proprietary.",
+          "sourceFile": "09-high-level-overview.md",
+          "evidence": "content=\"We've gone through great lengths to design FarmBot Genesis to be durable, easily assembled and modified with common tools, and upgradeable. Nothing about FarmBot speaks obsolescence or proprietary.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C010",
+      "name": "Past Versions 关键事实保留",
+      "sourceFiles": [
+        "10-past-versions.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C010-F01",
+          "fact": "content=\"FarmBot Genesis is always being improved and has undergone many iterations. We encourage skimming through the older versions to understand how we arrived at the latest design.\"",
+          "sourceFile": "10-past-versions.md",
+          "evidence": "content=\"FarmBot Genesis is always being improved and has undergone many iterations. We encourage skimming through the older versions to understand how we arrived at the latest design.\"",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C011",
+      "name": "Product Safety 关键事实保留",
+      "sourceFiles": [
+        "11-product-safety.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C011-F01",
+          "fact": "content=\"Adhering to the recommended safety precautions can help prevent accidents and injuries.\"",
+          "sourceFile": "11-product-safety.md",
+          "evidence": "content=\"Adhering to the recommended safety precautions can help prevent accidents and injuries.\"",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C012",
+      "name": "Supporting Infrastructure 关键事实保留",
+      "sourceFiles": [
+        "12-supporting-infrastructure.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C012-F01",
+          "fact": "FarmBot's tracks need to be attached to supporting infrastructure such as a typical raised garden bed. Where you decide to install your FarmBot will determine how you setup your tracks and therefore what type of supporting infrastructure you need.",
+          "sourceFile": "12-supporting-infrastructure.md",
+          "evidence": "FarmBot's tracks need to be attached to **supporting infrastructure** such as a typical raised garden bed. Where you decide to install your FarmBot will determine how you setup your tracks and therefore what type of supporting infrastructure you need.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C013",
+      "name": "Mobile Raised Bed 关键事实保留",
+      "sourceFiles": [
+        "13-mobile-raised-bed.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C013-F01",
+          "fact": "Building a mobile raised bed is the recommended method for installing FarmBot Genesis indoors. In these instructions we show you how to build a simple but sturdy bed that can be easily moved around a classroom, lab, warehouse, or museum space.",
+          "sourceFile": "13-mobile-raised-bed.md",
+          "evidence": "Building a **mobile raised bed** is the recommended method for installing FarmBot Genesis **indoors**. In these instructions we show you how to build a simple but sturdy bed that can be easily moved around a classroom, lab, warehouse, or museum space.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C014",
+      "name": "Pier Block Supports 关键事实保留",
+      "sourceFiles": [
+        "14-pier-block-supports.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C014-F01",
+          "fact": "content=\"This is the estimated time it will take to set up pier block supports.\"",
+          "sourceFile": "14-pier-block-supports.md",
+          "evidence": "content=\"This is the estimated time it will take to set up pier block supports.\"",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C015",
+      "name": "Fixed Raised Bed 关键事实保留",
+      "sourceFiles": [
+        "15-fixed-raised-bed.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C015-F01",
+          "fact": "Building a fixed raised bed is the recommended method for installing FarmBot Genesis or Genesis (XL) outdoors. In these instructions we show you how to build a simple but sturdy bed that will fit into most yards, look great, and last a lifetime.",
+          "sourceFile": "15-fixed-raised-bed.md",
+          "evidence": "Building a **fixed raised bed** is the recommended method for installing FarmBot Genesis or Genesis (XL) outdoors. In these instructions we show you how to build a simple but sturdy bed that will fit into most yards, look great, and last a lifetime.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C016",
+      "name": "Wood Posts 关键事实保留",
+      "sourceFiles": [
+        "16-wood-posts.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C016-F01",
+          "fact": "content=\"This is the estimated time it will take to setup wood posts.\"",
+          "sourceFile": "16-wood-posts.md",
+          "evidence": "content=\"This is the estimated time it will take to setup wood posts.\"",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C017",
+      "name": "Toolbays 关键事实保留",
+      "sourceFiles": [
+        "17-toolbays.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C017-F01",
+          "fact": "FarmBot Genesis comes with two [[3-slot toolbays]] that can hold a combination of three tools or seed containers each. These simple hardware components act as holsters for your tools and are shaped in such a way that FarmBot can automatically mount and dismount tools for the task at hand.",
+          "sourceFile": "17-toolbays.md",
+          "evidence": "FarmBot Genesis comes with two [[3-slot toolbays]] that can hold a combination of three tools or seed containers each. These simple hardware components act as holsters for your tools and are shaped in such a way that FarmBot can automatically mount and dismount tools for the task at hand.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C018",
+      "name": "Tools 关键事实保留",
+      "sourceFiles": [
+        "18-tools.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C018-F01",
+          "fact": "The Universal Tool Mount, or UTM, allows FarmBot Genesis to automatically switch tools in order to perform different operations. It features:",
+          "sourceFile": "18-tools.md",
+          "evidence": "The **Universal Tool Mount**, or **UTM**, allows FarmBot Genesis to automatically switch tools in order to perform different operations. It features:",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C019",
+      "name": "Tracks 关键事实保留",
+      "sourceFiles": [
+        "19-tracks.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C019-F01",
+          "fact": "content=\"This is the estimated time it will take to assemble the tracks.\"",
+          "sourceFile": "19-tracks.md",
+          "evidence": "content=\"This is the estimated time it will take to assemble the tracks.\"",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C020",
+      "name": "Gantry Maintenance 关键事实保留",
+      "sourceFiles": [
+        "20-gantry-maintenance.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C020-F01",
+          "fact": "It is possible for the gantry to become twisted such that is not perpendicular to the tracks. This is usually caused by an obstruction on one track that stalls that side of the gantry and misaligns the system, or a loose belt on one track.",
+          "sourceFile": "20-gantry-maintenance.md",
+          "evidence": "It is possible for the gantry to become twisted such that is not perpendicular to the tracks. This is usually caused by an obstruction on one track that stalls that side of the gantry and misaligns the system, or a loose belt on one track.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C021",
+      "name": "General Maintenance 关键事实保留",
+      "sourceFiles": [
+        "21-general-maintenance.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C021-F01",
+          "fact": "FarmBot is a farmer that works and lives all day and night outside with the rain, sun, bugs, birds, and dirt. At the same time, FarmBot is a precision CNC machine with a lot of parts that allow it to move with millimeter accuracy to grow your food. Most would say these things can't co-exist. But they can with regular cleaning of your device.",
+          "sourceFile": "21-general-maintenance.md",
+          "evidence": "FarmBot is a farmer that works and lives all day and night outside with the rain, sun, bugs, birds, and dirt. At the same time, FarmBot is a precision CNC machine with a lot of parts that allow it to move with millimeter accuracy to grow your food. Most would say these things can't co-exist. But they can with regular cleaning of your device.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C022",
+      "name": "Storing FarmBot for Winter 关键事实保留",
+      "sourceFiles": [
+        "22-storing-farmbot-for-winter.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C022-F01",
+          "fact": "While FarmBot is designed to be used and stored outdoors, you may want to bring it inside for the winter, or if an extreme weather event (such as a hurricane) is heading your way.",
+          "sourceFile": "22-storing-farmbot-for-winter.md",
+          "evidence": "While FarmBot is designed to be used and stored outdoors, you may want to bring it inside for the winter, or if an extreme weather event (such as a hurricane) is heading your way.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C023",
+      "name": "Thermal Management 关键事实保留",
+      "sourceFiles": [
+        "23-thermal-management.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C023-F01",
+          "fact": "In all FarmBot kits, there is a built-in temperature sensor located on the Raspberry Pi computer. It is important to protect the CPU and other electronics from excessively high temperatures, so we recommend monitoring the temperature using the real-time CPU temperature information located in the connectivity popup.",
+          "sourceFile": "23-thermal-management.md",
+          "evidence": "In all FarmBot kits, there is a built-in temperature sensor located on the Raspberry Pi computer. It is important to protect the CPU and other electronics from excessively high temperatures, so we recommend monitoring the temperature using the real-time **CPU temperature** information located in the **connectivity popup**.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C024",
+      "name": "Track Maintenance 关键事实保留",
+      "sourceFiles": [
+        "24-track-maintenance.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C024-F01",
+          "fact": "Once a month, inspect your tracks for an accumulation of mud, dirt, and other debris. Because the tracks are so low to the ground, it is common for them to accumulate unwanted materials. This can create unnecessary friction for the gantry when moving across the tracks, ultimately leading it to bind up if the tracks are not cleaned.",
+          "sourceFile": "24-track-maintenance.md",
+          "evidence": "Once a month, inspect your tracks for an accumulation of mud, dirt, and other debris. Because the tracks are so low to the ground, it is common for them to accumulate unwanted materials. This can create unnecessary friction for the gantry when moving across the tracks, ultimately leading it to bind up if the tracks are not cleaned.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C025",
+      "name": "UTM and Tool Maintenance 关键事实保留",
+      "sourceFiles": [
+        "25-utm-and-tool-maintenance.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C025-F01",
+          "fact": "content=\"Inspect the o-rings to ensure they are not cracked, broken, or otherwise degraded to the point of sealing ineffectively. If any damage is found, replace them as soon as possible.\"",
+          "sourceFile": "25-utm-and-tool-maintenance.md",
+          "evidence": "content=\"Inspect the o-rings to ensure they are not cracked, broken, or otherwise degraded to the point of sealing ineffectively. If any damage is found, replace them as soon as possible.\"",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C026",
+      "name": "Are my encoders working? 关键事实保留",
+      "sourceFiles": [
+        "26-are-my-encoders-working.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C026-F01",
+          "fact": "FarmBot Genesis v1.4 NEMA 17 Stepper Motor with  pre-mounted rotary encoders",
+          "sourceFile": "26-are-my-encoders-working.md",
+          "evidence": "_FarmBot Genesis v1.4 NEMA 17 Stepper Motor with  pre-mounted rotary encoders_",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C027",
+      "name": "Mounting and Dismounting Tools 关键事实保留",
+      "sourceFiles": [
+        "27-mounting-and-dismounting-tools.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C027-F01",
+          "fact": "If you are encountering issues with reliably mounting and dismounting tools into the toolbay, try the following troubleshooting steps.",
+          "sourceFile": "27-mounting-and-dismounting-tools.md",
+          "evidence": "If you are encountering issues with reliably mounting and dismounting tools into the toolbay, try the following troubleshooting steps.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C028",
+      "name": "Picking Up Seeds 关键事实保留",
+      "sourceFiles": [
+        "28-picking-up-seeds.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C028-F01",
+          "fact": "If the needle is too small, then the vacuum pump will not be able to create enough suction to consistently and reliably pick up a larger, heavier seed. In some cases, the seed may get picked up but then dropped when FarmBot is moving in the X, Y, and Z directions. In either case, try switching to a larger needle size.",
+          "sourceFile": "28-picking-up-seeds.md",
+          "evidence": "If the needle is too small, then the vacuum pump will not be able to create enough suction to consistently and reliably pick up a larger, heavier seed. In some cases, the seed may get picked up but then dropped when FarmBot is moving in the X, Y, and Z directions. In either case, try switching to a larger needle size.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C029",
+      "name": "Solenoid Valve Cable Fix 关键事实保留",
+      "sourceFiles": [
+        "29-solenoid-valve-cable-fix.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C029-F01",
+          "fact": "The replacement quick connect terminals are located in a small plastic bag.",
+          "sourceFile": "29-solenoid-valve-cable-fix.md",
+          "evidence": "The replacement quick connect terminals are located in a small plastic bag.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C030",
+      "name": "Tool Verification 关键事实保留",
+      "sourceFiles": [
+        "30-tool-verification.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C030-F01",
+          "fact": "Double check that the UTM cable is fully connected in all locations:",
+          "sourceFile": "30-tool-verification.md",
+          "evidence": "Double check that the UTM cable is fully connected in all locations:",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C031",
+      "name": "Track Tolerance 关键事实保留",
+      "sourceFiles": [
+        "31-track-tolerance.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C031-F01",
+          "fact": "If you are trying to install your FarmBot on an uneven raised bed or with tracks that are out of alignment, you may run into issues.",
+          "sourceFile": "31-track-tolerance.md",
+          "evidence": "If you are trying to install your FarmBot on an uneven raised bed or with tracks that are out of alignment, you may run into issues.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C032",
+      "name": "Water Pressure 关键事实保留",
+      "sourceFiles": [
+        "32-water-pressure.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C032-F01",
+          "fact": "FarmBot is designed to work with typical municipal water pressure between 40 PSI and 55 PSI (275kPa and 379kPa). If the water pressure supplied to the FarmBot is significantly higher or lower than this range, you may experience one of the following issues with the FarmBot watering system.",
+          "sourceFile": "32-water-pressure.md",
+          "evidence": "FarmBot is designed to work with typical **municipal water pressure between 40 PSI and 55 PSI (275kPa and 379kPa)**. If the water pressure supplied to the FarmBot is significantly higher or lower than this range, you may experience one of the following issues with the FarmBot watering system.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C033",
+      "name": "Why is my FarmBot not moving? 关键事实保留",
+      "sourceFiles": [
+        "33-why-is-my-farmbot-not-moving.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C033-F01",
+          "fact": "title=\"Inspect and clean the FarmBot and ensure it is free from debris\"",
+          "sourceFile": "33-why-is-my-farmbot-not-moving.md",
+          "evidence": "title=\"Inspect and clean the FarmBot and ensure it is free from debris\"",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C034",
+      "name": "Z-Axis Movements 关键事实保留",
+      "sourceFiles": [
+        "34-z-axis-movements.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C034-F01",
+          "fact": "It is possible that dust and debris can build up on the [[leadscrew]] causing additional friction between the leadscrew and the [[leadscrew block]]. Clean the leadscrew with a rag and then add some lubricant which can be purchased from a local hardware store.",
+          "sourceFile": "34-z-axis-movements.md",
+          "evidence": "It is possible that dust and debris can build up on the [[leadscrew]] causing additional friction between the leadscrew and the [[leadscrew block]]. Clean the leadscrew with a rag and then add some lubricant which can be purchased from a local hardware store.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C035",
+      "name": "Eccentric Spacer Adjustment 关键事实保留",
+      "sourceFiles": [
+        "35-eccentric-spacer-adjustment.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C035-F01",
+          "fact": "[[Eccentric spacers]] are used for making fine adjustments to the spacing between the [[v-wheels]] on either side of an aluminum extrusion. Adjusting this spacing is key to achieving smooth and wobble-free movement of the gantry across the tracks, the cross-slide across the gantry main beam, and the z-axis up and down the cross-slide.",
+          "sourceFile": "35-eccentric-spacer-adjustment.md",
+          "evidence": "[[Eccentric spacers]] are used for making fine adjustments to the spacing between the [[v-wheels]] on either side of an aluminum extrusion. Adjusting this spacing is key to achieving smooth and wobble-free movement of the gantry across the tracks, the cross-slide across the gantry main beam, and the z-axis up and down the cross-slide.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C036",
+      "name": "Seeds 关键事实保留",
+      "sourceFiles": [
+        "37-seeds.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C036-F01",
+          "fact": "There are three main considerations when choosing seeds to plant with FarmBot:",
+          "sourceFile": "37-seeds.md",
+          "evidence": "There are three main considerations when choosing **seeds** to plant with FarmBot:",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C037",
+      "name": "3D Imaging with an OAK Camera 关键事实保留",
+      "sourceFiles": [
+        "38-3d-imaging-with-an-oak-camera.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C037-F01",
+          "fact": "Which camera you choose will depend on your goals, operating environment (indoors or outdoors), and the mounting position of the camera. Example use cases include:",
+          "sourceFile": "38-3d-imaging-with-an-oak-camera.md",
+          "evidence": "Which camera you choose will depend on your goals, operating environment (indoors or outdoors), and the mounting position of the camera. Example use cases include:",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C038",
+      "name": "Bees, Worms, Chickens, and More! 关键事实保留",
+      "sourceFiles": [
+        "39-bees-worms-chickens-and-more.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C038-F01",
+          "fact": "Our friends at the AKER project share a similar vision for the future of food as us. They have created simple garden kits that snap together without tools, which we recommend adding to your FarmBot so you can have a more complete food system right in your backyard!",
+          "sourceFile": "39-bees-worms-chickens-and-more.md",
+          "evidence": "Our friends at the [AKER project](http://akerkits.com) share a similar vision for the future of food as us. They have created simple garden kits that snap together without tools, which we recommend adding to your FarmBot so you can have a more complete food system right in your backyard!",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C039",
+      "name": "Capture and Use Rainwater 关键事实保留",
+      "sourceFiles": [
+        "40-capture-and-use-rainwater.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C039-F01",
+          "fact": "If you live off-grid or want to save on your water bill, consider installing a rain barrel to store collected rain from your roof or other collection surface, and then using this source of water with your FarmBot.",
+          "sourceFile": "40-capture-and-use-rainwater.md",
+          "evidence": "If you live off-grid or want to save on your water bill, consider installing a rain barrel to store collected rain from your roof or other collection surface, and then using this source of water with your FarmBot.",
+          "type": "procedure",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C040",
+      "name": "Complete the Cycle with Compost 关键事实保留",
+      "sourceFiles": [
+        "41-complete-the-cycle-with-compost.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C040-F01",
+          "fact": "The composting process works best when nitrogen-rich moist greens are mixed with carbon-rich dry browns.",
+          "sourceFile": "41-complete-the-cycle-with-compost.md",
+          "evidence": "The composting process works best when nitrogen-rich moist **greens** are mixed with carbon-rich dry **browns**.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C041",
+      "name": "Maximizing Output 关键事实保留",
+      "sourceFiles": [
+        "42-maximizing-output.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C041-F01",
+          "fact": "Many crops such as Pumpkins, Tomatoes, Squash, and Beans need a substantial amount of area to spread their foliage and fruits over. If you plant a row of these crops at the X-minimum and X-maximum ends of your raised bed, you can train them (by hand) to grow away from the bed and the FarmBot, allowing them to utilize additional area beyond the bed.",
+          "sourceFile": "42-maximizing-output.md",
+          "evidence": "Many crops such as Pumpkins, Tomatoes, Squash, and Beans need a substantial amount of area to spread their foliage and fruits over. If you plant a row of these crops at the X-minimum and X-maximum ends of your raised bed, you can train them (by hand) to grow away from the bed and the FarmBot, allowing them to utilize additional area beyond the bed.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C042",
+      "name": "Monitor FarmBot with a Webcam 关键事实保留",
+      "sourceFiles": [
+        "43-monitor-farmbot-with-a-webcam.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C042-F01",
+          "fact": "You can use an additional Raspberry Pi and a Raspberry Pi Camera Module to set up a streaming webcam server using these instructions. To do so, you'll need:",
+          "sourceFile": "43-monitor-farmbot-with-a-webcam.md",
+          "evidence": "You can use an additional Raspberry Pi and a **Raspberry Pi Camera Module** to set up a streaming webcam server using [these instructions](https://pimylifeup.com/raspberry-pi-webcam-server/). To do so, you'll need:",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C043",
+      "name": "Monitor Resource Usage 关键事实保留",
+      "sourceFiles": [
+        "44-monitor-resource-usage.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C043-F01",
+          "fact": "Interested in how many liters of water your FarmBot uses? How about how many kWh? Use these guides to help you monitor the exact amount of each of these resources your FarmBot uses.",
+          "sourceFile": "44-monitor-resource-usage.md",
+          "evidence": "Interested in how many liters of water your FarmBot uses? How about how many kWh? Use these guides to help you monitor the exact amount of each of these resources your FarmBot uses.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C044",
+      "name": "Power FarmBot with Solar 关键事实保留",
+      "sourceFiles": [
+        "45-power-farmbot-with-solar.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C044-F01",
+          "fact": "To power FarmBot exclusively with solar energy, you first need to calculate how much electricity FarmBot uses so that you can size your solar system appropriately. You can do this by estimating the duty cycle of each component and then tallying up the estimated energy usage.",
+          "sourceFile": "45-power-farmbot-with-solar.md",
+          "evidence": "To power FarmBot exclusively with solar energy, you first need to calculate how much electricity FarmBot uses so that you can size your solar system appropriately. You can do this by estimating the duty cycle of each component and then tallying up the estimated energy usage.",
+          "type": "definition",
+          "importance": "must"
+        }
+      ]
+    },
+    {
+      "id": "C045",
+      "name": "Shorten or lengthen the tracks 关键事实保留",
+      "sourceFiles": [
+        "46-shorten-or-lengthen-the-tracks.md"
+      ],
+      "expectedFacts": [
+        {
+          "id": "C045-F01",
+          "fact": "While FarmBot kits come with tracks that are 3m long for Genesis models and 6m long for Genesis (XL) models, you may want to shorten or lengthen the tracks to fit your specific needs. This page will explain how to do so.",
+          "sourceFile": "46-shorten-or-lengthen-the-tracks.md",
+          "evidence": "While FarmBot kits come with tracks that are 3m long for Genesis models and 6m long for Genesis (XL) models, you may want to shorten or lengthen the tracks to fit your specific needs. This page will explain how to do so.",
+          "type": "exception",
+          "importance": "must"
+        }
+      ]
+    }
+  ]
+}
