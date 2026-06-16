@@ -1,0 +1,635 @@
+{
+  "datasetId": "farmbot_genesis_v18_manual_mini",
+  "name": "FarmBot Genesis v1.8 硬件手册评测集：Agent 检索回答评测",
+  "sourceDir": "sources",
+  "cases": [
+    {
+      "id": "A001",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Cross-Slide and Z-Axis page give?",
+      "answerable": true,
+      "expectedAnswer": "content=\"This is the estimated time it will take to assemble the cross-slide and Z-axis onto the gantry.\"",
+      "expectedFacts": [
+        "content=\"This is the estimated time it will take to assemble the cross-slide and Z-axis onto the gantry.\""
+      ],
+      "relevantSources": [
+        "01-cross-slide-and-z-axis.md"
+      ],
+      "mustInclude": [
+        "Cross-Slide and Z-Axis",
+        "content",
+        "estimated",
+        "time",
+        "take"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A002",
+      "question": "In the FarmBot Genesis v1.8 Electronics guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "The [[Farmduino]] and [[Raspberry Pi]] are the central components of the FarmBot from an electronic systems perspective. The diagram below shows how the other electronic components connect to these boards, as well as how the two are connected to each other.",
+      "expectedFacts": [
+        "The [[Farmduino]] and [[Raspberry Pi]] are the central components of the FarmBot from an electronic systems perspective. The diagram below shows how the other electronic components connect to these boards, as well as how the two are connected to each other."
+      ],
+      "relevantSources": [
+        "02-electronics.md"
+      ],
+      "mustInclude": [
+        "Electronics",
+        "Farmduino",
+        "Raspberry",
+        "central",
+        "components"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A003",
+      "question": "In the FarmBot Genesis v1.8 Final Steps guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "- Configure FarmBot to connect to your WiFi network and web app account",
+      "expectedFacts": [
+        "- Configure FarmBot to connect to your WiFi network and web app account"
+      ],
+      "relevantSources": [
+        "03-final-steps.md"
+      ],
+      "mustInclude": [
+        "Final Steps",
+        "Configure",
+        "connect",
+        "WiFi",
+        "network"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A004",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Gantry page give?",
+      "answerable": true,
+      "expectedAnswer": "content=\"This is the estimated time it will take to assemble the gantry.\"",
+      "expectedFacts": [
+        "content=\"This is the estimated time it will take to assemble the gantry.\""
+      ],
+      "relevantSources": [
+        "04-gantry.md"
+      ],
+      "mustInclude": [
+        "Gantry",
+        "content",
+        "estimated",
+        "time",
+        "take"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A005",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Intro to FarmBot Genesis documentation?",
+      "answerable": true,
+      "expectedAnswer": "content=\"As of June 5, 2025, the default version of the Genesis documentation is for v1.8. If you have an older kit, please use the version picker dropdown menu in the top left of the documentation hub's navigation to select an older version of the docs.\"",
+      "expectedFacts": [
+        "content=\"As of June 5, 2025, the default version of the Genesis documentation is for v1.8. If you have an older kit, please use the version picker dropdown menu in the top left of the documentation hub's navigation to select an older version of the docs.\""
+      ],
+      "relevantSources": [
+        "05-intro-to-farmbot-genesis.md"
+      ],
+      "mustInclude": [
+        "Intro to FarmBot Genesis",
+        "content",
+        "June",
+        "default",
+        "version"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A006",
+      "question": "In the FarmBot Genesis v1.8 Assembly Preparation guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "Watch the short video below to understand how to provide power, water, and an internet connection to your FarmBot in a safe a reliable way.",
+      "expectedFacts": [
+        "Watch the short video below to understand how to provide power, water, and an internet connection to your FarmBot in a safe a reliable way."
+      ],
+      "relevantSources": [
+        "06-assembly-preparation.md"
+      ],
+      "mustInclude": [
+        "Assembly Preparation",
+        "Watch",
+        "short",
+        "video",
+        "below"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A007",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Change Log page give?",
+      "answerable": true,
+      "expectedAnswer": "New [[gantry main beams]] are now significantly lighter weight without compromising on strength, while offering a refined aesthetic on the front face. The new beams are also now shorter and more numerous (two 0.75m beams for Genesis and three 1m beams for Genesis (XL)) in order to be co-packaged with the rest of the FarmBot kit.",
+      "expectedFacts": [
+        "New [[gantry main beams]] are now significantly lighter weight without compromising on strength, while offering a refined aesthetic on the front face. The new beams are also now shorter and more numerous (two 0.75m beams for Genesis and three 1m beams for Genesis (XL)) in order to be co-packaged with the rest of the FarmBot kit."
+      ],
+      "relevantSources": [
+        "07-change-log.md"
+      ],
+      "mustInclude": [
+        "Change Log",
+        "gantry",
+        "main",
+        "beams",
+        "significantly"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A008",
+      "question": "In the FarmBot Genesis v1.8 Frequently Asked Questions guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "Please note that FarmBot is not waterproof, in the sense that you cannot fully submerge it underwater, like in an aquarium. Ultra humid areas may pose a risk for FarmBot's electronics as well, requiring you to take extra precautions and measures during your installation.",
+      "expectedFacts": [
+        "Please note that FarmBot is not waterproof, in the sense that you cannot fully submerge it underwater, like in an aquarium. Ultra humid areas may pose a risk for FarmBot's electronics as well, requiring you to take extra precautions and measures during your installation."
+      ],
+      "relevantSources": [
+        "08-frequently-asked-questions.md"
+      ],
+      "mustInclude": [
+        "Frequently Asked Questions",
+        "Please",
+        "note",
+        "waterproof",
+        "sense"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A009",
+      "question": "In the FarmBot Genesis v1.8 High Level Overview guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "content=\"We've gone through great lengths to design FarmBot Genesis to be durable, easily assembled and modified with common tools, and upgradeable. Nothing about FarmBot speaks obsolescence or proprietary.",
+      "expectedFacts": [
+        "content=\"We've gone through great lengths to design FarmBot Genesis to be durable, easily assembled and modified with common tools, and upgradeable. Nothing about FarmBot speaks obsolescence or proprietary."
+      ],
+      "relevantSources": [
+        "09-high-level-overview.md"
+      ],
+      "mustInclude": [
+        "High Level Overview",
+        "content",
+        "gone",
+        "through",
+        "great"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A010",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Past Versions documentation?",
+      "answerable": true,
+      "expectedAnswer": "content=\"FarmBot Genesis is always being improved and has undergone many iterations. We encourage skimming through the older versions to understand how we arrived at the latest design.\"",
+      "expectedFacts": [
+        "content=\"FarmBot Genesis is always being improved and has undergone many iterations. We encourage skimming through the older versions to understand how we arrived at the latest design.\""
+      ],
+      "relevantSources": [
+        "10-past-versions.md"
+      ],
+      "mustInclude": [
+        "Past Versions",
+        "content",
+        "always",
+        "being",
+        "improved"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A011",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Product Safety documentation?",
+      "answerable": true,
+      "expectedAnswer": "content=\"Adhering to the recommended safety precautions can help prevent accidents and injuries.\"",
+      "expectedFacts": [
+        "content=\"Adhering to the recommended safety precautions can help prevent accidents and injuries.\""
+      ],
+      "relevantSources": [
+        "11-product-safety.md"
+      ],
+      "mustInclude": [
+        "Product Safety",
+        "content",
+        "Adhering",
+        "recommended",
+        "safety"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A012",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Supporting Infrastructure page give?",
+      "answerable": true,
+      "expectedAnswer": "FarmBot's tracks need to be attached to supporting infrastructure such as a typical raised garden bed. Where you decide to install your FarmBot will determine how you setup your tracks and therefore what type of supporting infrastructure you need.",
+      "expectedFacts": [
+        "FarmBot's tracks need to be attached to supporting infrastructure such as a typical raised garden bed. Where you decide to install your FarmBot will determine how you setup your tracks and therefore what type of supporting infrastructure you need."
+      ],
+      "relevantSources": [
+        "12-supporting-infrastructure.md"
+      ],
+      "mustInclude": [
+        "Supporting Infrastructure",
+        "tracks",
+        "need",
+        "attached",
+        "supporting"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A013",
+      "question": "In the FarmBot Genesis v1.8 Mobile Raised Bed guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "Building a mobile raised bed is the recommended method for installing FarmBot Genesis indoors. In these instructions we show you how to build a simple but sturdy bed that can be easily moved around a classroom, lab, warehouse, or museum space.",
+      "expectedFacts": [
+        "Building a mobile raised bed is the recommended method for installing FarmBot Genesis indoors. In these instructions we show you how to build a simple but sturdy bed that can be easily moved around a classroom, lab, warehouse, or museum space."
+      ],
+      "relevantSources": [
+        "13-mobile-raised-bed.md"
+      ],
+      "mustInclude": [
+        "Mobile Raised Bed",
+        "Building",
+        "mobile",
+        "raised",
+        "recommended"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A014",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Pier Block Supports documentation?",
+      "answerable": true,
+      "expectedAnswer": "content=\"This is the estimated time it will take to set up pier block supports.\"",
+      "expectedFacts": [
+        "content=\"This is the estimated time it will take to set up pier block supports.\""
+      ],
+      "relevantSources": [
+        "14-pier-block-supports.md"
+      ],
+      "mustInclude": [
+        "Pier Block Supports",
+        "content",
+        "estimated",
+        "time",
+        "take"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A015",
+      "question": "In the FarmBot Genesis v1.8 Fixed Raised Bed guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "Building a fixed raised bed is the recommended method for installing FarmBot Genesis or Genesis (XL) outdoors. In these instructions we show you how to build a simple but sturdy bed that will fit into most yards, look great, and last a lifetime.",
+      "expectedFacts": [
+        "Building a fixed raised bed is the recommended method for installing FarmBot Genesis or Genesis (XL) outdoors. In these instructions we show you how to build a simple but sturdy bed that will fit into most yards, look great, and last a lifetime."
+      ],
+      "relevantSources": [
+        "15-fixed-raised-bed.md"
+      ],
+      "mustInclude": [
+        "Fixed Raised Bed",
+        "Building",
+        "fixed",
+        "raised",
+        "recommended"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A016",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Wood Posts documentation?",
+      "answerable": true,
+      "expectedAnswer": "content=\"This is the estimated time it will take to setup wood posts.\"",
+      "expectedFacts": [
+        "content=\"This is the estimated time it will take to setup wood posts.\""
+      ],
+      "relevantSources": [
+        "16-wood-posts.md"
+      ],
+      "mustInclude": [
+        "Wood Posts",
+        "content",
+        "estimated",
+        "time",
+        "take"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A017",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Toolbays documentation?",
+      "answerable": true,
+      "expectedAnswer": "FarmBot Genesis comes with two [[3-slot toolbays]] that can hold a combination of three tools or seed containers each. These simple hardware components act as holsters for your tools and are shaped in such a way that FarmBot can automatically mount and dismount tools for the task at hand.",
+      "expectedFacts": [
+        "FarmBot Genesis comes with two [[3-slot toolbays]] that can hold a combination of three tools or seed containers each. These simple hardware components act as holsters for your tools and are shaped in such a way that FarmBot can automatically mount and dismount tools for the task at hand."
+      ],
+      "relevantSources": [
+        "17-toolbays.md"
+      ],
+      "mustInclude": [
+        "Toolbays",
+        "comes",
+        "slot",
+        "hold",
+        "combination"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A018",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Tools documentation?",
+      "answerable": true,
+      "expectedAnswer": "The Universal Tool Mount, or UTM, allows FarmBot Genesis to automatically switch tools in order to perform different operations. It features:",
+      "expectedFacts": [
+        "The Universal Tool Mount, or UTM, allows FarmBot Genesis to automatically switch tools in order to perform different operations. It features:"
+      ],
+      "relevantSources": [
+        "18-tools.md"
+      ],
+      "mustInclude": [
+        "Tools",
+        "Universal",
+        "Tool",
+        "Mount",
+        "allows"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A019",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Tracks page give?",
+      "answerable": true,
+      "expectedAnswer": "content=\"This is the estimated time it will take to assemble the tracks.\"",
+      "expectedFacts": [
+        "content=\"This is the estimated time it will take to assemble the tracks.\""
+      ],
+      "relevantSources": [
+        "19-tracks.md"
+      ],
+      "mustInclude": [
+        "Tracks",
+        "content",
+        "estimated",
+        "time",
+        "take"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A020",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Gantry Maintenance page give?",
+      "answerable": true,
+      "expectedAnswer": "It is possible for the gantry to become twisted such that is not perpendicular to the tracks. This is usually caused by an obstruction on one track that stalls that side of the gantry and misaligns the system, or a loose belt on one track.",
+      "expectedFacts": [
+        "It is possible for the gantry to become twisted such that is not perpendicular to the tracks. This is usually caused by an obstruction on one track that stalls that side of the gantry and misaligns the system, or a loose belt on one track."
+      ],
+      "relevantSources": [
+        "20-gantry-maintenance.md"
+      ],
+      "mustInclude": [
+        "Gantry Maintenance",
+        "possible",
+        "gantry",
+        "become",
+        "twisted"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A021",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 General Maintenance page give?",
+      "answerable": true,
+      "expectedAnswer": "FarmBot is a farmer that works and lives all day and night outside with the rain, sun, bugs, birds, and dirt. At the same time, FarmBot is a precision CNC machine with a lot of parts that allow it to move with millimeter accuracy to grow your food. Most would say these things can't co-exist. But they can with regular cleaning of your device.",
+      "expectedFacts": [
+        "FarmBot is a farmer that works and lives all day and night outside with the rain, sun, bugs, birds, and dirt. At the same time, FarmBot is a precision CNC machine with a lot of parts that allow it to move with millimeter accuracy to grow your food. Most would say these things can't co-exist. But they can with regular cleaning of your device."
+      ],
+      "relevantSources": [
+        "21-general-maintenance.md"
+      ],
+      "mustInclude": [
+        "General Maintenance",
+        "farmer",
+        "works",
+        "lives",
+        "night"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A022",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Storing FarmBot for Winter page give?",
+      "answerable": true,
+      "expectedAnswer": "While FarmBot is designed to be used and stored outdoors, you may want to bring it inside for the winter, or if an extreme weather event (such as a hurricane) is heading your way.",
+      "expectedFacts": [
+        "While FarmBot is designed to be used and stored outdoors, you may want to bring it inside for the winter, or if an extreme weather event (such as a hurricane) is heading your way."
+      ],
+      "relevantSources": [
+        "22-storing-farmbot-for-winter.md"
+      ],
+      "mustInclude": [
+        "Storing FarmBot for Winter",
+        "While",
+        "designed",
+        "used",
+        "stored"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A023",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Thermal Management page give?",
+      "answerable": true,
+      "expectedAnswer": "In all FarmBot kits, there is a built-in temperature sensor located on the Raspberry Pi computer. It is important to protect the CPU and other electronics from excessively high temperatures, so we recommend monitoring the temperature using the real-time CPU temperature information located in the connectivity popup.",
+      "expectedFacts": [
+        "In all FarmBot kits, there is a built-in temperature sensor located on the Raspberry Pi computer. It is important to protect the CPU and other electronics from excessively high temperatures, so we recommend monitoring the temperature using the real-time CPU temperature information located in the connectivity popup."
+      ],
+      "relevantSources": [
+        "23-thermal-management.md"
+      ],
+      "mustInclude": [
+        "Thermal Management",
+        "kits",
+        "there",
+        "built-in",
+        "temperature"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A024",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 Track Maintenance page give?",
+      "answerable": true,
+      "expectedAnswer": "Once a month, inspect your tracks for an accumulation of mud, dirt, and other debris. Because the tracks are so low to the ground, it is common for them to accumulate unwanted materials. This can create unnecessary friction for the gantry when moving across the tracks, ultimately leading it to bind up if the tracks are not cleaned.",
+      "expectedFacts": [
+        "Once a month, inspect your tracks for an accumulation of mud, dirt, and other debris. Because the tracks are so low to the ground, it is common for them to accumulate unwanted materials. This can create unnecessary friction for the gantry when moving across the tracks, ultimately leading it to bind up if the tracks are not cleaned."
+      ],
+      "relevantSources": [
+        "24-track-maintenance.md"
+      ],
+      "mustInclude": [
+        "Track Maintenance",
+        "Once",
+        "month",
+        "inspect",
+        "tracks"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A025",
+      "question": "What maintenance guidance does the FarmBot Genesis v1.8 UTM and Tool Maintenance page give?",
+      "answerable": true,
+      "expectedAnswer": "content=\"Inspect the o-rings to ensure they are not cracked, broken, or otherwise degraded to the point of sealing ineffectively. If any damage is found, replace them as soon as possible.\"",
+      "expectedFacts": [
+        "content=\"Inspect the o-rings to ensure they are not cracked, broken, or otherwise degraded to the point of sealing ineffectively. If any damage is found, replace them as soon as possible.\""
+      ],
+      "relevantSources": [
+        "25-utm-and-tool-maintenance.md"
+      ],
+      "mustInclude": [
+        "UTM and Tool Maintenance",
+        "content",
+        "Inspect",
+        "o-rings",
+        "ensure"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A026",
+      "question": "In the FarmBot Genesis v1.8 Are my encoders working? guide, what troubleshooting condition or requirement is stated?",
+      "answerable": true,
+      "expectedAnswer": "FarmBot Genesis v1.4 NEMA 17 Stepper Motor with  pre-mounted rotary encoders",
+      "expectedFacts": [
+        "FarmBot Genesis v1.4 NEMA 17 Stepper Motor with  pre-mounted rotary encoders"
+      ],
+      "relevantSources": [
+        "26-are-my-encoders-working.md"
+      ],
+      "mustInclude": [
+        "Are my encoders working?",
+        "NEMA",
+        "Stepper",
+        "Motor",
+        "pre-mounted"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A027",
+      "question": "In the FarmBot Genesis v1.8 Mounting and Dismounting Tools guide, what troubleshooting condition or requirement is stated?",
+      "answerable": true,
+      "expectedAnswer": "If you are encountering issues with reliably mounting and dismounting tools into the toolbay, try the following troubleshooting steps.",
+      "expectedFacts": [
+        "If you are encountering issues with reliably mounting and dismounting tools into the toolbay, try the following troubleshooting steps."
+      ],
+      "relevantSources": [
+        "27-mounting-and-dismounting-tools.md"
+      ],
+      "mustInclude": [
+        "Mounting and Dismounting Tools",
+        "encountering",
+        "issues",
+        "reliably",
+        "mounting"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A028",
+      "question": "What key fact should be retained from the FarmBot Genesis v1.8 Picking Up Seeds documentation?",
+      "answerable": true,
+      "expectedAnswer": "If the needle is too small, then the vacuum pump will not be able to create enough suction to consistently and reliably pick up a larger, heavier seed. In some cases, the seed may get picked up but then dropped when FarmBot is moving in the X, Y, and Z directions. In either case, try switching to a larger needle size.",
+      "expectedFacts": [
+        "If the needle is too small, then the vacuum pump will not be able to create enough suction to consistently and reliably pick up a larger, heavier seed. In some cases, the seed may get picked up but then dropped when FarmBot is moving in the X, Y, and Z directions. In either case, try switching to a larger needle size."
+      ],
+      "relevantSources": [
+        "28-picking-up-seeds.md"
+      ],
+      "mustInclude": [
+        "Picking Up Seeds",
+        "needle",
+        "small",
+        "vacuum",
+        "pump"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A029",
+      "question": "In the FarmBot Genesis v1.8 Solenoid Valve Cable Fix guide, what assembly step or constraint is specified?",
+      "answerable": true,
+      "expectedAnswer": "The replacement quick connect terminals are located in a small plastic bag.",
+      "expectedFacts": [
+        "The replacement quick connect terminals are located in a small plastic bag."
+      ],
+      "relevantSources": [
+        "29-solenoid-valve-cable-fix.md"
+      ],
+      "mustInclude": [
+        "Solenoid Valve Cable Fix",
+        "replacement",
+        "quick",
+        "connect",
+        "terminals"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A030",
+      "question": "In the FarmBot Genesis v1.8 Tool Verification guide, what troubleshooting condition or requirement is stated?",
+      "answerable": true,
+      "expectedAnswer": "Double check that the UTM cable is fully connected in all locations:",
+      "expectedFacts": [
+        "Double check that the UTM cable is fully connected in all locations:"
+      ],
+      "relevantSources": [
+        "30-tool-verification.md"
+      ],
+      "mustInclude": [
+        "Tool Verification",
+        "Double",
+        "check",
+        "cable",
+        "fully"
+      ],
+      "evaluationType": "single_doc_fact"
+    },
+    {
+      "id": "A998",
+      "question": "Do these FarmBot Genesis v1.8 sources specify pesticide dosage schedules for tomato blight?",
+      "answerable": false,
+      "expectedAnswer": "The provided sources cover FarmBot Genesis v1.8 hardware, assembly, maintenance, mods, and troubleshooting. They do not provide pesticide dosage schedules for tomato blight.",
+      "expectedFacts": [],
+      "relevantSources": [],
+      "mustInclude": [
+        "do not provide",
+        "pesticide",
+        "dosage"
+      ],
+      "evaluationType": "abstain"
+    },
+    {
+      "id": "A999",
+      "question": "Do these sources include warranty claim approval rules for FarmBot commercial resellers?",
+      "answerable": false,
+      "expectedAnswer": "The provided sources do not include warranty claim approval rules for commercial resellers, so the question is not answerable from this dataset.",
+      "expectedFacts": [],
+      "relevantSources": [],
+      "mustInclude": [
+        "not include",
+        "warranty",
+        "resellers"
+      ],
+      "evaluationType": "abstain"
+    }
+  ]
+}
