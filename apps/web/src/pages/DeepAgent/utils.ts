@@ -3,7 +3,10 @@ import type {
   AgentRunEvent,
   AgentRunStatus,
 } from "@/api/agent";
+import type { ModelOption } from "@/api/model";
 import type { LlmWikiConfig, StatusKey } from "./types";
+
+export const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v1";
 
 export function buildRunBody(config: LlmWikiConfig): Record<string, unknown> {
   return {
@@ -95,4 +98,42 @@ export function eventDetail(event: AgentRunEvent): string | null {
   } catch {
     return String(payload);
   }
+}
+
+export function agentTypeText(agentType: string): string {
+  if (agentType === "llmWiki") return "Wiki";
+  return agentType;
+}
+
+export function agentTypePillClass(agentType: string): string {
+  if (agentType === "llmWiki") return "bg-sky-50 text-sky-700";
+  return "bg-slate-100 text-slate-600";
+}
+
+export function readStoredConfig(): LlmWikiConfig {
+  try {
+    const raw = JSON.parse(
+      window.localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || "{}",
+    ) as Record<string, unknown>;
+    return {
+      query: stringValue(raw.query),
+      limit: clamp(numberValue(raw.limit, 8), 1, 20),
+      model: stringValue(raw.model),
+    };
+  } catch {
+    return { query: "", limit: 8, model: "" };
+  }
+}
+
+export function pickModel(value: string, options: ModelOption[]): string {
+  if (value && options.some((option) => option.model === value)) return value;
+  return options[0]?.model || "";
+}
+
+export function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+export function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
