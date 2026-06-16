@@ -37,13 +37,19 @@ export function LlmWikiHeader({
   onRefresh,
 }: LlmWikiHeaderProps) {
   return (
-    <header className="flex flex-none flex-col gap-3 border-b border-slate-200 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
-      <div className="flex min-w-0 items-baseline gap-3">
-        <h1 className="shrink-0 text-base font-semibold text-slate-950">
-          LLM Wiki
-        </h1>
-        <span className="truncate text-xs text-slate-500">
-          {stats.total} 个文档 · {stats.page_count} 个 Wiki 页面
+    <header className="flex flex-none flex-col gap-2 border-b border-slate-200 bg-white/90 px-3 py-2.5 xl:flex-row xl:items-center xl:justify-between">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">
+          文档
+          <strong className="font-semibold tabular-nums text-slate-950">
+            {stats.total}
+          </strong>
+        </span>
+        <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">
+          Wiki 页面
+          <strong className="font-semibold tabular-nums text-slate-950">
+            {stats.page_count}
+          </strong>
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">

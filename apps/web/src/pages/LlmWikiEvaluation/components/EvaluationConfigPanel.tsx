@@ -64,7 +64,7 @@ export function EvaluationConfigPanel({
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-slate-950">评测配置</h2>
             <p className="mt-1 text-xs leading-5 text-slate-600">
-              上传 JSON 或选择内置 benchmark，再选择 Judge 模型运行。
+              上传评测配置 JSON，再选择 Judge 模型运行。
             </p>
           </div>
           <input
@@ -199,7 +199,7 @@ export function EvaluationConfigPanel({
           })}
           {!dataset && (
             <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">
-              未找到内置或上传的数据集
+              请先上传评测配置 JSON
             </div>
           )}
         </div>

@@ -1,8 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { Injectable } from "@nestjs/common";
 import { nowIso, sha256 } from "../../../common/fs-json";
-import { findWorkspaceRoot, getApiRoot } from "../../../config/env";
 import type {
   CompileEvaluationDataset,
   CompileEvaluationDatasetCase,
@@ -12,24 +9,8 @@ import type {
 import { CompileEvaluationStoreService } from "./compile-evaluation-store.service";
 
 @Injectable()
-export class CompileEvaluationDatasetService implements OnModuleInit {
-  private readonly logger = new Logger(CompileEvaluationDatasetService.name);
-
+export class CompileEvaluationDatasetService {
   constructor(private readonly store: CompileEvaluationStoreService) {}
-
-  onModuleInit(): void {
-    const benchmarkRoot = path.join(
-      findWorkspaceRoot(getApiRoot()),
-      "eval",
-      "llmwiki_private_benchmark",
-    );
-    if (!fs.existsSync(benchmarkRoot)) return;
-    try {
-      this.store.saveDataset(buildPrivateBenchmarkDataset(benchmarkRoot));
-    } catch (error) {
-      this.logger.warn(`内置编译评测数据集加载失败: ${formatError(error)}`);
-    }
-  }
 
   upload(data: Buffer): CompileEvaluationDataset {
     if (!data.length) throw new Error("请选择评测数据集 JSON 文件");
@@ -50,53 +31,6 @@ export class CompileEvaluationDatasetService implements OnModuleInit {
   get(datasetId: string) {
     return this.store.getDataset(datasetId);
   }
-}
-
-export function buildPrivateBenchmarkDataset(benchmarkRoot: string): CompileEvaluationDataset {
-  const questionsPath = path.join(benchmarkRoot, "questions.json");
-  const sourcesRoot = path.join(benchmarkRoot, "sources");
-  const benchmark = record(JSON.parse(fs.readFileSync(questionsPath, "utf-8")));
-  const sourceFiles = fs
-    .readdirSync(sourcesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => entry.name)
-    .sort();
-  const sourceIdByFilename = new Map(
-    sourceFiles.map((filename) => [filename, path.basename(filename, path.extname(filename))]),
-  );
-  const sources = sourceFiles.map((filename) => ({
-    id: sourceIdByFilename.get(filename),
-    filename,
-    content: fs.readFileSync(path.join(sourcesRoot, filename), "utf-8"),
-  }));
-  const cases = array(benchmark.questions, "questions")
-    .map(record)
-    .filter((question) => question.answerable === true)
-    .map((question) => {
-      const id = requiredString(question.id, "question.id", 100);
-      const sourceIds = array(question.relevant_sources, `${id}.relevant_sources`).map((sourcePath) => {
-        const filename = path.basename(requiredString(sourcePath, `${id}.relevant_source`, 300));
-        const sourceId = sourceIdByFilename.get(filename);
-        if (!sourceId) throw new Error(`${id} 引用了不存在的 source: ${filename}`);
-        return sourceId;
-      });
-      return {
-        id,
-        name: requiredString(question.question, `${id}.question`, 200),
-        sourceIds,
-        expectedFacts: array(question.expected_facts, `${id}.expected_facts`).map((fact, index) => ({
-          id: `${id}-fact-${String(index + 1).padStart(2, "0")}`,
-          fact,
-        })),
-      };
-    });
-  const version = typeof benchmark.version === "string" ? benchmark.version.trim() : "";
-  return normalizeDataset({
-    datasetId: benchmark.dataset_id,
-    name: `LLM Wiki Private Benchmark${version ? ` ${version}` : ""}`,
-    sources,
-    cases,
-  });
 }
 
 export function normalizeDataset(value: unknown): CompileEvaluationDataset {
@@ -184,8 +118,4 @@ function requiredString(value: unknown, field: string, max: number): string {
 
 function assertUnique(values: string[], field: string): void {
   if (new Set(values).size !== values.length) throw new Error(`${field} 不能重复`);
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

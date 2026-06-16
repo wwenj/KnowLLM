@@ -225,43 +225,41 @@ export function DeepAgent() {
   };
 
   return (
-    <div className="h-full min-h-0 p-4 sm:p-5">
-      <div className="relative flex h-full max-h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-b from-slate-50 via-white to-slate-50 p-4 ring-1 ring-slate-200/70">
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(320px,44%)_minmax(0,1fr)] gap-3 overflow-hidden xl:grid-cols-[380px_minmax(0,1fr)] xl:grid-rows-1">
-          <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200/70 bg-white/90 shadow-sm">
-            <AgentConfigPanel
-              profiles={profiles}
-              activeAgent={activeAgent}
-              wikiConfig={wikiConfig}
-              modelOptions={modelOptions}
-              loading={loadingConfig}
-              submitting={submitting}
-              submitDisabled={activeAgent !== "llmWiki" || !wikiConfig.query.trim()}
-              onAgentChange={setActiveAgent}
-              onWikiChange={setWikiConfig}
-              onSubmit={handleSubmit}
-            />
-            <HistoryCard
-              history={history}
-              activeRunKey={selectedRunAgent && runId ? `${selectedRunAgent}:${runId}` : null}
-              loading={historyLoading}
-              onRefresh={() => refreshHistory(false)}
-              onSelect={handleSelectHistory}
-            />
-          </aside>
-          <RunOutputPanel
-            events={events}
-            detail={detail}
-            status={status}
-            agentType={selectedRunAgent}
-            runId={runId}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            onCancel={handleCancel}
-            onCopy={handleCopy}
-            onDownload={handleDownload}
+    <div className="flex h-full min-h-0 flex-col bg-slate-100/80 p-3">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(320px,44%)_minmax(0,1fr)] gap-3 overflow-hidden xl:grid-cols-[380px_minmax(0,1fr)] xl:grid-rows-1">
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <AgentConfigPanel
+            profiles={profiles}
+            activeAgent={activeAgent}
+            wikiConfig={wikiConfig}
+            modelOptions={modelOptions}
+            loading={loadingConfig}
+            submitting={submitting}
+            submitDisabled={activeAgent !== "llmWiki" || !wikiConfig.query.trim()}
+            onAgentChange={setActiveAgent}
+            onWikiChange={setWikiConfig}
+            onSubmit={handleSubmit}
           />
-        </div>
+          <HistoryCard
+            history={history}
+            activeRunKey={selectedRunAgent && runId ? `${selectedRunAgent}:${runId}` : null}
+            loading={historyLoading}
+            onRefresh={() => refreshHistory(false)}
+            onSelect={handleSelectHistory}
+          />
+        </aside>
+        <RunOutputPanel
+          events={events}
+          detail={detail}
+          status={status}
+          agentType={selectedRunAgent}
+          runId={runId}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          onCancel={handleCancel}
+          onCopy={handleCopy}
+          onDownload={handleDownload}
+        />
       </div>
     </div>
   );
