@@ -10,19 +10,26 @@ import type {
 import { agentApi } from "@/api/agent";
 import type { ModelOption } from "@/api/model";
 import { modelApi } from "@/api/model";
-import { AgentConfigPanel } from "./deep-agent/AgentConfigPanel";
-import { HistoryCard } from "./deep-agent/HistoryCard";
-import { RunOutputPanel } from "./deep-agent/RunOutputPanel";
+import { AgentConfigPanel } from "./components/AgentConfigPanel";
+import { HistoryCard } from "./components/HistoryCard";
+import { RunOutputPanel } from "./components/RunOutputPanel";
 import {
   FALLBACK_PROFILES,
   TERMINAL,
   type AgentType,
   type LlmWikiConfig,
   type StatusKey,
-} from "./deep-agent/types";
-import { buildLogPayload, buildRunBody, clamp } from "./deep-agent/utils";
-
-const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v1";
+} from "./types";
+import {
+  RUN_CONFIG_STORAGE_KEY,
+  buildLogPayload,
+  buildRunBody,
+  clamp,
+  numberValue,
+  pickModel,
+  readStoredConfig,
+  stringValue,
+} from "./utils";
 
 export function DeepAgent() {
   const [searchParams] = useSearchParams();
@@ -258,30 +265,4 @@ export function DeepAgent() {
       </div>
     </div>
   );
-}
-
-function readStoredConfig(): LlmWikiConfig {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    return {
-      query: stringValue(raw.query),
-      limit: clamp(numberValue(raw.limit, 8), 1, 20),
-      model: stringValue(raw.model),
-    };
-  } catch {
-    return { query: "", limit: 8, model: "" };
-  }
-}
-
-function pickModel(value: string, options: ModelOption[]): string {
-  if (value && options.some((option) => option.model === value)) return value;
-  return options[0]?.model || "";
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function numberValue(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
