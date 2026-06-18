@@ -5,6 +5,7 @@ import type {
   CompileEvaluationDatasetSummary,
 } from "@/api/evaluation";
 import type { ModelOption } from "@/api/model";
+import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -120,8 +121,8 @@ export function EvaluationConfigPanel({
               </SelectTrigger>
               <SelectContent position="popper" align="start">
                 {models.map((item) => (
-                  <SelectItem key={item.model} value={item.model}>
-                    {item.model}
+                  <SelectItem key={item.id} value={item.id}>
+                    {modelOptionLabel(item)}
                   </SelectItem>
                 ))}
               </SelectContent>

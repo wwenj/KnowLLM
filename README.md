@@ -41,7 +41,11 @@ API: http://localhost:39247
 Swagger: http://localhost:39247/api-docs
 ```
 
-模型配置示例：
+模型配置：
+
+默认从 `apps/api/env/models.local.json` 读取私密 provider 数组；该文件不提交 Git。可复制
+`apps/api/env/models.local.example.json` 后填入真实 `apiKey`，也可以用 `apiKeyEnv` 从环境变量读取。
+如果本地模型数组不存在或没有可用 provider，会回退到下面的旧 env 单模型配置。
 
 ```bash
 OPENAI_BASE_URL=https://api.openai.com/v1

@@ -12,3 +12,6 @@ coverage/
 
 # Local KnowLLM workspaces
 /.knowllm/
+
+# Local model provider secrets
+/apps/api/env/models.local.json

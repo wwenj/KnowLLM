@@ -126,8 +126,11 @@ export function readStoredConfig(): LlmWikiConfig {
 }
 
 export function pickModel(value: string, options: ModelOption[]): string {
-  if (value && options.some((option) => option.model === value)) return value;
-  return options[0]?.model || "";
+  if (value) {
+    const matched = options.find((option) => option.id === value || option.model === value);
+    if (matched) return matched.id;
+  }
+  return options[0]?.id || "";
 }
 
 export function stringValue(value: unknown): string {

@@ -1,0 +1,13 @@
+[
+  {
+    "name": "DeepSeek",
+    "provider": "openai",
+    "baseUrl": "https://api.deepseek.com",
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "models": [
+      "deepseek-v4-pro"
+    ],
+    "enabled": true,
+    "priority": 0
+  }
+]
