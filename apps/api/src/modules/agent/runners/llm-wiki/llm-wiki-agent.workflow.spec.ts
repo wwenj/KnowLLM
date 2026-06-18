@@ -51,6 +51,7 @@ test("workflow keeps the planner -> page -> source review flow behind llmWiki to
     },
   };
   const model = {
+    resolveModel: (modelName: string) => modelName || "test",
     findModel: (modelName: string) => ({ model: modelName }),
     hasConfiguredModel: () => true,
     chat: async ({ messages }: { messages: Array<{ content: unknown }> }) => {

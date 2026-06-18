@@ -18,29 +18,38 @@ llmWiki 的定位不是通用搜索引擎，也不是海量文档向量库。它
 Agent 是否能基于这份 Wiki 找到证据并正确回答
 ```
 
-## 2. 基本目录结构
+## 2. 新增评测集目录
 
-每套评测数据建议使用以下结构：
+新增一套评测集时，目录必须放在 `eval/<dataset_id>/` 下，并保持下面的最小结构：
 
 ```text
 eval/<dataset_id>/
   README.md
-  sources/
-    xxx.md
-    yyy.md
   source_manifest.json
   compile_cases.json
   agent_cases.json
+  sources/
+    xxx.md
+    yyy.md
+  LICENSE-xxx.txt   # 公开数据建议保留；内部数据可省略
 ```
 
-其中：
+必需文件：
 
-- `sources/` 是唯一的原始文档集合。
-- `compile_cases.json` 只服务编译结果评测。
-- `agent_cases.json` 只服务 Agent 检索和回答评测。
-- `source_manifest.json` 记录来源、license、原始路径、sha256、抽样规则等元信息。
+- `sources/*.md`：原始文档，是评测的唯一 source of truth。
+- `source_manifest.json`：记录 `datasetId`、来源、license、每个 source 的 `id`、`filename`、`sha256`。
+- `compile_cases.json`：编译评测用例，只评估 Wiki 是否保留关键事实。
+- `agent_cases.json`：Agent 检索回答评测用例，直接被 Agent 评测模块读取。
+- `README.md`：说明数据来源、抽样规则、license 和文件数量。
 
-原则上第一版应该是一套 sources，同时派生两类 cases，而不是编译评测和 Agent 评测各用一套完全不同的 source。这样才能定位问题来自编译、检索还是 Agent 回答。
+可选文件：
+
+- `LICENSE-xxx.txt`：公开数据集建议保留原始 license 文本。
+- `upload_compile_dataset.json`：仅用于旧的编译上传流程，不是数据源标准。
+
+不需要新增 `upload_agent_dataset.json`。Agent 评测模块会直接读取当前目录下的 `agent_cases.json`、`source_manifest.json` 和 `sources/`。
+
+原则上同一套 `sources/` 同时派生 `compile_cases.json` 和 `agent_cases.json`，不要给编译评测和 Agent 评测各做一套 source。这样才能定位问题来自编译、检索还是 Agent 回答。
 
 ## 3. Source 文档要求
 

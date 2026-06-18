@@ -1,6 +1,7 @@
 import { Brain, Loader2, Play } from "lucide-react";
 import type { AgentProfile } from "@/api/agent";
 import type { ModelOption } from "@/api/model";
+import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -86,8 +87,8 @@ export function AgentConfigPanel({
                   </SelectTrigger>
                   <SelectContent>
                     {modelOptions.map((option) => (
-                      <SelectItem key={option.model} value={option.model}>
-                        {option.model}
+                      <SelectItem key={option.id} value={option.id}>
+                        {modelOptionLabel(option)}
                       </SelectItem>
                     ))}
                   </SelectContent>

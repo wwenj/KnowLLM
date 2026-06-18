@@ -103,3 +103,188 @@ export interface CompileEvaluationRunSummary {
   progress: CompileEvaluationRun["progress"];
   summary: CompileEvaluationSummary;
 }
+
+export type AgentEvaluationMetricStatus = "correct" | "incorrect" | "not_applicable";
+export type AgentEvaluationFactStatus = CompileEvaluationFactStatus;
+export type AgentEvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "source_missing"
+  | "agent_failed"
+  | "judge_failed"
+  | "failed";
+export type AgentEvaluationRunStatus = "running" | "success" | "failed";
+export type AgentEvaluationSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
+
+export interface AgentEvaluationBudget {
+  maxRounds: number;
+  maxEvidencePages: number;
+  maxRawSources: number;
+  tokenLimit: number | null;
+}
+
+export interface AgentEvaluationModels {
+  plannerModel: string;
+  reviewerModel: string;
+  synthesizerModel: string;
+}
+
+export interface AgentEvaluationDatasetSource {
+  id: string;
+  filename: string;
+  content: string;
+  sha256: string;
+}
+
+export interface AgentEvaluationExpectedFact {
+  id: string;
+  fact: string;
+}
+
+export interface AgentEvaluationDatasetCase {
+  id: string;
+  question: string;
+  answerable: boolean;
+  expectedAnswer: string;
+  expectedFacts: AgentEvaluationExpectedFact[];
+  relevantSourceIds: string[];
+  mustInclude: string[];
+  evaluationType: string;
+}
+
+export interface AgentEvaluationDataset {
+  datasetId: string;
+  name: string;
+  uploadedAt: string;
+  sources: AgentEvaluationDatasetSource[];
+  cases: AgentEvaluationDatasetCase[];
+}
+
+export interface AgentEvaluationDatasetSummary {
+  datasetId: string;
+  name: string;
+  uploadedAt: string;
+  sourceCount: number;
+  caseCount: number;
+  factCount: number;
+  abstainCaseCount: number;
+}
+
+export interface AgentEvaluationMatchedSource {
+  datasetSourceId: string;
+  filename: string;
+  sha256: string;
+  sourceId: string | null;
+  ingestedAt: string;
+}
+
+export interface AgentEvaluationFactResult extends AgentEvaluationExpectedFact {
+  status: AgentEvaluationFactStatus;
+  evidencePath: string;
+  evidence: string;
+  reason: string;
+}
+
+export interface AgentEvaluationMetricResult {
+  status: AgentEvaluationMetricStatus;
+  reason: string;
+}
+
+export interface AgentEvaluationCaseMetrics {
+  rounds: number;
+  readPages: number;
+  keptPages: number;
+  rawSources: number;
+  modelCalls: number;
+  totalTokens: number;
+  stopReason: string;
+}
+
+export interface AgentEvaluationCaseResult {
+  caseId: string;
+  question: string;
+  answerable: boolean;
+  status: AgentEvaluationCaseStatus;
+  agentRunId: string;
+  agentStatus: string;
+  matchedSources: AgentEvaluationMatchedSource[];
+  expectedSourceIds: string[];
+  hitSourceIds: string[];
+  sourceHit: boolean | null;
+  mustInclude: string[];
+  mustIncludeHits: string[];
+  answerMarkdown: string;
+  facts: AgentEvaluationFactResult[];
+  faithfulness: AgentEvaluationMetricResult;
+  answerCorrectness: AgentEvaluationMetricResult;
+  abstainCorrectness: AgentEvaluationMetricResult;
+  metrics: AgentEvaluationCaseMetrics;
+  events: Array<Record<string, unknown>>;
+  error: string;
+}
+
+export interface AgentEvaluationSummary {
+  totalCases: number;
+  completedCases: number;
+  sourceMissingCases: number;
+  failedCases: number;
+  totalFacts: number;
+  correctFacts: number;
+  missingFacts: number;
+  incorrectFacts: number;
+  factAccuracy: number;
+  sourceHitCases: number;
+  sourceHitTotal: number;
+  sourceHitRate: number;
+  faithfulCases: number;
+  faithfulnessTotal: number;
+  faithfulnessRate: number;
+  answerCorrectCases: number;
+  answerCorrectnessTotal: number;
+  answerCorrectnessRate: number;
+  abstainCorrectCases: number;
+  abstainTotal: number;
+  abstainAccuracy: number;
+  avgRounds: number;
+  avgReadPages: number;
+  avgKeptPages: number;
+  avgRawSources: number;
+  avgModelCalls: number;
+  avgTotalTokens: number;
+}
+
+export interface AgentEvaluationRun {
+  runId: string;
+  datasetId: string;
+  datasetName: string;
+  caseIds: string[];
+  judgeModel: string;
+  sourcePolicy: AgentEvaluationSourcePolicy;
+  budget: AgentEvaluationBudget;
+  models: AgentEvaluationModels;
+  status: AgentEvaluationRunStatus;
+  startedAt: string;
+  endedAt: string;
+  progress: {
+    completed: number;
+    total: number;
+    currentCaseId: string;
+  };
+  cases: AgentEvaluationCaseResult[];
+  summary: AgentEvaluationSummary;
+  errors: string[];
+}
+
+export interface AgentEvaluationRunSummary {
+  runId: string;
+  datasetId: string;
+  datasetName: string;
+  judgeModel: string;
+  sourcePolicy: AgentEvaluationSourcePolicy;
+  status: AgentEvaluationRunStatus;
+  startedAt: string;
+  endedAt: string;
+  progress: AgentEvaluationRun["progress"];
+  summary: AgentEvaluationSummary;
+}

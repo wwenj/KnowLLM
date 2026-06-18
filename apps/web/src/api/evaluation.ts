@@ -115,3 +115,201 @@ export const compileEvaluationApi = {
       silent ? { silent: true } : undefined,
     ),
 };
+
+export type AgentEvaluationMetricStatus = "correct" | "incorrect" | "not_applicable";
+export type AgentEvaluationFactStatus = CompileEvaluationFactStatus;
+export type AgentEvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "source_missing"
+  | "agent_failed"
+  | "judge_failed"
+  | "failed";
+export type AgentEvaluationRunStatus = "running" | "success" | "failed";
+export type AgentEvaluationSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
+
+export interface AgentEvaluationBudget {
+  maxRounds: number;
+  maxEvidencePages: number;
+  maxRawSources: number;
+  tokenLimit: number | null;
+}
+
+export interface AgentEvaluationModels {
+  plannerModel: string;
+  reviewerModel: string;
+  synthesizerModel: string;
+}
+
+export interface AgentEvaluationDatasetSummary {
+  datasetId: string;
+  name: string;
+  uploadedAt: string;
+  sourceCount: number;
+  caseCount: number;
+  factCount: number;
+  abstainCaseCount: number;
+}
+
+export interface AgentEvaluationDataset {
+  datasetId: string;
+  name: string;
+  uploadedAt: string;
+  sources: Array<{ id: string; filename: string; content: string; sha256: string }>;
+  cases: Array<{
+    id: string;
+    question: string;
+    answerable: boolean;
+    expectedAnswer: string;
+    expectedFacts: Array<{ id: string; fact: string }>;
+    relevantSourceIds: string[];
+    mustInclude: string[];
+    evaluationType: string;
+  }>;
+}
+
+export interface AgentEvaluationMetricResult {
+  status: AgentEvaluationMetricStatus;
+  reason: string;
+}
+
+export interface AgentEvaluationFactResult {
+  id: string;
+  fact: string;
+  status: AgentEvaluationFactStatus;
+  evidencePath: string;
+  evidence: string;
+  reason: string;
+}
+
+export interface AgentEvaluationCaseResult {
+  caseId: string;
+  question: string;
+  answerable: boolean;
+  status: AgentEvaluationCaseStatus;
+  agentRunId: string;
+  agentStatus: string;
+  matchedSources: Array<{
+    datasetSourceId: string;
+    filename: string;
+    sha256: string;
+    sourceId: string | null;
+    ingestedAt: string;
+  }>;
+  expectedSourceIds: string[];
+  hitSourceIds: string[];
+  sourceHit: boolean | null;
+  mustInclude: string[];
+  mustIncludeHits: string[];
+  answerMarkdown: string;
+  facts: AgentEvaluationFactResult[];
+  faithfulness: AgentEvaluationMetricResult;
+  answerCorrectness: AgentEvaluationMetricResult;
+  abstainCorrectness: AgentEvaluationMetricResult;
+  metrics: {
+    rounds: number;
+    readPages: number;
+    keptPages: number;
+    rawSources: number;
+    modelCalls: number;
+    totalTokens: number;
+    stopReason: string;
+  };
+  events: Array<Record<string, unknown>>;
+  error: string;
+}
+
+export interface AgentEvaluationSummary {
+  totalCases: number;
+  completedCases: number;
+  sourceMissingCases: number;
+  failedCases: number;
+  totalFacts: number;
+  correctFacts: number;
+  missingFacts: number;
+  incorrectFacts: number;
+  factAccuracy: number;
+  sourceHitCases: number;
+  sourceHitTotal: number;
+  sourceHitRate: number;
+  faithfulCases: number;
+  faithfulnessTotal: number;
+  faithfulnessRate: number;
+  answerCorrectCases: number;
+  answerCorrectnessTotal: number;
+  answerCorrectnessRate: number;
+  abstainCorrectCases: number;
+  abstainTotal: number;
+  abstainAccuracy: number;
+  avgRounds: number;
+  avgReadPages: number;
+  avgKeptPages: number;
+  avgRawSources: number;
+  avgModelCalls: number;
+  avgTotalTokens: number;
+}
+
+export interface AgentEvaluationRunSummary {
+  runId: string;
+  datasetId: string;
+  datasetName: string;
+  judgeModel: string;
+  sourcePolicy: AgentEvaluationSourcePolicy;
+  status: AgentEvaluationRunStatus;
+  startedAt: string;
+  endedAt: string;
+  progress: { completed: number; total: number; currentCaseId: string };
+  summary: AgentEvaluationSummary;
+}
+
+export interface AgentEvaluationRun extends AgentEvaluationRunSummary {
+  caseIds: string[];
+  budget: AgentEvaluationBudget;
+  models: AgentEvaluationModels;
+  cases: AgentEvaluationCaseResult[];
+  errors: string[];
+}
+
+export const agentEvaluationApi = {
+  uploadDataset: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return http.postForm<AgentEvaluationDataset>(
+      "/api/evaluations/llm-wiki-agent/datasets/upload",
+      form,
+    );
+  },
+  listDatasets: (silent = false) =>
+    http.get<{ items: AgentEvaluationDatasetSummary[] }>(
+      "/api/evaluations/llm-wiki-agent/datasets",
+      undefined,
+      silent ? { silent: true } : undefined,
+    ),
+  getDataset: (datasetId: string, silent = false) =>
+    http.get<AgentEvaluationDataset>(
+      `/api/evaluations/llm-wiki-agent/datasets/${encodeURIComponent(datasetId)}`,
+      undefined,
+      silent ? { silent: true } : undefined,
+    ),
+  createRun: (body: {
+    datasetId: string;
+    caseIds?: string[];
+    judgeModel?: string;
+    agentModel?: string;
+    sourcePolicy?: AgentEvaluationSourcePolicy;
+    budget?: Partial<AgentEvaluationBudget>;
+  }) => http.post<AgentEvaluationRun>("/api/evaluations/llm-wiki-agent/runs", body),
+  listRuns: (limit = 50, silent = false) =>
+    http.get<{ items: AgentEvaluationRunSummary[] }>(
+      "/api/evaluations/llm-wiki-agent/runs",
+      { limit },
+      silent ? { silent: true } : undefined,
+    ),
+  getRun: (runId: string, silent = false) =>
+    http.get<AgentEvaluationRun>(
+      `/api/evaluations/llm-wiki-agent/runs/${encodeURIComponent(runId)}`,
+      undefined,
+      silent ? { silent: true } : undefined,
+    ),
+};

@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  Bot,
   ClipboardCheck,
   Sparkles,
 } from "lucide-react";
@@ -9,6 +10,7 @@ const navItems = [
   { to: "/agents", label: "调试中心", icon: Sparkles },
   { to: "/llm-wiki", label: "LLM Wiki 管理", icon: BookOpen },
   { to: "/evaluations/llm-wiki-compile", label: "编译评测", icon: ClipboardCheck },
+  { to: "/evaluations/llm-wiki-agent", label: "Agent 评测", icon: Bot },
 ];
 
 export function AppLayout() {

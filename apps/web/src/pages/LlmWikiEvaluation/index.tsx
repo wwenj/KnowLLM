@@ -58,7 +58,7 @@ export function LlmWikiEvaluation() {
         const modelResponse = await modelApi.list(true);
         const nextModels = modelResponse.items || [];
         setModels(nextModels);
-        setJudgeModel(nextModels[0]?.model || "");
+        setJudgeModel(nextModels[0]?.id || "");
         await Promise.all([refreshDatasets(true), refreshRuns(true)]);
       } finally {
         setLoading(false);

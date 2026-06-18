@@ -97,7 +97,7 @@ export class LlmWikiAgentWorkflow {
     return {
       sourcePolicy: "auto",
       budget: defaultBudget(),
-      models: defaultModels(),
+      models: this.defaultModels(),
       modelOptions: this.model.listModels(),
     };
   }
@@ -121,7 +121,7 @@ export class LlmWikiAgentWorkflow {
             synthesizerModel: raw.model,
           }
         : raw.models;
-    const models = resolveModels(modelsInput);
+    const models = resolveModels(modelsInput, this.defaultModels());
     this.assertModelsAvailable(models);
     return { query, sourcePolicy, budget, models };
   }
@@ -1007,6 +1007,16 @@ export class LlmWikiAgentWorkflow {
   private assertActive(ctx: AgentRunnerContext<LlmWikiAgentInput>): void {
     if (ctx.signal.aborted) throw new Error("aborted");
   }
+
+  private defaultModels(): LlmWikiModels {
+    const fastModel = this.model.resolveModel(agentConfig.defaultFastModel);
+    const mainModel = this.model.resolveModel(agentConfig.defaultMainModel || agentConfig.defaultFastModel);
+    return {
+      plannerModel: fastModel,
+      reviewerModel: fastModel,
+      synthesizerModel: mainModel || fastModel,
+    };
+  }
 }
 
 function defaultBudget(): LlmWikiBudget {
@@ -1015,14 +1025,6 @@ function defaultBudget(): LlmWikiBudget {
     maxEvidencePages: DEFAULT_MAX_EVIDENCE_PAGES,
     maxRawSources: DEFAULT_MAX_RAW_SOURCES,
     tokenLimit: null,
-  };
-}
-
-function defaultModels(): LlmWikiModels {
-  return {
-    plannerModel: agentConfig.defaultFastModel,
-    reviewerModel: agentConfig.defaultFastModel,
-    synthesizerModel: agentConfig.defaultMainModel,
   };
 }
 
@@ -1036,9 +1038,8 @@ function resolveBudget(value: unknown): LlmWikiBudget {
   };
 }
 
-function resolveModels(value: unknown): LlmWikiModels {
+function resolveModels(value: unknown, defaults: LlmWikiModels): LlmWikiModels {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  const defaults = defaultModels();
   return {
     plannerModel: stringField(raw.plannerModel) || defaults.plannerModel,
     reviewerModel: stringField(raw.reviewerModel) || defaults.reviewerModel,
