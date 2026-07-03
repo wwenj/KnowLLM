@@ -10,7 +10,6 @@ import {
 import type { ModelOption } from "@/api/model";
 import { modelApi } from "@/api/model";
 import { EvaluationConfigPanel } from "./components/EvaluationConfigPanel";
-import { EvaluationHeader } from "./components/EvaluationHeader";
 import { EvaluationResult } from "./components/EvaluationResult";
 import { EvaluationRunHistory } from "./components/EvaluationRunHistory";
 
@@ -28,6 +27,8 @@ export function LlmWikiEvaluation() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingDatasetId, setDeletingDatasetId] = useState("");
+  const [deletingRunId, setDeletingRunId] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -49,7 +50,11 @@ export function LlmWikiEvaluation() {
       .catch(() => ({ items: [] }));
     const items = response.items || [];
     setDatasets(items);
-    setDatasetId((current) => current || items[0]?.datasetId || "");
+    setDatasetId((current) =>
+      items.some((item) => item.datasetId === current)
+        ? current
+        : items[0]?.datasetId || "",
+    );
   }, []);
 
   useEffect(() => {
@@ -69,7 +74,11 @@ export function LlmWikiEvaluation() {
   }, [refreshDatasets, refreshRuns, stopPolling]);
 
   useEffect(() => {
-    if (!datasetId) return;
+    if (!datasetId) {
+      setDataset(null);
+      setSelectedCaseIds([]);
+      return;
+    }
     void compileEvaluationApi
       .getDataset(datasetId, true)
       .then((next) => {
@@ -118,6 +127,20 @@ export function LlmWikiEvaluation() {
     }
   };
 
+  const handleDeleteDataset = async (targetDatasetId: string) => {
+    const target = datasets.find((item) => item.datasetId === targetDatasetId);
+    if (!target) return;
+    if (!window.confirm(`删除评测集「${target.name}」？历史评测结果不会被级联删除。`)) return;
+    setDeletingDatasetId(targetDatasetId);
+    try {
+      await compileEvaluationApi.deleteDataset(targetDatasetId);
+      await refreshDatasets(true);
+      toast.success("评测数据集已删除");
+    } finally {
+      setDeletingDatasetId("");
+    }
+  };
+
   const handleStart = async () => {
     if (!dataset || !selectedCaseIds.length || !judgeModel) return;
     setSubmitting(true);
@@ -132,6 +155,28 @@ export function LlmWikiEvaluation() {
       void refreshRuns(true);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteRun = async (runId: string) => {
+    const target = runs.find((item) => item.runId === runId);
+    if (!target) return;
+    if (target.status === "running") {
+      toast.info("运行中的评测不能删除");
+      return;
+    }
+    if (!window.confirm(`删除「${target.datasetName}」的这条历史评测结果？`)) return;
+    setDeletingRunId(runId);
+    try {
+      await compileEvaluationApi.deleteRun(runId);
+      if (activeRun?.runId === runId) {
+        stopPolling();
+        setActiveRun(null);
+      }
+      await refreshRuns(true);
+      toast.success("历史评测已删除");
+    } finally {
+      setDeletingRunId("");
     }
   };
 
@@ -158,26 +203,15 @@ export function LlmWikiEvaluation() {
     );
   };
 
-  const selectedCases =
-    dataset?.cases.filter((item) => selectedCaseIds.includes(item.id)) || [];
-  const selectedFactCount = selectedCases.reduce(
-    (total, item) => total + item.expectedFacts.length,
-    0,
-  );
+  const selectedCases = dataset?.cases.filter((item) => selectedCaseIds.includes(item.id)) || [];
+  const selectedFactCount = selectedCases.reduce((total, item) => total + item.expectedFacts.length, 0);
   const selectedSourceCount = new Set(
     selectedCases.flatMap((item) => item.sourceIds),
   ).size;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-100/80">
-      <EvaluationHeader
-        datasetsCount={datasets.length}
-        selectedCaseText={`${selectedCaseIds.length}/${dataset?.cases.length || 0}`}
-        selectedFactCount={selectedFactCount}
-        runsCount={runs.length}
-      />
-
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(300px,0.46fr)_minmax(0,1fr)] gap-3 overflow-hidden p-3 xl:grid-cols-[380px_minmax(0,1fr)] xl:grid-rows-1">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(300px,0.42fr)_minmax(0,1fr)] gap-3 overflow-hidden p-3 xl:grid-cols-[360px_minmax(0,1fr)] xl:grid-rows-1">
         <EvaluationConfigPanel
           datasets={datasets}
           datasetId={datasetId}
@@ -188,27 +222,31 @@ export function LlmWikiEvaluation() {
           loading={loading}
           uploading={uploading}
           submitting={submitting}
+          deletingDatasetId={deletingDatasetId}
           allSelected={allSelected}
           selectedSourceCount={selectedSourceCount}
           selectedFactCount={selectedFactCount}
           fileRef={fileRef}
           onUpload={(file) => void handleUpload(file)}
           onDatasetChange={setDatasetId}
+          onDeleteDataset={(id) => void handleDeleteDataset(id)}
           onJudgeModelChange={setJudgeModel}
           onToggleAll={toggleAll}
           onToggleCase={toggleCase}
           onStart={handleStart}
         />
 
-        <main className="grid min-h-0 gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px]">
-          <section className="min-h-0 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <main className="grid min-h-0 gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
+          <section className="min-h-0 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
             <EvaluationResult run={activeRun} />
           </section>
           <EvaluationRunHistory
             runs={runs}
             activeRunId={activeRun?.runId || ""}
+            deletingRunId={deletingRunId}
             onRefresh={() => refreshRuns(false)}
             onOpen={handleOpenRun}
+            onDelete={(id) => void handleDeleteRun(id)}
           />
         </main>
       </div>

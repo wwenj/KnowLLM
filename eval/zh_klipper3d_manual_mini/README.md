@@ -25,6 +25,12 @@
 
 - `sources/`：原始 Markdown source，共 51 篇。
 - `source_manifest.json`：来源、license、commit、原始路径、sha256 和抽样规则。
-- `compile_cases.json`：40 个编译事实保留 case。
-- `agent_cases.json`：32 个 Agent case，其中包含 2 个拒答 case。
+- `compile_cases.json`：51 个编译事实保真 case，共 306 条原子事实。
+- `agent_cases.json`：50 个 Agent case，其中包含 45 个可回答 case、5 个拒答 case，并覆盖单文档、多文档、配置、校准、故障排查、安全约束、接口和开发规范场景。
+
+重新生成 Agent case：
+
+```bash
+node eval/tools/generate_agent_dataset.mjs eval/zh_klipper3d_manual_mini
+```
 - `upload_compile_dataset.json`：便于现有上传/编译流程一次性读取 sources 的辅助 JSON。

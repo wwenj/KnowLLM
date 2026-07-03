@@ -1,4 +1,6 @@
 import { Injectable } from "@nestjs/common";
+import { ModelService } from "../../model/model.service";
+import { llmWikiConfig } from "../llm-wiki.config";
 import { LlmWikiCompilerService } from "./llm-wiki-compiler.service";
 import { LlmWikiFusionService } from "./llm-wiki-fusion.service";
 import { LlmWikiIssueService } from "./llm-wiki-issue.service";
@@ -17,21 +19,23 @@ export class LlmWikiIngestService {
     private readonly issues: LlmWikiIssueService,
     private readonly search: LlmWikiSearchService,
     private readonly schema: LlmWikiSchemaService,
+    private readonly model: ModelService,
   ) {}
 
-  ingestSource(sourceId: string) {
+  ingestSource(sourceId: string, requestedModel = "") {
     const current = this.store.getSource(sourceId);
     if (this.jobs.has(current.source_id) || current.status === "ingesting") {
       throw new Error("source 正在解析");
     }
+    const model = this.resolveIngestModel(requestedModel);
     const meta = this.store.prepareIngest(current.source_id);
-    const job = this.runIngest(current.source_id);
+    const job = this.runIngest(current.source_id, model);
     this.jobs.set(current.source_id, job);
     void job.finally(() => this.jobs.delete(current.source_id));
     return meta;
   }
 
-  private async runIngest(sourceId: string): Promise<void> {
+  private async runIngest(sourceId: string, model: string): Promise<void> {
     try {
       const meta = this.store.getSource(sourceId);
       const source = this.store.readSource(sourceId);
@@ -42,6 +46,7 @@ export class LlmWikiIngestService {
         source,
         existingPages: this.store.listPageRefs(),
         schema,
+        model,
       });
       const noConcept = !drafts.some((page) => page.type === "concept");
       this.store.detachSourceFromWiki(sourceId);
@@ -52,6 +57,7 @@ export class LlmWikiIngestService {
           source: meta,
           sourceContent: source,
           draft,
+          model,
         });
         if (result.issues.length) this.issues.upsertMany(result.issues);
         if (!result.page) {
@@ -94,5 +100,14 @@ export class LlmWikiIngestService {
       this.store.markIngestFailed(sourceId, message);
       this.store.appendLog(`解析 source ${sourceId} 失败：${message}`);
     }
+  }
+
+  private resolveIngestModel(requestedModel: string): string {
+    const requested = String(requestedModel || "").trim();
+    const configured = requested || llmWikiConfig.model;
+    const resolved = this.model.resolveModel(configured);
+    if (resolved) return resolved;
+    if (requested) throw new Error(`解析模型不存在或不可用：${requested}`);
+    throw new Error("未配置可用的解析模型");
   }
 }

@@ -32,7 +32,10 @@ test("model service exposes safe enabled model list from local provider config",
       const service = new ModelService();
       const models = service.listModels();
 
-      assert.deepEqual(models.map((item) => item.id), ["provider-a:fast", "provider-a:main"]);
+      assert.deepEqual(
+        models.map((item) => item.id),
+        ["provider-a:fast", "provider-a:main"],
+      );
       assert.equal(models[0].providerName, "Provider A");
       assert.equal(JSON.stringify(models).includes("secret-a"), false);
       assert.equal(JSON.stringify(models).includes("provider-a.test"), false);
@@ -44,8 +47,18 @@ test("model service exposes safe enabled model list from local provider config",
 test("model service resolves ids and unique model names", async () => {
   await withTempModelConfig(
     [
-      providerConfig({ name: "Provider A", baseUrl: "https://a.test/v1", apiKey: "secret-a", models: ["same", "unique"] }),
-      providerConfig({ name: "Provider B", baseUrl: "https://b.test/v1", apiKey: "secret-b", models: ["same"] }),
+      providerConfig({
+        name: "Provider A",
+        baseUrl: "https://a.test/v1",
+        apiKey: "secret-a",
+        models: ["same", "unique"],
+      }),
+      providerConfig({
+        name: "Provider B",
+        baseUrl: "https://b.test/v1",
+        apiKey: "secret-b",
+        models: ["same"],
+      }),
     ],
     () => {
       const service = new ModelService();
@@ -62,22 +75,45 @@ test("model service resolves ids and unique model names", async () => {
 test("model service routes chat requests to the selected provider", async () => {
   await withTempModelConfig(
     [
-      providerConfig({ name: "Provider A", baseUrl: "https://a.test/v1", apiKey: "secret-a", models: ["model-a"] }),
-      providerConfig({ name: "Provider B", baseUrl: "https://b.test/api/", apiKey: "secret-b", models: ["model-b"] }),
+      providerConfig({
+        name: "Provider A",
+        baseUrl: "https://a.test/v1",
+        apiKey: "secret-a",
+        models: ["model-a"],
+      }),
+      providerConfig({
+        name: "Provider B",
+        baseUrl: "https://b.test/api/",
+        apiKey: "secret-b",
+        models: ["model-b"],
+      }),
     ],
     async () => {
-      const calls: Array<{ url: string; auth: string; body: Record<string, unknown> }> = [];
+      const calls: Array<{
+        url: string;
+        auth: string;
+        body: Record<string, unknown>;
+      }> = [];
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      globalThis.fetch = (async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
         calls.push({
           url: String(input),
           auth: String(new Headers(init?.headers).get("authorization") || ""),
-          body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+          body: JSON.parse(String(init?.body || "{}")) as Record<
+            string,
+            unknown
+          >,
         });
-        return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }) as typeof fetch;
       try {
         const service = new ModelService();
@@ -97,7 +133,115 @@ test("model service routes chat requests to the selected provider", async () => 
   );
 });
 
-function providerConfig(overrides: Record<string, unknown>): Record<string, unknown> {
+test("model service omits parameters unsupported by a selected model", async () => {
+  await withTempModelConfig(
+    [
+      providerConfig({
+        name: "Provider A",
+        baseUrl: "https://a.test/v1",
+        apiKey: "secret-a",
+        models: [
+          "regular-model",
+          { name: "restricted-model", unsupportedParameters: ["temperature"] },
+        ],
+      }),
+    ],
+    async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        _input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        bodies.push(
+          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch;
+      try {
+        const service = new ModelService();
+        await service.chat({
+          model: "provider-a:regular-model",
+          temperature: 0,
+          messages: [{ role: "user", content: "hello" }],
+        });
+        await service.chat({
+          model: "provider-a:restricted-model",
+          temperature: 0,
+          messages: [{ role: "user", content: "hello" }],
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      assert.equal(bodies[0].temperature, 0);
+      assert.equal("temperature" in bodies[1], false);
+    },
+  );
+});
+
+test("model service applies provider unsupported parameters to all its models", async () => {
+  await withTempModelConfig(
+    [
+      providerConfig({
+        name: "Provider A",
+        baseUrl: "https://a.test/v1",
+        apiKey: "secret-a",
+        models: ["model-a", "model-b"],
+        unsupportedParameters: ["temperature"],
+      }),
+    ],
+    async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        _input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        bodies.push(
+          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch;
+      try {
+        const service = new ModelService();
+        await service.chat({
+          model: "provider-a:model-a",
+          temperature: 0,
+          messages: [{ role: "user", content: "hello" }],
+        });
+        await service.chat({
+          model: "provider-a:model-b",
+          temperature: 0.2,
+          messages: [{ role: "user", content: "hello" }],
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      assert.equal(
+        bodies.every((body) => !("temperature" in body)),
+        true,
+      );
+    },
+  );
+});
+
+function providerConfig(
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     provider: "openai",
     enabled: true,
@@ -106,7 +250,10 @@ function providerConfig(overrides: Record<string, unknown>): Record<string, unkn
   };
 }
 
-async function withTempModelConfig<T>(config: unknown, run: () => T | Promise<T>): Promise<T> {
+async function withTempModelConfig<T>(
+  config: unknown,
+  run: () => T | Promise<T>,
+): Promise<T> {
   const previousConfig = process.env.KNOWLLM_MODELS_CONFIG;
   const previousOpenaiKey = process.env.OPENAI_API_KEY;
   const previousOpenaiModel = process.env.OPENAI_MODEL;

@@ -112,4 +112,8 @@ export const http = {
       method: "POST",
       body: data,
     }),
+  delete: <T>(
+    endpoint: string,
+    options?: Omit<RequestOptions, "method" | "body">,
+  ) => request<T>(endpoint, { ...options, method: "DELETE" }),
 };

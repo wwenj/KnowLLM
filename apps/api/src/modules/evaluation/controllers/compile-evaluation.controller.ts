@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpException,
   Param,
@@ -45,6 +46,11 @@ export class CompileEvaluationController {
     return this.run(() => this.datasets.get(datasetId));
   }
 
+  @Delete("datasets/:datasetId")
+  deleteDataset(@Param("datasetId") datasetId: string) {
+    return this.run(() => this.datasets.delete(datasetId));
+  }
+
   @Post("runs")
   createRun(@Body() body: unknown) {
     return this.run(() => this.evaluations.createRun(body));
@@ -58,6 +64,11 @@ export class CompileEvaluationController {
   @Get("runs/:runId")
   getRun(@Param("runId") runId: string) {
     return this.run(() => this.evaluations.getRun(runId));
+  }
+
+  @Delete("runs/:runId")
+  deleteRun(@Param("runId") runId: string) {
+    return this.run(() => this.evaluations.deleteRun(runId));
   }
 
   private run<T>(fn: () => T): T {

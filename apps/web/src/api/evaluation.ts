@@ -3,6 +3,8 @@ import { http } from "./http";
 export type CompileEvaluationFactStatus = "correct" | "missing" | "incorrect";
 export type CompileEvaluationCaseStatus = "pending" | "running" | "success" | "source_missing" | "failed";
 export type CompileEvaluationRunStatus = "running" | "success" | "failed";
+export type CompileEvaluationFactImportance = "must" | "should" | "nice";
+export type CompileEvaluationPassLevel = "excellent" | "pass" | "needs_improvement" | "failed";
 
 export interface CompileEvaluationDatasetSummary {
   datasetId: string;
@@ -22,17 +24,31 @@ export interface CompileEvaluationDataset {
     id: string;
     name: string;
     sourceIds: string[];
-    expectedFacts: Array<{ id: string; fact: string }>;
+    expectedFacts: Array<{
+      id: string;
+      fact: string;
+      sourceFile: string;
+      evidence: string;
+      type: string;
+      importance: CompileEvaluationFactImportance;
+    }>;
   }>;
 }
 
 export interface CompileEvaluationFactResult {
   id: string;
   fact: string;
+  sourceFile?: string;
+  evidence?: string;
+  type?: string;
+  importance?: CompileEvaluationFactImportance;
   status: CompileEvaluationFactStatus;
   evidencePath: string;
-  evidence: string;
+  wikiEvidence?: string;
   reason: string;
+  confidence?: number | null;
+  weight?: number;
+  score?: number;
 }
 
 export interface CompileEvaluationCaseResult {
@@ -57,6 +73,16 @@ export interface CompileEvaluationSummary {
   missing: number;
   incorrect: number;
   accuracy: number;
+  rawAccuracy?: number;
+  weightedScore?: number;
+  mustAccuracy?: number;
+  missingRate?: number;
+  incorrectRate?: number;
+  totalWeight?: number;
+  correctWeight?: number;
+  mustTotal?: number;
+  mustCorrect?: number;
+  passLevel?: CompileEvaluationPassLevel;
   sourceMissingCases: number;
   failedCases: number;
 }
@@ -100,6 +126,10 @@ export const compileEvaluationApi = {
       undefined,
       silent ? { silent: true } : undefined,
     ),
+  deleteDataset: (datasetId: string) =>
+    http.delete<{ deleted: true }>(
+      `/api/evaluations/llm-wiki-compile/datasets/${encodeURIComponent(datasetId)}`,
+    ),
   createRun: (body: { datasetId: string; caseIds?: string[]; judgeModel?: string }) =>
     http.post<CompileEvaluationRun>("/api/evaluations/llm-wiki-compile/runs", body),
   listRuns: (limit = 50, silent = false) =>
@@ -113,6 +143,10 @@ export const compileEvaluationApi = {
       `/api/evaluations/llm-wiki-compile/runs/${encodeURIComponent(runId)}`,
       undefined,
       silent ? { silent: true } : undefined,
+    ),
+  deleteRun: (runId: string) =>
+    http.delete<{ deleted: true }>(
+      `/api/evaluations/llm-wiki-compile/runs/${encodeURIComponent(runId)}`,
     ),
 };
 
@@ -128,6 +162,7 @@ export type AgentEvaluationCaseStatus =
   | "failed";
 export type AgentEvaluationRunStatus = "running" | "success" | "failed";
 export type AgentEvaluationSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
+export type AgentEvaluationPassLevel = "excellent" | "pass" | "needs_improvement" | "failed";
 
 export interface AgentEvaluationBudget {
   maxRounds: number;
@@ -186,6 +221,8 @@ export interface AgentEvaluationFactResult {
 export interface AgentEvaluationCaseResult {
   caseId: string;
   question: string;
+  expectedAnswer: string;
+  evaluationType: string;
   answerable: boolean;
   status: AgentEvaluationCaseStatus;
   agentRunId: string;
@@ -242,6 +279,10 @@ export interface AgentEvaluationSummary {
   abstainCorrectCases: number;
   abstainTotal: number;
   abstainAccuracy: number;
+  taskCorrectnessRate: number;
+  completionRate: number;
+  overallScore: number;
+  passLevel: AgentEvaluationPassLevel;
   avgRounds: number;
   avgReadPages: number;
   avgKeptPages: number;
@@ -292,6 +333,10 @@ export const agentEvaluationApi = {
       undefined,
       silent ? { silent: true } : undefined,
     ),
+  deleteDataset: (datasetId: string) =>
+    http.delete<{ deleted: true }>(
+      `/api/evaluations/llm-wiki-agent/datasets/${encodeURIComponent(datasetId)}`,
+    ),
   createRun: (body: {
     datasetId: string;
     caseIds?: string[];
@@ -311,5 +356,9 @@ export const agentEvaluationApi = {
       `/api/evaluations/llm-wiki-agent/runs/${encodeURIComponent(runId)}`,
       undefined,
       silent ? { silent: true } : undefined,
+    ),
+  deleteRun: (runId: string) =>
+    http.delete<{ deleted: true }>(
+      `/api/evaluations/llm-wiki-agent/runs/${encodeURIComponent(runId)}`,
     ),
 };

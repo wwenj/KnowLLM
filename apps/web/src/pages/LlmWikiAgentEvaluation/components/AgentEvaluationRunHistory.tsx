@@ -1,11 +1,11 @@
 import { History, Loader2, RefreshCw, Trash2 } from "lucide-react";
-import type { CompileEvaluationRunSummary } from "@/api/evaluation";
+import type { AgentEvaluationRunSummary } from "@/api/evaluation";
 import { StatusTag } from "@/components/StatusTag";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "../utils";
+import { formatDate } from "../../LlmWikiEvaluation/utils";
 
-interface EvaluationRunHistoryProps {
-  runs: CompileEvaluationRunSummary[];
+interface AgentEvaluationRunHistoryProps {
+  runs: AgentEvaluationRunSummary[];
   activeRunId: string;
   deletingRunId: string;
   onRefresh: () => void;
@@ -13,14 +13,14 @@ interface EvaluationRunHistoryProps {
   onDelete: (runId: string) => void;
 }
 
-export function EvaluationRunHistory({
+export function AgentEvaluationRunHistory({
   runs,
   activeRunId,
   deletingRunId,
   onRefresh,
   onOpen,
   onDelete,
-}: EvaluationRunHistoryProps) {
+}: AgentEvaluationRunHistoryProps) {
   return (
     <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
       <div className="flex h-10 flex-none items-center justify-between border-b border-slate-200 px-3">
@@ -37,10 +37,9 @@ export function EvaluationRunHistory({
         {runs.map((run) => {
           const active = activeRunId === run.runId;
           const deleting = deletingRunId === run.runId;
-          const progress =
-            run.progress.total > 0
-              ? Math.round((run.progress.completed / run.progress.total) * 100)
-              : 0;
+          const progress = run.progress.total > 0
+            ? Math.round((run.progress.completed / run.progress.total) * 100)
+            : 0;
           return (
             <div
               key={run.runId}
@@ -57,22 +56,15 @@ export function EvaluationRunHistory({
                 onClick={() => onOpen(run.runId)}
                 className="min-w-0 px-2.5 py-2 text-left"
               >
-                <div className="truncate text-sm font-medium text-slate-900">
-                  {run.datasetName}
-                </div>
+                <div className="truncate text-sm font-medium text-slate-900">{run.datasetName}</div>
                 <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-slate-500">
-                  <span className="shrink-0 tabular-nums">
-                    {Math.round(run.summary.weightedScore ?? run.summary.accuracy * 100)} 分
-                  </span>
+                  <span className="shrink-0 tabular-nums">{Math.round(run.summary.overallScore || 0)} 分</span>
                   <StatusTag status={run.status} />
                   <span className="min-w-0 truncate">{formatDate(run.startedAt)}</span>
                 </div>
                 {run.status === "running" && (
                   <div className="mt-2 h-1 overflow-hidden rounded-full bg-indigo-100">
-                    <div
-                      className="h-full rounded-full bg-indigo-600"
-                      style={{ width: `${progress}%` }}
-                    />
+                    <div className="h-full rounded-full bg-indigo-600" style={{ width: `${progress}%` }} />
                   </div>
                 )}
               </button>
@@ -85,11 +77,7 @@ export function EvaluationRunHistory({
                 className="mr-1 mt-1"
                 onClick={() => onDelete(run.runId)}
               >
-                {deleting ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="size-3.5" />
-                )}
+                {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               </Button>
             </div>
           );

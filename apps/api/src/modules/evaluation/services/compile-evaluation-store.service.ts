@@ -42,6 +42,13 @@ export class CompileEvaluationStoreService implements OnModuleInit {
     return dataset;
   }
 
+  deleteDataset(datasetId: string): { deleted: true } {
+    const file = this.datasetPath(datasetId);
+    if (!fs.existsSync(file)) throw new Error("评测数据集不存在");
+    fs.unlinkSync(file);
+    return { deleted: true };
+  }
+
   createRun(args: {
     dataset: CompileEvaluationDataset;
     caseIds: string[];
@@ -74,6 +81,13 @@ export class CompileEvaluationStoreService implements OnModuleInit {
     const run = readJson<CompileEvaluationRun | null>(this.runPath(runId), null);
     if (!run) throw new Error("评测运行记录不存在");
     return run;
+  }
+
+  deleteRun(runId: string): { deleted: true } {
+    const run = this.getRun(runId);
+    if (run.status === "running") throw new Error("运行中的评测不能删除");
+    fs.unlinkSync(this.runPath(runId));
+    return { deleted: true };
   }
 
   listRuns(limit = 50): CompileEvaluationRunSummary[] {
@@ -118,13 +132,23 @@ export class CompileEvaluationStoreService implements OnModuleInit {
   }
 }
 
-export function emptySummary() {
+export function emptySummary(): CompileEvaluationRunSummary["summary"] {
   return {
     totalFacts: 0,
     correct: 0,
     missing: 0,
     incorrect: 0,
     accuracy: 0,
+    rawAccuracy: 0,
+    weightedScore: 0,
+    mustAccuracy: 0,
+    missingRate: 0,
+    incorrectRate: 0,
+    totalWeight: 0,
+    correctWeight: 0,
+    mustTotal: 0,
+    mustCorrect: 0,
+    passLevel: "failed",
     sourceMissingCases: 0,
     failedCases: 0,
   };
