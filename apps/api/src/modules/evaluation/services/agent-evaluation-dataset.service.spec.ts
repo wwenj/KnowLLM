@@ -78,6 +78,23 @@ test("agent evaluation upload accepts built-in agent_cases.json without sources"
 
   assert.equal(dataset.datasetId, "zh_klipper3d_manual_mini");
   assert.equal(dataset.sources.length, 51);
-  assert.equal(dataset.cases.length, 32);
+  assert.equal(dataset.cases.length, 50);
   assert.equal(saved, dataset);
+});
+
+test("agent evaluation dataset list only returns uploaded datasets", () => {
+  const uploaded = {
+    datasetId: "uploaded",
+    name: "Uploaded",
+    uploadedAt: "2026-07-03T00:00:00.000Z",
+    sourceCount: 1,
+    caseCount: 1,
+    factCount: 1,
+    abstainCaseCount: 0,
+  };
+  const service = new AgentEvaluationDatasetService({
+    listDatasets: () => [uploaded],
+  } as never);
+
+  assert.deepEqual(service.list(), { items: [uploaded] });
 });

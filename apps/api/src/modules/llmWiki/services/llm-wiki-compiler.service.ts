@@ -29,12 +29,13 @@ export class LlmWikiCompilerService {
     source: string;
     existingPages: LlmWikiPageRef[];
     schema: LlmWikiSchema;
+    model: string;
   }): Promise<LlmWikiDraftPage[]> {
     const text = args.source || "";
     const truncated = text.length > llmWikiConfig.maxSourceChars;
     const source = truncated ? text.slice(0, llmWikiConfig.maxSourceChars) : text;
     const res = await this.model.chat({
-      model: llmWikiConfig.model,
+      model: args.model,
       temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [

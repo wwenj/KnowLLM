@@ -1,625 +1,1553 @@
 {
   "datasetId": "zh_klipper3d_manual_mini",
-  "name": "Klipper 3D 打印机中文手册评测集：Agent 检索回答评测",
+  "name": "Klipper 3D 打印机中文手册评测集：Agent 检索回答评测 v2",
   "sourceDir": "sources",
   "cases": [
     {
       "id": "A001",
-      "question": "Klipper 文档「安装」里，配置或命令使用有什么关键说明？",
+      "question": "安装配置反复报错时，应如何选择配置模板并确认 Klipper 已恢复就绪？",
       "answerable": true,
-      "expectedAnswer": "大多数 Klipper 设置由“打印机配置文件”printer.cfg 决定，该文件将存储在主机上。通常可以通过在 Klipper config 目录 中查找以“printer-”前缀开头且与目标打印机相对应的文件来找到适当的配置文件。Klipper 配置文件包含安装过程中需要的有关打印机的技术信息。",
+      "expectedAnswer": "如果发生错误，请对打印机配置文件进行必要的修正，并发出\"restart\"，直到\"status\"报告打印机已准备就绪。\n\n如果需要创建一个新的自定义打印机配置文件，那么可以先从最接近的配置文件的例子开始，并从 Klipper 配置参考文档了解进一步信息。\n\n在定制打印机配置文件时，Klipper 报告配置错误是很正常的情况。",
       "expectedFacts": [
-        "大多数 Klipper 设置由“打印机配置文件”printer.cfg 决定，该文件将存储在主机上。通常可以通过在 Klipper config 目录 中查找以“printer-”前缀开头且与目标打印机相对应的文件来找到适当的配置文件。Klipper 配置文件包含安装过程中需要的有关打印机的技术信息。"
+        {
+          "id": "A001-F01",
+          "fact": "如果发生错误，请对打印机配置文件进行必要的修正，并发出\"restart\"，直到\"status\"报告打印机已准备就绪。"
+        },
+        {
+          "id": "A001-F02",
+          "fact": "如果需要创建一个新的自定义打印机配置文件，那么可以先从最接近的配置文件的例子开始，并从 Klipper 配置参考文档了解进一步信息。"
+        },
+        {
+          "id": "A001-F03",
+          "fact": "在定制打印机配置文件时，Klipper 报告配置错误是很正常的情况。"
+        }
       ],
       "relevantSources": [
         "01-安装.md"
       ],
       "mustInclude": [
-        "安装",
-        "大多数",
-        "设置由",
         "打印机配置文件",
-        "决定"
+        "restart",
+        "status"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
       "id": "A002",
-      "question": "Klipper 文档「配置检查」里，配置或命令使用有什么关键说明？",
+      "question": "步进轴无法自由移动，或移动后不能回到原位时，应分别检查哪些配置，并如何确认限位状态？",
       "answerable": true,
-      "expectedAnswer": "本文档提供了一系列帮助验证 Klipper printer.cfg 文件中的引脚设置的步骤。推荐在完成安装文档 中的步骤后执行本文档中的步骤。",
+      "expectedAnswer": "如果任何轴仍然不能自由移动，则验证给定轴的步进器“enable_pin”配置。\n\n如果步进电机移动但没有返回其原始位置，则需要验证“dir_pin”设置。\n\n它应该以所有配置的端站的当前状态进行响应，并且它们都应该报告“打开”状态。",
       "expectedFacts": [
-        "本文档提供了一系列帮助验证 Klipper printer.cfg 文件中的引脚设置的步骤。推荐在完成安装文档 中的步骤后执行本文档中的步骤。"
+        {
+          "id": "A002-F01",
+          "fact": "如果任何轴仍然不能自由移动，则验证给定轴的步进器“enable_pin”配置。"
+        },
+        {
+          "id": "A002-F02",
+          "fact": "如果步进电机移动但没有返回其原始位置，则需要验证“dir_pin”设置。"
+        },
+        {
+          "id": "A002-F03",
+          "fact": "它应该以所有配置的端站的当前状态进行响应，并且它们都应该报告“打开”状态。"
+        }
       ],
       "relevantSources": [
         "02-配置检查.md"
       ],
       "mustInclude": [
-        "配置检查",
-        "本文档提供了一系列帮助验证",
-        "文件中的引脚设置的步骤",
-        "推荐在完成",
-        "安装文档"
+        "enable_pin",
+        "dir_pin",
+        "打开"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
       "id": "A003",
-      "question": "Klipper 文档「打印床调平」里，相关校准或调平步骤有什么关键要求？",
+      "question": "使用纸张测试校准打印床时，测试层高、床面材料和 Z 轴下限需要注意什么？",
       "answerable": true,
-      "expectedAnswer": "打印床调平（有时也被称为 \"bed tramming\"）对于获得高质量的打印结果至关重要。错误\"调平\"的打印床会造成附着力差、\"翘曲\"，以及整个打印过程中的细微问题。本文档是在 Klipper 中进行调平的指南。",
+      "expectedAnswer": "使用较高的层高（层高应该是喷嘴直径的75%左右），不要使用裙边(skirt)或筏(raft)。\n\n请注意，胶带本身有厚度，不同的胶带（或任何其他床面）将影响 Z 的测量。\n\n在校准过程中，可能需要将打印机的Z `position_min`设置为一个负数（例如，`position_min = -2`）。",
       "expectedFacts": [
-        "打印床调平（有时也被称为 \"bed tramming\"）对于获得高质量的打印结果至关重要。错误\"调平\"的打印床会造成附着力差、\"翘曲\"，以及整个打印过程中的细微问题。本文档是在 Klipper 中进行调平的指南。"
+        {
+          "id": "A003-F01",
+          "fact": "使用较高的层高（层高应该是喷嘴直径的75%左右），不要使用裙边(skirt)或筏(raft)。"
+        },
+        {
+          "id": "A003-F02",
+          "fact": "请注意，胶带本身有厚度，不同的胶带（或任何其他床面）将影响 Z 的测量。"
+        },
+        {
+          "id": "A003-F03",
+          "fact": "在校准过程中，可能需要将打印机的Z `position_min`设置为一个负数（例如，`position_min = -2`）。"
+        }
       ],
       "relevantSources": [
         "03-打印床调平.md"
       ],
       "mustInclude": [
-        "打印床调平",
-        "有时也被称为",
-        "对于获得高质量的打印结果至",
-        "关重要",
-        "错误"
+        "75%",
+        "position_min",
+        "胶带"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A004",
-      "question": "Klipper 文档「手动调平」里，相关校准或调平步骤有什么关键要求？",
+      "question": "使用 SCREWS_TILT_CALCULATE 调平床身时，如何理解调整时间，ADJUSTED 何时使用，收敛标准是什么？",
       "answerable": true,
-      "expectedAnswer": "本文介绍了用于校准Z限位和对打印床调品螺丝进行调整的工具。",
+      "expectedAnswer": "请注意，“分钟”是指“时钟上的分钟”。因此，例如，15分钟是完整一圈的四分之一。\n\n如果床身螺丝需要调整（通常是任何超过1/8圈的转动），使用`ADJUSTED`命令。\n\n重复这个过程几次，直到打印床变得足够水平--通常情况下，这意味着所有的位置需要的调整都小于6分钟。",
       "expectedFacts": [
-        "本文介绍了用于校准Z限位和对打印床调品螺丝进行调整的工具。"
+        {
+          "id": "A004-F01",
+          "fact": "请注意，“分钟”是指“时钟上的分钟”。因此，例如，15分钟是完整一圈的四分之一。"
+        },
+        {
+          "id": "A004-F02",
+          "fact": "如果床身螺丝需要调整（通常是任何超过1/8圈的转动），使用`ADJUSTED`命令。"
+        },
+        {
+          "id": "A004-F03",
+          "fact": "重复这个过程几次，直到打印床变得足够水平--通常情况下，这意味着所有的位置需要的调整都小于6分钟。"
+        }
       ],
       "relevantSources": [
         "04-手动调平.md"
       ],
       "mustInclude": [
-        "手动调平",
-        "本文介绍了用于校准Z限位和",
-        "对打印床调品螺丝进行调整的",
-        "工具"
+        "时钟上的分钟",
+        "ADJUSTED",
+        "6分钟"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A005",
-      "question": "Klipper 文档「探针校准」里，相关校准或调平步骤有什么关键要求？",
+      "question": "如何使用 PROBE_CALIBRATE 获得 Z 偏移，哪些情况下必须重新校准，重复性不合格时怎么办？",
       "answerable": true,
-      "expectedAnswer": "本文档介绍了在 Klipper 中校准\"自动 Z 探针\" X、Y 和 Z 偏移的流程。这对于配置文件中具有 [probe] 或 [bltouch] 部分的打印机非常有用。",
+      "expectedAnswer": "Klipper 中的 `PROBE_CALIBRATE`（探针校准）工具可用于测量这个值——首先，该工具会运行一次自动探测以获取探针的 z 触发位置，然后需要手动调整Z坐标以获取喷嘴碰触到热床时的 z 高度。\n\n如果重复性测试结论不能接受，建议不要使用自动热床调平功能。\n\n如果修改了打印机的运动系统、喷嘴位置或探针位置中的任意一项，PROBE_CALIBRATE的结果将会需要重新测量。",
       "expectedFacts": [
-        "本文档介绍了在 Klipper 中校准\"自动 Z 探针\" X、Y 和 Z 偏移的流程。这对于配置文件中具有 [probe] 或 [bltouch] 部分的打印机非常有用。"
+        {
+          "id": "A005-F01",
+          "fact": "Klipper 中的 `PROBE_CALIBRATE`（探针校准）工具可用于测量这个值——首先，该工具会运行一次自动探测以获取探针的 z 触发位置，然后需要手动调整Z坐标以获取喷嘴碰触到热床时的 z 高度。"
+        },
+        {
+          "id": "A005-F02",
+          "fact": "如果重复性测试结论不能接受，建议不要使用自动热床调平功能。"
+        },
+        {
+          "id": "A005-F03",
+          "fact": "如果修改了打印机的运动系统、喷嘴位置或探针位置中的任意一项，PROBE_CALIBRATE的结果将会需要重新测量。"
+        }
       ],
       "relevantSources": [
         "05-探针校准.md"
       ],
       "mustInclude": [
-        "探针校准",
-        "本文档介绍了在",
-        "中校准",
-        "自动",
-        "探针"
+        "PROBE_CALIBRATE",
+        "重新测量",
+        "自动热床调平"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A006",
-      "question": "Klipper 文档「三角校正」里，相关校准或调平步骤有什么关键要求？",
+      "question": "增强型三角洲校准前必须完成哪些步骤，之后哪些操作会让已有校准结果失效？",
       "answerable": true,
-      "expectedAnswer": "本文将介绍在Klipper中对“三角洲”运动模式的打印机进行自动校准的操作。",
+      "expectedAnswer": "如果使用的探针是安装在喷嘴的一侧（即，探针对喷嘴存在xy偏移），需注意在进行过三角洲校准之后会使探针校准的结果无效。\n\n打印机设置和校准模型必须一一对应（即，在打印校准模型后，不要再进行DELTA_CALIBRATE或修改打印机参数，否则模型测量无效），再执行下面的命令。\n\n在运行增强型三角洲校准之前，必须先运行基本三角洲校准（通过DELTA_CALIBRATE命令）并保存结果（通过SAVE_CONFIG命令）。",
       "expectedFacts": [
-        "本文将介绍在Klipper中对“三角洲”运动模式的打印机进行自动校准的操作。"
+        {
+          "id": "A006-F01",
+          "fact": "如果使用的探针是安装在喷嘴的一侧（即，探针对喷嘴存在xy偏移），需注意在进行过三角洲校准之后会使探针校准的结果无效。"
+        },
+        {
+          "id": "A006-F02",
+          "fact": "打印机设置和校准模型必须一一对应（即，在打印校准模型后，不要再进行DELTA_CALIBRATE或修改打印机参数，否则模型测量无效），再执行下面的命令。"
+        },
+        {
+          "id": "A006-F03",
+          "fact": "在运行增强型三角洲校准之前，必须先运行基本三角洲校准（通过DELTA_CALIBRATE命令）并保存结果（通过SAVE_CONFIG命令）。"
+        }
       ],
       "relevantSources": [
         "06-三角校正.md"
       ],
       "mustInclude": [
-        "三角校正",
-        "本文将介绍在Klipper",
-        "中对",
-        "三角洲",
-        "运动模式的打印机进行自动校"
+        "DELTA_CALIBRATE",
+        "SAVE_CONFIG",
+        "模型测量无效"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A007",
-      "question": "Klipper 文档「床网」里，相关校准或调平步骤有什么关键要求？",
+      "question": "床网的 probe_count 和 mesh_pps 应如何理解，怎样配置方形网格，以及何时会禁用插值？",
       "answerable": true,
-      "expectedAnswer": "床网模块可以用于补偿床面的不规则性，以实现更好的首层均一性。需要注意的是，基于软件的校正无法达到完美的结果，它只能近似地模拟床面的形状。床网模块也无法对机械和电气问题进行补偿。如果一个轴倾斜或探针不准确，那么床网模块将无法从探测过程中获得准确的结果。",
+      "expectedAnswer": "请注意，如果您想要一个方形网格，例如 3x3，可以将指定其为一个整数值，比如 `probe_count: 3`。\n\n请注意，如果 mesh_pps 设置为 0，则禁用网格插值，并且将直接对探测网格进行采样。\n\n`probe_count: 5, 3` *默认值：3, 3* 每个轴上要探测的点数，指定为 X, Y 整数值。",
       "expectedFacts": [
-        "床网模块可以用于补偿床面的不规则性，以实现更好的首层均一性。需要注意的是，基于软件的校正无法达到完美的结果，它只能近似地模拟床面的形状。床网模块也无法对机械和电气问题进行补偿。如果一个轴倾斜或探针不准确，那么床网模块将无法从探测过程中获得准确的结果。"
+        {
+          "id": "A007-F01",
+          "fact": "请注意，如果您想要一个方形网格，例如 3x3，可以将指定其为一个整数值，比如 `probe_count: 3`。"
+        },
+        {
+          "id": "A007-F02",
+          "fact": "请注意，如果 mesh_pps 设置为 0，则禁用网格插值，并且将直接对探测网格进行采样。"
+        },
+        {
+          "id": "A007-F03",
+          "fact": "`probe_count: 5, 3` *默认值：3, 3* 每个轴上要探测的点数，指定为 X, Y 整数值。"
+        }
       ],
       "relevantSources": [
         "07-床网.md"
       ],
       "mustInclude": [
-        "床网",
-        "床网模块可以用于补偿床面的",
-        "不规则性",
-        "以实现更好的首层均一性",
-        "需要注意的是"
+        "probe_count",
+        "mesh_pps",
+        "网格插值"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A008",
-      "question": "Klipper 文档「BL-Touch」里，有什么必须保留的事实？",
+      "question": "配置 BL-Touch 的 touch mode 和收针行为时，需要兼顾哪些兼容性、精度与 EEPROM 风险？",
       "answerable": true,
-      "expectedAnswer": "警告！：在你开始前请避免用你的手指接触 BL-Touch 的探针，因为它对手指的油脂相当敏感。如果你真的触摸需要触碰它，请尽可能小心，以避免弯曲或推动任何东西。",
+      "expectedAnswer": "但是请注意，当`probe_with_touch_mode`设置为True时，一些克隆设备和BL-Touch v2.0（以及更早）可能会降低精度。\n\n如果你有一个 V3.1，不要自动或重复存储输出模式，以避免磨损探针的 EEPROM。\n\n一些 BL-Touch v3.0 和BL-Touch 3.1 设备可能需要在打印机配置文件中配置`probe_with_touch_mode`。\n\n当配置`stow_on_each_sample`为False时，建议将`probe_with_touch_mode`配置为 True。",
       "expectedFacts": [
-        "警告！：在你开始前请避免用你的手指接触 BL-Touch 的探针，因为它对手指的油脂相当敏感。如果你真的触摸需要触碰它，请尽可能小心，以避免弯曲或推动任何东西。"
+        {
+          "id": "A008-F01",
+          "fact": "但是请注意，当`probe_with_touch_mode`设置为True时，一些克隆设备和BL-Touch v2.0（以及更早）可能会降低精度。"
+        },
+        {
+          "id": "A008-F02",
+          "fact": "如果你有一个 V3.1，不要自动或重复存储输出模式，以避免磨损探针的 EEPROM。"
+        },
+        {
+          "id": "A008-F03",
+          "fact": "一些 BL-Touch v3.0 和BL-Touch 3.1 设备可能需要在打印机配置文件中配置`probe_with_touch_mode`。"
+        },
+        {
+          "id": "A008-F04",
+          "fact": "当配置`stow_on_each_sample`为False时，建议将`probe_with_touch_mode`配置为 True。"
+        }
       ],
       "relevantSources": [
         "08-bl-touch.md"
       ],
       "mustInclude": [
-        "BL-Touch",
-        "警告",
-        "在你开始前请避免用你的手指",
-        "接触",
-        "的探针"
+        "probe_with_touch_mode",
+        "EEPROM",
+        "stow_on_each_sample"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "safety_constraint"
     },
     {
       "id": "A009",
-      "question": "Klipper 文档「TMC 驱动器」里，硬件或固件操作需要注意什么？",
+      "question": "调试 TMC 无传感器归位时，轴未到极限、无法停止和低速失效分别意味着什么，应采取什么安全措施？",
       "answerable": true,
-      "expectedAnswer": "这个文档提供了在Klipper上以SPI/UART模式使用Trinamic步进电机驱动器的信息。",
+      "expectedAnswer": "在调整测试中，如果`G28 X0`命令不能完全移动到轴的极限位置，那么在发出任何常规移动命令（例如，`G1`）时要小心。\n\n如果没有停止移动，则立即发出`M112`，停止打印机 - diag/sg_tst 引脚的接线或配置可能有错误，必须在继续之前予以纠正。\n\n对于非常慢的速度（小于10RPM），电机不会产生明显的反电磁场，TMC芯片不能可靠地检测到电机停顿。\n\n确保每次尝试都在轨道中心附近开始（如果需要，发出`M84`，然后手动将滑车移到中心）。",
       "expectedFacts": [
-        "这个文档提供了在Klipper上以SPI/UART模式使用Trinamic步进电机驱动器的信息。"
+        {
+          "id": "A009-F01",
+          "fact": "在调整测试中，如果`G28 X0`命令不能完全移动到轴的极限位置，那么在发出任何常规移动命令（例如，`G1`）时要小心。"
+        },
+        {
+          "id": "A009-F02",
+          "fact": "如果没有停止移动，则立即发出`M112`，停止打印机 - diag/sg_tst 引脚的接线或配置可能有错误，必须在继续之前予以纠正。"
+        },
+        {
+          "id": "A009-F03",
+          "fact": "对于非常慢的速度（小于10RPM），电机不会产生明显的反电磁场，TMC芯片不能可靠地检测到电机停顿。"
+        },
+        {
+          "id": "A009-F04",
+          "fact": "确保每次尝试都在轨道中心附近开始（如果需要，发出`M84`，然后手动将滑车移到中心）。"
+        }
       ],
       "relevantSources": [
         "09-tmc-驱动器.md"
       ],
       "mustInclude": [
-        "TMC 驱动器",
-        "这个文档提供了在Klipp",
-        "er上以SPI/UART模",
-        "式使用Trinamic步进",
-        "电机驱动器的信息"
+        "M112",
+        "10RPM",
+        "M84"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
       "id": "A010",
-      "question": "Klipper 文档「压力提前」里，配置或命令使用有什么关键说明？",
+      "question": "压力提前校准需要满足什么前置条件，怎样写入结果并重启，哪些现象说明设置可能过大？",
       "answerable": true,
-      "expectedAnswer": "本文档提供了关于调整特定喷嘴和耗材“压力提前”配置变量的方法。压力提前功能可以减少漏料。关于如何实现压力提前的更多信息，见运动学文件。",
+      "expectedAnswer": "在使用高加速度和高压力提前设置值下，挤出机或许不能提供足够的扭矩以挤出耗材。\n\n如果压力提前设置值大于1.000而打印质量没有改善，则应考虑关闭压力提前以避免其他打印问题。\n\n为了校准压力提前，打印机必须已经配置完成并可以正常工作。\n\n完成测试后，在配置中的`[extruder]`节中加入`pressure_advance = <calculated_value>`（其中`calculated_value`为前述测试计算出的数值），保存并使用 RESTART 命令重启Klipper以应用配置。",
       "expectedFacts": [
-        "本文档提供了关于调整特定喷嘴和耗材“压力提前”配置变量的方法。压力提前功能可以减少漏料。关于如何实现压力提前的更多信息，见运动学文件。"
+        {
+          "id": "A010-F01",
+          "fact": "在使用高加速度和高压力提前设置值下，挤出机或许不能提供足够的扭矩以挤出耗材。"
+        },
+        {
+          "id": "A010-F02",
+          "fact": "如果压力提前设置值大于1.000而打印质量没有改善，则应考虑关闭压力提前以避免其他打印问题。"
+        },
+        {
+          "id": "A010-F03",
+          "fact": "为了校准压力提前，打印机必须已经配置完成并可以正常工作。"
+        },
+        {
+          "id": "A010-F04",
+          "fact": "完成测试后，在配置中的`[extruder]`节中加入`pressure_advance = <calculated_value>`（其中`calculated_value`为前述测试计算出的数值），保存并使用 RESTART 命令重启Klipper以应用配置。"
+        }
       ],
       "relevantSources": [
         "10-压力提前.md"
       ],
       "mustInclude": [
-        "压力提前",
-        "本文档提供了关于调整特定喷",
-        "嘴和耗材",
-        "配置变量的方法",
-        "压力提前功能可以减少漏料"
+        "pressure_advance",
+        "1.000",
+        "RESTART"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A011",
-      "question": "Klipper 文档「共振补偿」里，相关校准或调平步骤有什么关键要求？",
+      "question": "选择输入整形器时，2HUMP_EI 的适用条件、EI 的平滑风险和低共振频率应如何处理？",
       "answerable": true,
-      "expectedAnswer": "Klipper支持输入整形 -一种可以用来减少打印件上振纹（也被称为echo、ghosting或ripping）的技术。振纹是一种表面打印缺陷，通常在边角的位置表面重复出现，成为一种微妙的水波状纹路：",
+      "expectedAnswer": "如果共振频率足够大（超过50-60赫兹），那么甚至可以尝试测试2HUMP_EI整形器（通过运行上面建议的测试`SET_INPUT_SHAPER SHAPER_TYPE=2HUMP_EI`），但在启用之前要检查下面的章节的注意事项。\n\n请注意，一些整形器，例如2HUMP_EI和3HUMP_EI，不应与shaper_freq = 共振频率一起使用。\n\n值得注意的，特别是在低振铃频率下，EI整形器甚至在较低的加速度下也会造成过多的平滑。\n\n另一个需要考虑的因素是，如果共振频率过低（低于20-25 Hz），则最好增加打印机的刚度或减少运动质量。",
       "expectedFacts": [
-        "Klipper支持输入整形 -一种可以用来减少打印件上振纹（也被称为echo、ghosting或ripping）的技术。振纹是一种表面打印缺陷，通常在边角的位置表面重复出现，成为一种微妙的水波状纹路："
+        {
+          "id": "A011-F01",
+          "fact": "如果共振频率足够大（超过50-60赫兹），那么甚至可以尝试测试2HUMP_EI整形器（通过运行上面建议的测试`SET_INPUT_SHAPER SHAPER_TYPE=2HUMP_EI`），但在启用之前要检查下面的章节的注意事项。"
+        },
+        {
+          "id": "A011-F02",
+          "fact": "请注意，一些整形器，例如2HUMP_EI和3HUMP_EI，不应与shaper_freq = 共振频率一起使用。"
+        },
+        {
+          "id": "A011-F03",
+          "fact": "值得注意的，特别是在低振铃频率下，EI整形器甚至在较低的加速度下也会造成过多的平滑。"
+        },
+        {
+          "id": "A011-F04",
+          "fact": "另一个需要考虑的因素是，如果共振频率过低（低于20-25 Hz），则最好增加打印机的刚度或减少运动质量。"
+        }
       ],
       "relevantSources": [
         "11-共振补偿.md"
       ],
       "mustInclude": [
-        "共振补偿",
-        "Klipper支持输入整形",
-        "一种可以用来减少打印件上振",
-        "也被称为echo",
-        "ghosting或ripp"
+        "2HUMP_EI",
+        "EI整形器",
+        "20-25 Hz"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A012",
-      "question": "Klipper 文档「共振值测量」里，相关校准或调平步骤有什么关键要求？",
+      "question": "进行共振测量和输入整形自动调优时，为什么不建议 ADXL345 使用 I2C，max_accel 如何设置，调优脚本怎样使用？",
       "answerable": true,
-      "expectedAnswer": "MCU Family  微控制器(S)测试  支持的微控制器(S)",
+      "expectedAnswer": "注意，尽管ADXL345文档推荐使用I2C，但其数据吞吐能力不足，不能实现共振测量的要求。\n\n请注意，这不会更新`[printer]` 分段中的`max_accel`值。\n\n因此，建议在`[printer]` 部分设置`max_accel` 时不要超过X轴和Y轴的估计值，并保守一些。\n\nShaper_calbrate.py脚本接受1个或多个输入，可以运行输入整形器的自动调优，并建议适合所有提供的输入的最佳参数。",
       "expectedFacts": [
-        "MCU Family  微控制器(S)测试  支持的微控制器(S)"
+        {
+          "id": "A012-F01",
+          "fact": "注意，尽管ADXL345文档推荐使用I2C，但其数据吞吐能力不足，不能实现共振测量的要求。"
+        },
+        {
+          "id": "A012-F02",
+          "fact": "请注意，这不会更新`[printer]` 分段中的`max_accel`值。"
+        },
+        {
+          "id": "A012-F03",
+          "fact": "因此，建议在`[printer]` 部分设置`max_accel` 时不要超过X轴和Y轴的估计值，并保守一些。"
+        },
+        {
+          "id": "A012-F04",
+          "fact": "Shaper_calbrate.py脚本接受1个或多个输入，可以运行输入整形器的自动调优，并建议适合所有提供的输入的最佳参数。"
+        }
       ],
       "relevantSources": [
         "12-共振值测量.md"
       ],
       "mustInclude": [
-        "共振值测量",
-        "微控制器",
-        "测试",
-        "支持的微控制器"
+        "I2C",
+        "max_accel",
+        "Shaper_calbrate.py"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A013",
-      "question": "Klipper 文档「旋转距离」里，配置或命令使用有什么关键说明？",
+      "question": "配置 rotation_distance 时，full_steps_per_rotation 和 gear_ratio 在不确定时应如何处理，齿轮挤出机还需要什么？",
       "answerable": true,
-      "expectedAnswer": "Klipper 上的步进电机驱动器在每个 stepper 配置分段 中都需要定义一个 rotationdistance 参数。 rotationdistance 是步进电机旋转一整圈时轴移动的距离。本文档描述了如何配置此值。",
+      "expectedAnswer": "如果不确定，请不要在配置文件中设置 full_steps_per_rotation 并在上面的公式中使用 200。\n\n大多数步进电机没有齿轮箱--如果不确定，就不要在配置中设置`gear_ratio`。\n\nKlipper 上的步进电机驱动器在每个 stepper 配置分段 中都需要定义一个 `rotation_distance` 参数。\n\n如果挤出机使用齿轮，则还需要确定和设置挤出机的齿轮比。",
       "expectedFacts": [
-        "Klipper 上的步进电机驱动器在每个 stepper 配置分段 中都需要定义一个 rotationdistance 参数。 rotationdistance 是步进电机旋转一整圈时轴移动的距离。本文档描述了如何配置此值。"
+        {
+          "id": "A013-F01",
+          "fact": "如果不确定，请不要在配置文件中设置 full_steps_per_rotation 并在上面的公式中使用 200。"
+        },
+        {
+          "id": "A013-F02",
+          "fact": "大多数步进电机没有齿轮箱--如果不确定，就不要在配置中设置`gear_ratio`。"
+        },
+        {
+          "id": "A013-F03",
+          "fact": "Klipper 上的步进电机驱动器在每个 stepper 配置分段 中都需要定义一个 `rotation_distance` 参数。"
+        },
+        {
+          "id": "A013-F04",
+          "fact": "如果挤出机使用齿轮，则还需要确定和设置挤出机的齿轮比。"
+        }
       ],
       "relevantSources": [
         "13-旋转距离.md"
       ],
       "mustInclude": [
-        "旋转距离",
-        "上的步进电机驱动器在每个",
-        "配置分段",
-        "中都需要定义一个",
-        "参数"
+        "rotation_distance",
+        "full_steps_per_rotation",
+        "gear_ratio"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A014",
-      "question": "Klipper 文档「偏斜校正」里，有什么必须保留的事实？",
+      "question": "启用偏斜校正前后应先做哪些机械和 G-Code 处理，并如何避免打印边界问题？",
       "answerable": true,
-      "expectedAnswer": "基于软件的偏斜校正可以帮助解决打印机装配不完全方形造成的尺寸不准确问题。请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。",
+      "expectedAnswer": "还建议在结束打印 G-Code 中发出 `SET_SKEW CLEAR=1`。\n\n请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。\n\n建议在使用`[skew_correction]`时将打印物件远离打印机边缘。\n\n由于偏斜校正的性质，建议之在归位和任何类型的靠近打印区域边缘的运动（如清除或喷嘴擦除）完成之后的开始打印 G-Code 中配置偏斜校正。",
       "expectedFacts": [
-        "基于软件的偏斜校正可以帮助解决打印机装配不完全方形造成的尺寸不准确问题。请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。"
+        {
+          "id": "A014-F01",
+          "fact": "还建议在结束打印 G-Code 中发出 `SET_SKEW CLEAR=1`。"
+        },
+        {
+          "id": "A014-F02",
+          "fact": "请注意，如果您的打印机严重偏斜，强烈建议在应用基于软件的校正之前，首先使用机械手段使打印机尽可能的方形。"
+        },
+        {
+          "id": "A014-F03",
+          "fact": "建议在使用`[skew_correction]`时将打印物件远离打印机边缘。"
+        },
+        {
+          "id": "A014-F04",
+          "fact": "由于偏斜校正的性质，建议之在归位和任何类型的靠近打印区域边缘的运动（如清除或喷嘴擦除）完成之后的开始打印 G-Code 中配置偏斜校正。"
+        }
       ],
       "relevantSources": [
         "14-偏斜校正.md"
       ],
       "mustInclude": [
-        "偏斜校正",
-        "基于软件的偏斜校正可以帮助",
-        "解决打印机装配不完全方形造",
-        "成的尺寸不准确问题",
-        "请注意"
+        "SET_SKEW CLEAR=1",
+        "机械手段",
+        "打印机边缘"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "calibration_procedure"
     },
     {
       "id": "A015",
-      "question": "Klipper 文档「限位相位」里，相关校准或调平步骤有什么关键要求？",
+      "question": "endstop phase 功能有哪些运动学限制，出现 incorrect phase 错误时说明什么，校准命令顺序是什么？",
       "answerable": true,
-      "expectedAnswer": "该文档介绍了Klipper的步进电机相态校准限位位置的功能（下称：相态修正）。该功能可以增强传统限位开关的准确性。使用带有运行期间设置的步进电机驱动器，如Trinamic，可发挥该功能的最大作用。",
+      "expectedAnswer": "在Corexy打印机的XY端止器上使用此功能是无效的(因为Corexy运动学上的单个步进器不能确定XY位置)。\n\n如果系统反馈\"Endstop stepper_z incorrect phase\"（stepper_z相位与限位开关不一致）错误信息，则限位开关的精度太差。\n\n使用这种方式时，需要在配置文件中手动设置\"trigger_phase\"（详见配置参考 ）。\n\n之后，依次执行RESTART ，运行`G28`和`ENDSTOP_PHASE_CALIBRATE`。",
       "expectedFacts": [
-        "该文档介绍了Klipper的步进电机相态校准限位位置的功能（下称：相态修正）。该功能可以增强传统限位开关的准确性。使用带有运行期间设置的步进电机驱动器，如Trinamic，可发挥该功能的最大作用。"
+        {
+          "id": "A015-F01",
+          "fact": "在Corexy打印机的XY端止器上使用此功能是无效的(因为Corexy运动学上的单个步进器不能确定XY位置)。"
+        },
+        {
+          "id": "A015-F02",
+          "fact": "如果系统反馈\"Endstop stepper_z incorrect phase\"（stepper_z相位与限位开关不一致）错误信息，则限位开关的精度太差。"
+        },
+        {
+          "id": "A015-F03",
+          "fact": "使用这种方式时，需要在配置文件中手动设置\"trigger_phase\"（详见配置参考 ）。"
+        },
+        {
+          "id": "A015-F04",
+          "fact": "之后，依次执行RESTART ，运行`G28`和`ENDSTOP_PHASE_CALIBRATE`。"
+        }
       ],
       "relevantSources": [
         "15-限位相位.md"
       ],
       "mustInclude": [
-        "限位相位",
-        "该文档介绍了Klipper",
-        "的步进电机相态校准限位位置",
-        "的功能",
-        "下称"
+        "Endstop stepper_z incorrect phase",
+        "trigger_phase",
+        "ENDSTOP_PHASE_CALIBRATE"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
       "id": "A016",
-      "question": "Klipper 文档「CAN 总线」里，硬件或固件操作需要注意什么？",
+      "question": "搭建 Klipper CAN 总线时，终端电阻如何配置和核验，canbus_query.py 为什么可能找不到设备？",
       "answerable": true,
-      "expectedAnswer": "Klipper目前支持STM32、SAME5x和rp2040芯片上的CAN。此外，微控制器芯片必须位于具有CAN收发器的板上。",
+      "expectedAnswer": "注意，`canbus_query.py` 工具只会只报告未初始化的设备—如果Klipper（或类似工具）已经配置了设备，那么它不会在列表中。\n\nCAN总线在 CANH 和 CANL 导线之间必须两个 120 欧姆的电阻。\n\n务必检查CAN总线上所有器件的原理图，以验证该总线上是否有且只有两个120欧姆电阻。\n\n目前，CAN总线的频率需要在 \"make menuconfig \"中指定。",
       "expectedFacts": [
-        "Klipper目前支持STM32、SAME5x和rp2040芯片上的CAN。此外，微控制器芯片必须位于具有CAN收发器的板上。"
+        {
+          "id": "A016-F01",
+          "fact": "注意，`canbus_query.py` 工具只会只报告未初始化的设备—如果Klipper（或类似工具）已经配置了设备，那么它不会在列表中。"
+        },
+        {
+          "id": "A016-F02",
+          "fact": "CAN总线在 CANH 和 CANL 导线之间必须两个 120 欧姆的电阻。"
+        },
+        {
+          "id": "A016-F03",
+          "fact": "务必检查CAN总线上所有器件的原理图，以验证该总线上是否有且只有两个120欧姆电阻。"
+        },
+        {
+          "id": "A016-F04",
+          "fact": "目前，CAN总线的频率需要在 \"make menuconfig \"中指定。"
+        }
       ],
       "relevantSources": [
         "16-can-总线.md"
       ],
       "mustInclude": [
-        "CAN 总线",
-        "Klipper目前支持ST",
-        "SAME5x和rp2040",
-        "芯片上的CAN",
-        "此外"
+        "canbus_query.py",
+        "120 欧姆",
+        "make menuconfig"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A017",
-      "question": "Klipper 文档「CanBus故障排除」里，硬件或固件操作需要注意什么？",
+      "question": "CAN 通信出现间歇错误时，txqueuelen 应怎样调整，队列过大有什么风险，还应检查哪些物理布线问题？",
       "answerable": true,
-      "expectedAnswer": "确认CAN总线接线上的所有插头和线夹都已完全固定。打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。",
+      "expectedAnswer": "建议使用 `txqueuelen 128` 配置 can0 设备 来增加该大小。\n\n）如果单个 CAN 总线上有 5 个或更多 Klipper MCU，则可能需要将`txqueuelen`增加到建议值 128 以上。\n\n大得多的队列可能会导致消息往返时间出现过度峰值，从而导致无法恢复的错误。\n\n打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。",
       "expectedFacts": [
-        "确认CAN总线接线上的所有插头和线夹都已完全固定。打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。"
+        {
+          "id": "A017-F01",
+          "fact": "建议使用 `txqueuelen 128` 配置 can0 设备 来增加该大小。"
+        },
+        {
+          "id": "A017-F02",
+          "fact": "）如果单个 CAN 总线上有 5 个或更多 Klipper MCU，则可能需要将`txqueuelen`增加到建议值 128 以上。"
+        },
+        {
+          "id": "A017-F03",
+          "fact": "大得多的队列可能会导致消息往返时间出现过度峰值，从而导致无法恢复的错误。"
+        },
+        {
+          "id": "A017-F04",
+          "fact": "打印机刀头的移动可能会挤压CAN总线布线，导致不良的线缆卷曲或未固定的插头，从而导致间歇性通信错误。"
+        }
       ],
       "relevantSources": [
         "17-canbus故障排除.md"
       ],
       "mustInclude": [
-        "CanBus故障排除",
-        "确认CAN总线接线上的所有",
-        "插头和线夹都已完全固定",
-        "打印机刀头的移动可能会挤压",
-        "CAN总线布线"
+        "txqueuelen 128",
+        "5 个或更多",
+        "间歇性通信错误"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
       "id": "A018",
-      "question": "Klipper 文档「底层引导程序」里，有什么必须保留的事实？",
+      "question": "为控制板选择和刷写引导程序时，57600 波特率、SD 卡更新限制和 STM32 刷写工具需要注意什么？",
       "answerable": true,
-      "expectedAnswer": "本文档介绍Klipper支持的用于微控制器的底层引导程序（bootloader）。",
+      "expectedAnswer": "注意，一些 \"Melzi \"风格的板子预载了一个使用57600波特率的引导程序。\n\n在用这个引导程序刷写SKR Mini E3之前，你需要知道之后你将不能再通过SD卡更新固件。\n\n建议使用ST-Link编程器来刷写CanBoot，然而，在STM32F103设备上使用`stm32flash` ，在STM32F042/STM32F072设备上使用`dfu-util` ，应该也是可以刷写的。\n\n要访问ROM，应该把\"boot 0\"引脚连接到高电平，\"boot 1\"引脚连接到低电平，然后重置设备。",
       "expectedFacts": [
-        "本文档介绍Klipper支持的用于微控制器的底层引导程序（bootloader）。"
+        {
+          "id": "A018-F01",
+          "fact": "注意，一些 \"Melzi \"风格的板子预载了一个使用57600波特率的引导程序。"
+        },
+        {
+          "id": "A018-F02",
+          "fact": "在用这个引导程序刷写SKR Mini E3之前，你需要知道之后你将不能再通过SD卡更新固件。"
+        },
+        {
+          "id": "A018-F03",
+          "fact": "建议使用ST-Link编程器来刷写CanBoot，然而，在STM32F103设备上使用`stm32flash` ，在STM32F042/STM32F072设备上使用`dfu-util` ，应该也是可以刷写的。"
+        },
+        {
+          "id": "A018-F04",
+          "fact": "要访问ROM，应该把\"boot 0\"引脚连接到高电平，\"boot 1\"引脚连接到低电平，然后重置设备。"
+        }
       ],
       "relevantSources": [
         "18-底层引导程序.md"
       ],
       "mustInclude": [
-        "底层引导程序",
-        "本文档介绍Klipper支",
-        "持的用于微控制器的底层引导",
-        "程序"
+        "57600",
+        "SD卡更新固件",
+        "ST-Link"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "safety_constraint"
     },
     {
       "id": "A019",
-      "question": "Klipper 文档「引导加载程序条目」里，硬件或固件操作需要注意什么？",
+      "question": "通过 CAN 请求进入 BootLoader 时，DFU 模式有什么硬件风险，消息格式和接口参数有哪些约束，怎样提高可靠性？",
       "answerable": true,
-      "expectedAnswer": "可以通过以下方式之一指示Klipper重新启动到BootLoader：",
+      "expectedAnswer": "请注意，在某些主板上，如Octopus Pro v1，进入DFU模式可能会导致不必要的操作(如在DFU模式下为加热器供电)。\n\n请注意，根据MCU Protocol，，这不是一个有效的消息，但仍然尊重同步字符(`~`)。\n\n如果使用`can0`，则可以省略`-i`和`<can_iFace>`。\n\n由于该消息必须是接收该消息的“块”中的唯一内容，如果其他工具先前正在访问该串口，则添加额外的同步字符前缀可以提高可靠性。",
       "expectedFacts": [
-        "可以通过以下方式之一指示Klipper重新启动到BootLoader："
+        {
+          "id": "A019-F01",
+          "fact": "请注意，在某些主板上，如Octopus Pro v1，进入DFU模式可能会导致不必要的操作(如在DFU模式下为加热器供电)。"
+        },
+        {
+          "id": "A019-F02",
+          "fact": "请注意，根据MCU Protocol，，这不是一个有效的消息，但仍然尊重同步字符(`~`)。"
+        },
+        {
+          "id": "A019-F03",
+          "fact": "如果使用`can0`，则可以省略`-i`和`<can_iFace>`。"
+        },
+        {
+          "id": "A019-F04",
+          "fact": "由于该消息必须是接收该消息的“块”中的唯一内容，如果其他工具先前正在访问该串口，则添加额外的同步字符前缀可以提高可靠性。"
+        }
       ],
       "relevantSources": [
         "19-引导加载程序条目.md"
       ],
       "mustInclude": [
-        "引导加载程序条目",
-        "可以通过以下方式之一指示K",
-        "lipper重新启动到"
+        "DFU模式",
+        "有效的消息",
+        "can0",
+        "同步字符"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "command_usage"
     },
     {
       "id": "A020",
-      "question": "Klipper 文档「通过SD卡更新」里，硬件或固件操作需要注意什么？",
+      "question": "使用 flash-sdcard 工具时，SDIO 控制板、SPI 引脚、默认波特率和只验证模式分别有什么要求？",
       "answerable": true,
-      "expectedAnswer": "当今许多流行的控制器板都带有能够通过 SD 卡更新固件的引导加载程序。 虽然这在很多情况下都很方便，但这些引导加载程序通常不提供其他方式来更新固件。 如果您的电路板安装在很难插入SD卡的位置或者您需要经常更新固件，这可能会很麻烦。 在 Klipper 最初刷入控制器后，可以将新固件通过网络传输到 SD 卡并通过 ssh 启动刷写过程。",
+      "expectedAnswer": "使用SDIO的控制，如Flymaker Flyboard和MKS Robin Nano V1/V2，将不能在SDIO模式下工作。\n\n`spi_pins`：这应该是 3 个逗号分隔的引脚，以 `miso,mosi,sclk` 的格式连接到 SD 卡。\n\n上述命令假设您的 MCU 以默认波特率 250000 连接并且固件位于`~/klipper/out/klipper.bin`。\n\n`-c` 选项用于执行检查或只验证的操作，以测试控制板是否正确运行指定的固件。",
       "expectedFacts": [
-        "当今许多流行的控制器板都带有能够通过 SD 卡更新固件的引导加载程序。 虽然这在很多情况下都很方便，但这些引导加载程序通常不提供其他方式来更新固件。 如果您的电路板安装在很难插入SD卡的位置或者您需要经常更新固件，这可能会很麻烦。 在 Klipper 最初刷入控制器后，可以将新固件通过网络传输到 SD 卡并通过 ssh 启动刷写过程。"
+        {
+          "id": "A020-F01",
+          "fact": "使用SDIO的控制，如Flymaker Flyboard和MKS Robin Nano V1/V2，将不能在SDIO模式下工作。"
+        },
+        {
+          "id": "A020-F02",
+          "fact": "`spi_pins`：这应该是 3 个逗号分隔的引脚，以 `miso,mosi,sclk` 的格式连接到 SD 卡。"
+        },
+        {
+          "id": "A020-F03",
+          "fact": "上述命令假设您的 MCU 以默认波特率 250000 连接并且固件位于`~/klipper/out/klipper.bin`。"
+        },
+        {
+          "id": "A020-F04",
+          "fact": "`-c` 选项用于执行检查或只验证的操作，以测试控制板是否正确运行指定的固件。"
+        }
       ],
       "relevantSources": [
         "20-通过sd卡更新.md"
       ],
       "mustInclude": [
-        "通过SD卡更新",
-        "当今许多流行的控制器板都带",
-        "有能够通过",
-        "卡更新固件的引导加载程序",
-        "虽然这在很多情况下都很方便"
+        "SDIO",
+        "spi_pins",
+        "250000",
+        "-c"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A021",
-      "question": "Klipper 文档「RPi 微控制器」里，配置或命令使用有什么关键说明？",
+      "question": "把树莓派作为 Klipper 辅助 MCU 时，权限、I2C 速率、GPIO 使用范围和进程启动顺序有哪些要求？",
       "answerable": true,
-      "expectedAnswer": "通常情况下，专门用于控制3D打印机的MCU有有限的、预先配置好的引脚来管理主要的打印功能（热敏电阻、挤出机、步进器...）。使用安装了Klipper的RPi作为辅助MCU，可以直接使用klipper内的GPIO和RPi的总线（i2c，spi），而不需要使用Octoprint插件（如果使用的话）或外部程序，从而能够控制打印GCODE内的一切。",
+      "expectedAnswer": "如果klippy.log在试图连接到`/tmp/klipper_host_mcu`时输出 \"Permission denied\" 错误，那么你需要将你的用户添加到tty用户组。\n\n如果计划使用I2C与 MPU 加速度计进行连接，还需要将波特率设置为400000，方法是：在`/boot/config.txt`中添加/取消注释`dtparam=i2c_arm=on,i2c_arm_baudrate=400000`（在某些发行版中需要修改`/boot/firmware/config.txt`）。\n\n*警告：*只有标记为`unused`的 gpio 才可以被使用。\n\n如果你想把主机作为一个辅助MCU，klipper_mcu进程必须在klippy进程之前运行。",
       "expectedFacts": [
-        "通常情况下，专门用于控制3D打印机的MCU有有限的、预先配置好的引脚来管理主要的打印功能（热敏电阻、挤出机、步进器...）。使用安装了Klipper的RPi作为辅助MCU，可以直接使用klipper内的GPIO和RPi的总线（i2c，spi），而不需要使用Octoprint插件（如果使用的话）或外部程序，从而能够控制打印GCODE内的一切。"
+        {
+          "id": "A021-F01",
+          "fact": "如果klippy.log在试图连接到`/tmp/klipper_host_mcu`时输出 \"Permission denied\" 错误，那么你需要将你的用户添加到tty用户组。"
+        },
+        {
+          "id": "A021-F02",
+          "fact": "如果计划使用I2C与 MPU 加速度计进行连接，还需要将波特率设置为400000，方法是：在`/boot/config.txt`中添加/取消注释`dtparam=i2c_arm=on,i2c_arm_baudrate=400000`（在某些发行版中需要修改`/boot/firmware/config.txt`）。"
+        },
+        {
+          "id": "A021-F03",
+          "fact": "*警告：*只有标记为`unused`的 gpio 才可以被使用。"
+        },
+        {
+          "id": "A021-F04",
+          "fact": "如果你想把主机作为一个辅助MCU，klipper_mcu进程必须在klippy进程之前运行。"
+        }
       ],
       "relevantSources": [
         "21-rpi-微控制器.md"
       ],
       "mustInclude": [
-        "RPi 微控制器",
-        "通常情况下",
-        "专门用于控制3D打印机的M",
-        "CU有有限的",
-        "预先配置好的引脚来管理主要"
+        "Permission denied",
+        "400000",
+        "unused",
+        "klipper_mcu"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A022",
-      "question": "Klipper 文档「OctoPrint for Klipper」里，硬件或固件操作需要注意什么？",
+      "question": "OctoPrint 连接 Klipper 前后应检查哪些条件，连接成功后如何验证，安装过程还有什么网络要求？",
       "answerable": true,
-      "expectedAnswer": "Klipper 有几个不同的前端选择，Octoprint 是最早也是最原始的Klipper 前端。这篇文档会给一个大致的概览关于如何在Octoprint 上安装Klipper。",
+      "expectedAnswer": "当成功连接，选择\"Terminal\" 窗口并且输入\"status\"（不要有括号）到命令行窗口中并且点击\"Send\"。\n\nOctoPrint 网页服务器需要配置和Klipper Host 软件的连接。\n\n需要确认OctoPi 正常启动并且OctoPrint 网页服务器正常工作。\n\n这些操作会需要互联网连接并且可能需要几分钟来完成。",
       "expectedFacts": [
-        "Klipper 有几个不同的前端选择，Octoprint 是最早也是最原始的Klipper 前端。这篇文档会给一个大致的概览关于如何在Octoprint 上安装Klipper。"
+        {
+          "id": "A022-F01",
+          "fact": "当成功连接，选择\"Terminal\" 窗口并且输入\"status\"（不要有括号）到命令行窗口中并且点击\"Send\"。"
+        },
+        {
+          "id": "A022-F02",
+          "fact": "OctoPrint 网页服务器需要配置和Klipper Host 软件的连接。"
+        },
+        {
+          "id": "A022-F03",
+          "fact": "需要确认OctoPi 正常启动并且OctoPrint 网页服务器正常工作。"
+        },
+        {
+          "id": "A022-F04",
+          "fact": "这些操作会需要互联网连接并且可能需要几分钟来完成。"
+        }
       ],
       "relevantSources": [
         "22-octoprint-for-klipper.md"
       ],
       "mustInclude": [
-        "OctoPrint for Klipper",
-        "有几个不同的前端选择",
-        "是最早也是最原始的Klip",
-        "前端",
-        "这篇文档会给一个大致的概览"
+        "OctoPrint",
+        "status",
+        "互联网连接"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A023",
-      "question": "Klipper 文档「切片软件」里，配置或命令使用有什么关键说明？",
+      "question": "为 Klipper 配置切片软件时，KISSlicer 的 PreloadVE、开始结束动作、自动加热代码和大回抽值应如何处理？",
       "answerable": true,
-      "expectedAnswer": "本文档提供了与 Klipper 一起使用的一些切片软件配置技巧。 Klipper 常用的切片软件有 Slic3r、Cura、Simplify3D 等。",
+      "expectedAnswer": "如果使用 KISSlicer 切片软件，那么需要把 \"PreloadVE \"设为0并考虑使用Klipper的提前压力代替。\n\n在 Klipper 的配置中定义这些动作可能会简化打印机的开始和结束步骤的配置，因为修改不需要重新切片。\n\n还要注意，当某些条件不满足时，这些切片软件会插入自己的加热代码。\n\n然而，如果切片软件中配置了一个大的回抽值(例如，5毫米或更大)，可能会发现期望的回抽速度受到了限制。",
       "expectedFacts": [
-        "本文档提供了与 Klipper 一起使用的一些切片软件配置技巧。 Klipper 常用的切片软件有 Slic3r、Cura、Simplify3D 等。"
+        {
+          "id": "A023-F01",
+          "fact": "如果使用 KISSlicer 切片软件，那么需要把 \"PreloadVE \"设为0并考虑使用Klipper的提前压力代替。"
+        },
+        {
+          "id": "A023-F02",
+          "fact": "在 Klipper 的配置中定义这些动作可能会简化打印机的开始和结束步骤的配置，因为修改不需要重新切片。"
+        },
+        {
+          "id": "A023-F03",
+          "fact": "还要注意，当某些条件不满足时，这些切片软件会插入自己的加热代码。"
+        },
+        {
+          "id": "A023-F04",
+          "fact": "然而，如果切片软件中配置了一个大的回抽值(例如，5毫米或更大)，可能会发现期望的回抽速度受到了限制。"
+        }
       ],
       "relevantSources": [
         "23-切片软件.md"
       ],
       "mustInclude": [
-        "切片软件",
-        "本文档提供了与",
-        "一起使用的一些切片软件配置",
-        "技巧",
-        "常用的切片软件有"
+        "PreloadVE",
+        "开始和结束步骤",
+        "5毫米"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
       "id": "A024",
-      "question": "Klipper 文档「G-Codes」里，配置或命令使用有什么关键说明？",
+      "question": "Klipper 中 FIRMWARE_RESTART、加速度计连接测试和 ANGLE_CALIBRATE 分别用于什么场景？",
       "answerable": true,
-      "expectedAnswer": "本文档描述了 Klipper 支持的命令。这些命令可以输入到 OctoPrint 终端中。",
+      "expectedAnswer": "`FIRMWARE_RESTART`：这类似于重启命令，但它也清除了微控制器的任何错误状态。\n\n该命令对于测试与ADXL345加速度计的连接非常有用：返回的数值之一应该是自由落体加速度（+/-芯片的一些噪声）。\n\n`ANGLE_CALIBRATE CHIP=<芯片名>`：在指定传感器上执行角度校准（必须有一个`[angle 芯片名]`的配置分段，并指定一个`stepper`参数）。",
       "expectedFacts": [
-        "本文档描述了 Klipper 支持的命令。这些命令可以输入到 OctoPrint 终端中。"
+        {
+          "id": "A024-F01",
+          "fact": "`FIRMWARE_RESTART`：这类似于重启命令，但它也清除了微控制器的任何错误状态。"
+        },
+        {
+          "id": "A024-F02",
+          "fact": "该命令对于测试与ADXL345加速度计的连接非常有用：返回的数值之一应该是自由落体加速度（+/-芯片的一些噪声）。"
+        },
+        {
+          "id": "A024-F03",
+          "fact": "`ANGLE_CALIBRATE CHIP=<芯片名>`：在指定传感器上执行角度校准（必须有一个`[angle 芯片名]`的配置分段，并指定一个`stepper`参数）。"
+        }
       ],
       "relevantSources": [
         "24-g-codes.md"
       ],
       "mustInclude": [
-        "G-Codes",
-        "本文档描述了",
-        "支持的命令",
-        "这些命令可以输入到",
-        "终端中"
+        "FIRMWARE_RESTART",
+        "ADXL345",
+        "ANGLE_CALIBRATE"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "command_usage"
     },
     {
       "id": "A025",
-      "question": "Klipper 文档「配置参考」里，配置或命令使用有什么关键说明？",
+      "question": "配置 I2C、Palette 2、SX1509 和具名 ADXL345 时有哪些明确限制？",
       "answerable": true,
-      "expectedAnswer": "本文档是 Klipper 配置文件中可用配置分段的参考。",
+      "expectedAnswer": "请注意，Klipper当前的微控制器对I2C的支持通常不能容忍线路噪声。\n\n不要和 Octoprint 的 Palette 2插件一起使用这个模块，因为它们会发生冲突，造成初始化和打印失败。\n\n由于 I2C 通信本身的延迟，不应将 SX1509 引脚用作步进电机的 enable （启用)、step（步进）或 dir （方向）引脚或任何其他需要快速 bit-banging（位拆裂）的引脚。\n\n默认的芯片名称为 \"default\"，但您也可以指定一个明确的名称（例如，[adxl345 芯片名称]）。",
       "expectedFacts": [
-        "本文档是 Klipper 配置文件中可用配置分段的参考。"
+        {
+          "id": "A025-F01",
+          "fact": "请注意，Klipper当前的微控制器对I2C的支持通常不能容忍线路噪声。"
+        },
+        {
+          "id": "A025-F02",
+          "fact": "不要和 Octoprint 的 Palette 2插件一起使用这个模块，因为它们会发生冲突，造成初始化和打印失败。"
+        },
+        {
+          "id": "A025-F03",
+          "fact": "由于 I2C 通信本身的延迟，不应将 SX1509 引脚用作步进电机的 enable （启用)、step（步进）或 dir （方向）引脚或任何其他需要快速 bit-banging（位拆裂）的引脚。"
+        },
+        {
+          "id": "A025-F04",
+          "fact": "默认的芯片名称为 \"default\"，但您也可以指定一个明确的名称（例如，[adxl345 芯片名称]）。"
+        }
       ],
       "relevantSources": [
         "25-配置参考.md"
       ],
       "mustInclude": [
-        "配置参考",
-        "本文档是",
-        "配置文件中可用配置分段的参"
+        "I2C",
+        "Palette 2",
+        "SX1509",
+        "adxl345"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "safety_constraint"
     },
     {
       "id": "A026",
-      "question": "Klipper 文档「配置变更」里，配置或命令使用有什么关键说明？",
+      "question": "在宏中读取探针和配置状态时，PROBE、QUERY_PROBE、settings 与 heater power 字段分别有什么使用约束？",
       "answerable": true,
-      "expectedAnswer": "本文档涵盖了软件更新中对配置文件不向后兼容的部分。在升级 Klipper 时，最好也查看一下这份文档。",
+      "expectedAnswer": "请注意，由于模板展开的顺序，在宏中使用时必须在包含此引用的宏之前运行 PROBE（或类似）命令。\n\n请注意，如果在宏中使用它，根据模板展开的顺序，必须在包含此引用的宏之前运行 QUERY_PROBE 命令。\n\n`settings.<分段>.<选项>`：返回最后一次软件启动或重启时给定的配置文件设置（或默认值）。\n\n`power`：与加热器相关的 PWM 引脚的最后设置（0.0和1.0之间的数值）。",
       "expectedFacts": [
-        "本文档涵盖了软件更新中对配置文件不向后兼容的部分。在升级 Klipper 时，最好也查看一下这份文档。"
-      ],
-      "relevantSources": [
-        "26-配置变更.md"
-      ],
-      "mustInclude": [
-        "配置变更",
-        "本文档涵盖了软件更新中对配",
-        "置文件不向后兼容的部分",
-        "在升级",
-        "最好也查看一下这份文档"
-      ],
-      "evaluationType": "single_doc_fact"
-    },
-    {
-      "id": "A027",
-      "question": "Klipper 文档「状态参考」里，配置或命令使用有什么关键说明？",
-      "answerable": true,
-      "expectedAnswer": "本文档是可用于 Klipper 宏、显示字段以及API服务器 的打印机状态信息的参考。",
-      "expectedFacts": [
-        "本文档是可用于 Klipper 宏、显示字段以及API服务器 的打印机状态信息的参考。"
+        {
+          "id": "A026-F01",
+          "fact": "请注意，由于模板展开的顺序，在宏中使用时必须在包含此引用的宏之前运行 PROBE（或类似）命令。"
+        },
+        {
+          "id": "A026-F02",
+          "fact": "请注意，如果在宏中使用它，根据模板展开的顺序，必须在包含此引用的宏之前运行 QUERY_PROBE 命令。"
+        },
+        {
+          "id": "A026-F03",
+          "fact": "`settings.<分段>.<选项>`：返回最后一次软件启动或重启时给定的配置文件设置（或默认值）。"
+        },
+        {
+          "id": "A026-F04",
+          "fact": "`power`：与加热器相关的 PWM 引脚的最后设置（0.0和1.0之间的数值）。"
+        }
       ],
       "relevantSources": [
         "27-状态参考.md"
       ],
       "mustInclude": [
-        "状态参考",
-        "本文档是可用于",
-        "显示字段",
-        "以及",
-        "API服务器"
+        "PROBE",
+        "QUERY_PROBE",
+        "settings.",
+        "power"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "config_query"
     },
     {
-      "id": "A028",
-      "question": "Klipper 文档「常见问题」里，配置或命令使用有什么关键说明？",
+      "id": "A027",
+      "question": "Klipper 常见故障排查中，USB 5V、主机高负载、电机禁用和空载运动测试分别应注意什么？",
       "answerable": true,
-      "expectedAnswer": "在上述命令中找到的名称是稳定的，可以在配置文件中使用它，同时可用于刷写微控制器的代码。 例如，一个 flash 命令：",
+      "expectedAnswer": "(另外，如果微控制器主板不能配置其供电来源，也可以修改USB电缆，使其主机和微控制器之间不共享5V电源。\n\n如果在打印过程中，主机也在执行密集型的通用计算任务（如硬盘碎片整理、3D渲染、大量swapping （虚拟内存交换）等），可能会导致 Klipper 报告打印错误。\n\n如果电机被禁用（通过 M84 或 M18 命令），那么电机将需要在运动前再次归位。\n\n这可能有助于调整步进电机电流、加速度和速度等设置，而不需要实际打印东西和浪费材料：只要在 `GET_POSITION `命令之间运行一些高速移动。",
       "expectedFacts": [
-        "在上述命令中找到的名称是稳定的，可以在配置文件中使用它，同时可用于刷写微控制器的代码。 例如，一个 flash 命令："
+        {
+          "id": "A027-F01",
+          "fact": "(另外，如果微控制器主板不能配置其供电来源，也可以修改USB电缆，使其主机和微控制器之间不共享5V电源。"
+        },
+        {
+          "id": "A027-F02",
+          "fact": "如果在打印过程中，主机也在执行密集型的通用计算任务（如硬盘碎片整理、3D渲染、大量swapping （虚拟内存交换）等），可能会导致 Klipper 报告打印错误。"
+        },
+        {
+          "id": "A027-F03",
+          "fact": "如果电机被禁用（通过 M84 或 M18 命令），那么电机将需要在运动前再次归位。"
+        },
+        {
+          "id": "A027-F04",
+          "fact": "这可能有助于调整步进电机电流、加速度和速度等设置，而不需要实际打印东西和浪费材料：只要在 `GET_POSITION `命令之间运行一些高速移动。"
+        }
       ],
       "relevantSources": [
         "28-常见问题.md"
       ],
       "mustInclude": [
-        "常见问题",
-        "在上述命令中找到的名称是稳",
-        "定的",
-        "可以在配置文件中使用它",
-        "同时可用于刷写微控制器的代"
+        "5V电源",
+        "密集型",
+        "M84",
+        "GET_POSITION"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "troubleshooting"
     },
     {
-      "id": "A029",
-      "question": "Klipper 文档「功能」里，有什么必须保留的事实？",
+      "id": "A028",
+      "question": "Klipper 对本地显示器、现有 RepRap 硬件、TMC 驱动器和微控制器执行时间表提供了哪些能力？",
       "answerable": true,
-      "expectedAnswer": "高精度步进运动。Klipper使用一个应用处理器（例如低成本的树莓派）来计算打印机运动。应用处理器决定何时对每个步进电机发出步进信号，压缩这些事件，并将它们发送到微控制器。微处理器将会把每个事件按请求时间执行。每一个步进事件被以25毫秒或更高的精度安排。Klipper不使用运动估计，例如 Bresenham算法，而是通过加速度与机械运动物理计算精确的步进时间。更精准的步进电机运动意味着打印机更安静和稳定的运行。",
+      "expectedAnswer": "支持直接连接到打印机的普通LCD显示器。还提供了一个默认的菜单。显示器和菜单的内容可以通过配置文件完全定制。\n\n现有的“reprap”类打印机不需要改动任何硬件就可以运行 Klipper，只需要加一个树莓派。\n\n支持TMC2130、TMC2208/TMC2224、TMC2209、TMC2660和TMC5160步进电机驱动器的运行时配置。\n\nKlipper 微控制器代码旨在忠实地遵循 Klipper 主机软件提供的时间表（或在无法遵循时突出显示提醒用户）。",
       "expectedFacts": [
-        "高精度步进运动。Klipper使用一个应用处理器（例如低成本的树莓派）来计算打印机运动。应用处理器决定何时对每个步进电机发出步进信号，压缩这些事件，并将它们发送到微控制器。微处理器将会把每个事件按请求时间执行。每一个步进事件被以25毫秒或更高的精度安排。Klipper不使用运动估计，例如 Bresenham算法，而是通过加速度与机械运动物理计算精确的步进时间。更精准的步进电机运动意味着打印机更安静和稳定的运行。"
+        {
+          "id": "A028-F01",
+          "fact": "支持直接连接到打印机的普通LCD显示器。还提供了一个默认的菜单。显示器和菜单的内容可以通过配置文件完全定制。"
+        },
+        {
+          "id": "A028-F02",
+          "fact": "现有的“reprap”类打印机不需要改动任何硬件就可以运行 Klipper，只需要加一个树莓派。"
+        },
+        {
+          "id": "A028-F03",
+          "fact": "支持TMC2130、TMC2208/TMC2224、TMC2209、TMC2660和TMC5160步进电机驱动器的运行时配置。"
+        },
+        {
+          "id": "A028-F04",
+          "fact": "Klipper 微控制器代码旨在忠实地遵循 Klipper 主机软件提供的时间表（或在无法遵循时突出显示提醒用户）。"
+        }
       ],
       "relevantSources": [
         "29-功能.md"
       ],
       "mustInclude": [
-        "功能",
-        "高精度步进运动",
-        "Klipper使用一个应用",
-        "处理器",
-        "例如低成本的树莓派"
+        "LCD",
+        "树莓派",
+        "TMC2209",
+        "时间表"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "architecture"
+    },
+    {
+      "id": "A029",
+      "question": "调用 Klipper API 时，如何识别错误响应，消息分隔符怎样处理，端点 method 又应如何填写？",
+      "answerable": true,
+      "expectedAnswer": "如果处理的请求造成了错误，则响应消息将包含\"error\"字段，而不是\"result\"字段。\n\n该工具默认输入的每条Json命令中不存在换行，并自动地在发送命令时在结尾附上0x03。\n\n当向“端点”发出请求时，必须在请求字典的“方法”参数中设置全名（例如，`{“方法”=“gcode/restart”}`）。\n\n如果没有提供“response_template”字段，则默认为空字典（`{}`）。",
+      "expectedFacts": [
+        {
+          "id": "A029-F01",
+          "fact": "如果处理的请求造成了错误，则响应消息将包含\"error\"字段，而不是\"result\"字段。"
+        },
+        {
+          "id": "A029-F02",
+          "fact": "该工具默认输入的每条Json命令中不存在换行，并自动地在发送命令时在结尾附上0x03。"
+        },
+        {
+          "id": "A029-F03",
+          "fact": "当向“端点”发出请求时，必须在请求字典的“方法”参数中设置全名（例如，`{“方法”=“gcode/restart”}`）。"
+        },
+        {
+          "id": "A029-F04",
+          "fact": "如果没有提供“response_template”字段，则默认为空字典（`{}`）。"
+        }
+      ],
+      "relevantSources": [
+        "31-api-服务器.md"
+      ],
+      "mustInclude": [
+        "error",
+        "0x03",
+        "gcode/restart"
+      ],
+      "evaluationType": "api_contract"
     },
     {
       "id": "A030",
-      "question": "Klipper 文档「概述」里，有什么必须保留的事实？",
+      "question": "在 BeagleBone 上部署 Klipper 时，电平、remoteproc、OctoPrint 配置和外部 MCU 连接有哪些关键要求？",
       "answerable": true,
-      "expectedAnswer": "欢迎使用Klipper文档。如果刚接触Klipper，请从特性和安装文档开始阅读。",
+      "expectedAnswer": "安装 Klipper 后，您需要决定需要什么样的部署，但请注意，BeagleBone 是基于 3.3v 的硬件，在大多数情况下，如果没有转换板，您不能直接将引脚连接到基于 5v 或 12v 的硬件。\n\n您应该检查输出是否包含成功的“remoteproc”驱动程序加载和 PRU 核心的存在，在内核 5.10 中，它们应该是“remoteproc1”和“remoteproc2”（4a334000.pru、4a338000.pru）还应检查是否加载了许多 GPIO，它们看起来像“分配的 GPIO id=0 name='P8_03'”通常一切都很好，不需要硬件配置。\n\n在配置 Klipper 之前，需要先修改OctoPrint的 /etc/default/octoprint 配置文件。\n\n用例 1：仅使用 BeagleBone 作为主机系统来运行 Klipper 和其他软件，如 OctoPrint/Fluidd + Moonraker/...，并且此配置将通过串行/usb/canbus 连接驱动外部微控制器。",
       "expectedFacts": [
-        "欢迎使用Klipper文档。如果刚接触Klipper，请从特性和安装文档开始阅读。"
+        {
+          "id": "A030-F01",
+          "fact": "安装 Klipper 后，您需要决定需要什么样的部署，但请注意，BeagleBone 是基于 3.3v 的硬件，在大多数情况下，如果没有转换板，您不能直接将引脚连接到基于 5v 或 12v 的硬件。"
+        },
+        {
+          "id": "A030-F02",
+          "fact": "您应该检查输出是否包含成功的“remoteproc”驱动程序加载和 PRU 核心的存在，在内核 5.10 中，它们应该是“remoteproc1”和“remoteproc2”（4a334000.pru、4a338000.pru）还应检查是否加载了许多 GPIO，它们看起来像“分配的 GPIO id=0 name='P8_03'”通常一切都很好，不需要硬件配置。"
+        },
+        {
+          "id": "A030-F03",
+          "fact": "在配置 Klipper 之前，需要先修改OctoPrint的 /etc/default/octoprint 配置文件。"
+        },
+        {
+          "id": "A030-F04",
+          "fact": "用例 1：仅使用 BeagleBone 作为主机系统来运行 Klipper 和其他软件，如 OctoPrint/Fluidd + Moonraker/...，并且此配置将通过串行/usb/canbus 连接驱动外部微控制器。"
+        }
       ],
       "relevantSources": [
-        "30-概述.md"
+        "32-beaglebone.md"
       ],
       "mustInclude": [
-        "概述",
-        "欢迎使用Klipper文档",
-        "如果刚接触Klipper",
-        "请从",
-        "特性"
+        "3.3v",
+        "remoteproc",
+        "OctoPrint",
+        "串行/usb/canbus"
       ],
-      "evaluationType": "single_doc_fact"
+      "evaluationType": "deployment"
     },
     {
-      "id": "A998",
-      "question": "Klipper 这批资料里有没有树脂光固化 SLA 打印机的曝光时间推荐表？",
+      "id": "A031",
+      "question": "执行 MCU 步进率基准测试时，ticks 过低如何识别，为什么结果不能直接用于日常运行，怎样启用双边沿优化？",
+      "answerable": true,
+      "expectedAnswer": "如果运行上述程序的结果是 \"重新安排定时器在过去 \"或 \"步进器在过去太远 \"的错误，则表明`ticks`参数太低（它导致步进速度太快）。\n\n为了获得单一步进电机的基准测试，使用了相同的配置序列，但只将上述测试的第一块剪切并粘贴到 console.py 窗口。\n\n这个基准步进率在日常使用中是无法实现的，因为Klipper在任何实际使用中都需要执行其他任务（例如，MCU/主机通信、温度读取、限位检查）。\n\n对于支持 `STEPPER_BOTH_EDGE=1` 的微控制器（控制台启动时`MCU config`行中会报告）使用 `step_pulse_duration=0` 和 `invert_step=-1` 来启用步进脉冲的两边上的优化。",
+      "expectedFacts": [
+        {
+          "id": "A031-F01",
+          "fact": "如果运行上述程序的结果是 \"重新安排定时器在过去 \"或 \"步进器在过去太远 \"的错误，则表明`ticks`参数太低（它导致步进速度太快）。"
+        },
+        {
+          "id": "A031-F02",
+          "fact": "为了获得单一步进电机的基准测试，使用了相同的配置序列，但只将上述测试的第一块剪切并粘贴到 console.py 窗口。"
+        },
+        {
+          "id": "A031-F03",
+          "fact": "这个基准步进率在日常使用中是无法实现的，因为Klipper在任何实际使用中都需要执行其他任务（例如，MCU/主机通信、温度读取、限位检查）。"
+        },
+        {
+          "id": "A031-F04",
+          "fact": "对于支持 `STEPPER_BOTH_EDGE=1` 的微控制器（控制台启动时`MCU config`行中会报告）使用 `step_pulse_duration=0` 和 `invert_step=-1` 来启用步进脉冲的两边上的优化。"
+        }
+      ],
+      "relevantSources": [
+        "33-基准测试.md"
+      ],
+      "mustInclude": [
+        "ticks",
+        "日常使用",
+        "STEPPER_BOTH_EDGE"
+      ],
+      "evaluationType": "troubleshooting"
+    },
+    {
+      "id": "A032",
+      "question": "Klipper CANBUS 协议如何处理字节流、管理消息 ID、节点消息 ID 和广播地址？",
+      "answerable": true,
+      "expectedAnswer": "数据被视为比特流（byte stream）- Klipper信息块的开头不需要与CAN bus的数据包开头对齐。\n\n从主机发送到微控制器的管理消息使用CAN总线的 ID `0x3f0`，而从微控制器发送到主机的消息使用CAN总线的 ID `0x3f1`。\n\n主机到微控制器的Klipper命令信息使用`canbus_nodeid * 2 + 256`的CAN总线ID，而从微控制器到主机的Klipper响应信息使用`canbus_nodeid * 2 + 256 + 1`。\n\n所有的微控制器都听从ID `0x3f0`上的消息；这个 ID 可以被认为是一个\"广播地址\"。",
+      "expectedFacts": [
+        {
+          "id": "A032-F01",
+          "fact": "数据被视为比特流（byte stream）- Klipper信息块的开头不需要与CAN bus的数据包开头对齐。"
+        },
+        {
+          "id": "A032-F02",
+          "fact": "从主机发送到微控制器的管理消息使用CAN总线的 ID `0x3f0`，而从微控制器发送到主机的消息使用CAN总线的 ID `0x3f1`。"
+        },
+        {
+          "id": "A032-F03",
+          "fact": "主机到微控制器的Klipper命令信息使用`canbus_nodeid * 2 + 256`的CAN总线ID，而从微控制器到主机的Klipper响应信息使用`canbus_nodeid * 2 + 256 + 1`。"
+        },
+        {
+          "id": "A032-F04",
+          "fact": "所有的微控制器都听从ID `0x3f0`上的消息；这个 ID 可以被认为是一个\"广播地址\"。"
+        }
+      ],
+      "relevantSources": [
+        "34-canbus-协议-canbus-protocol.md"
+      ],
+      "mustInclude": [
+        "byte stream",
+        "0x3f0",
+        "canbus_nodeid",
+        "广播地址"
+      ],
+      "evaluationType": "architecture"
+    },
+    {
+      "id": "A033",
+      "question": "开发 Klipper 主机模块时，配置错误、get_status 返回值和 reactor 访问分别有什么约束？",
+      "answerable": true,
+      "expectedAnswer": "如果用户配置中存在错误，应在`load_config()`或连接事件（connect event）中抛出异常。\n\n列表和字典的输出值必须为“不可变的（immutable）”，即在函数内，如果 `get_status()` 需要输出上述类型的实例，则需要新建或者进行深层复制，否则API服务会识别出输出值中的内容变更。\n\n`get_status()` 必须返回一个Python字典对象，其键需要为字符串，而值应为整形、浮点数、列表、字典、True、False或者None。\n\n如果模块需要使用系统时钟或外部文件描述符，可通过`printer.get_reactor()`对获取全局事件反应器进行访问（event reactor）。",
+      "expectedFacts": [
+        {
+          "id": "A033-F01",
+          "fact": "如果用户配置中存在错误，应在`load_config()`或连接事件（connect event）中抛出异常。"
+        },
+        {
+          "id": "A033-F02",
+          "fact": "列表和字典的输出值必须为“不可变的（immutable）”，即在函数内，如果 `get_status()` 需要输出上述类型的实例，则需要新建或者进行深层复制，否则API服务会识别出输出值中的内容变更。"
+        },
+        {
+          "id": "A033-F03",
+          "fact": "`get_status()` 必须返回一个Python字典对象，其键需要为字符串，而值应为整形、浮点数、列表、字典、True、False或者None。"
+        },
+        {
+          "id": "A033-F04",
+          "fact": "如果模块需要使用系统时钟或外部文件描述符，可通过`printer.get_reactor()`对获取全局事件反应器进行访问（event reactor）。"
+        }
+      ],
+      "relevantSources": [
+        "35-代码总览.md"
+      ],
+      "mustInclude": [
+        "load_config()",
+        "get_status()",
+        "Python字典",
+        "printer.get_reactor()"
+      ],
+      "evaluationType": "development_constraint"
+    },
+    {
+      "id": "A034",
+      "question": "编写 Klipper G-Code 宏时，Jinja2 默认参数、gcode 缩进、远程方法参数和宏命名有哪些规则？",
+      "answerable": true,
+      "expectedAnswer": "通常使用Jinja2的`set` 指令来使用一个默认参数，并将结果分配给一个本地名称。\n\n请注意，`gcode:` 配置选项总是从行首开始，而 G-Code 宏中的后续行从不从行首开始。\n\n如果该方法需要参数，应通过关键字参数提供，即：`action_call_remote_method(\"print_stuff\", 参数=\"hello_world\")`\n\n如果在宏的名称中使用任何数字，那么它们必须都在名称的末尾（例如，TEST_MACRO25是合法的，但MACRO25_TEST3是不合法的）。",
+      "expectedFacts": [
+        {
+          "id": "A034-F01",
+          "fact": "通常使用Jinja2的`set` 指令来使用一个默认参数，并将结果分配给一个本地名称。"
+        },
+        {
+          "id": "A034-F02",
+          "fact": "请注意，`gcode:` 配置选项总是从行首开始，而 G-Code 宏中的后续行从不从行首开始。"
+        },
+        {
+          "id": "A034-F03",
+          "fact": "如果该方法需要参数，应通过关键字参数提供，即：`action_call_remote_method(\"print_stuff\", 参数=\"hello_world\")`"
+        },
+        {
+          "id": "A034-F04",
+          "fact": "如果在宏的名称中使用任何数字，那么它们必须都在名称的末尾（例如，TEST_MACRO25是合法的，但MACRO25_TEST3是不合法的）。"
+        }
+      ],
+      "relevantSources": [
+        "36-命令模板.md"
+      ],
+      "mustInclude": [
+        "Jinja2",
+        "gcode:",
+        "action_call_remote_method",
+        "TEST_MACRO25"
+      ],
+      "evaluationType": "development_constraint"
+    },
+    {
+      "id": "A035",
+      "question": "提交 Klipper 问题报告前应怎样复现问题、处理日志，并向贡献者说明哪些信息？",
+      "answerable": true,
+      "expectedAnswer": "如果代码已被修改或从其他来源获得，则您需要在报告问题之前先在从 <https://github.com/Klipper3d/klipper > 获取的未修改的代码上重现问题。\n\n不要以任何方式修改日志文件；不要只提供日志的片段。\n\n如果您遇到了问题，我们建议您仔细阅读 Klipper 文档 并再次检查是否遵循了所有步骤。\n\n其他Klipper贡献者需要了解你采取了哪些步骤，期望的结果是什么，以及实际发生的结果是什么。",
+      "expectedFacts": [
+        {
+          "id": "A035-F01",
+          "fact": "如果代码已被修改或从其他来源获得，则您需要在报告问题之前先在从 <https://github.com/Klipper3d/klipper > 获取的未修改的代码上重现问题。"
+        },
+        {
+          "id": "A035-F02",
+          "fact": "不要以任何方式修改日志文件；不要只提供日志的片段。"
+        },
+        {
+          "id": "A035-F03",
+          "fact": "如果您遇到了问题，我们建议您仔细阅读 Klipper 文档 并再次检查是否遵循了所有步骤。"
+        },
+        {
+          "id": "A035-F04",
+          "fact": "其他Klipper贡献者需要了解你采取了哪些步骤，期望的结果是什么，以及实际发生的结果是什么。"
+        }
+      ],
+      "relevantSources": [
+        "37-联系方式.md"
+      ],
+      "mustInclude": [
+        "未修改的代码",
+        "不要以任何方式修改日志文件",
+        "期望的结果",
+        "实际发生的结果"
+      ],
+      "evaluationType": "troubleshooting"
+    },
+    {
+      "id": "A036",
+      "question": "向 Klipper 贡献代码时，评审标准、配置选项价值、第三方许可证和用户文档有哪些要求？",
+      "answerable": true,
+      "expectedAnswer": "特别是，如果评审员不能说服自己提交的文件没有缺陷，那么可能需要进行更改。\n\n我们不想让用户负担他们不能合理配置的选项，也不想让他们负担不能提供显著好处的选项。\n\n从第三方来源获取的代码必须与 Klipper 的许可证（GNU GPLv3）兼容。\n\n所有面向用户的模块及其配置参数必须在<Config_Reference.md>中记录。",
+      "expectedFacts": [
+        {
+          "id": "A036-F01",
+          "fact": "特别是，如果评审员不能说服自己提交的文件没有缺陷，那么可能需要进行更改。"
+        },
+        {
+          "id": "A036-F02",
+          "fact": "我们不想让用户负担他们不能合理配置的选项，也不想让他们负担不能提供显著好处的选项。"
+        },
+        {
+          "id": "A036-F03",
+          "fact": "从第三方来源获取的代码必须与 Klipper 的许可证（GNU GPLv3）兼容。"
+        },
+        {
+          "id": "A036-F04",
+          "fact": "所有面向用户的模块及其配置参数必须在<Config_Reference.md>中记录。"
+        }
+      ],
+      "relevantSources": [
+        "38-为-klipper-做贡献.md"
+      ],
+      "mustInclude": [
+        "缺陷",
+        "显著好处",
+        "GNU GPLv3",
+        "Config_Reference.md"
+      ],
+      "evaluationType": "development_constraint"
+    },
+    {
+      "id": "A037",
+      "question": "校准 Eddy 探针及其温度漂移时，STEP、TARGET、校准命令和 z_offset 应如何设置？",
+      "answerable": true,
+      "expectedAnswer": "注意在自定义`STEP` 的值的时候，特别高的值和太少的校准点回导致很差的校准结果。\n\n这个温度应该被配置到`TEMPERATURE_PROBE_CALIBRATE`命令的`TARGET`选项中。\n\n当 `[temperature_probe]` 被配置后应该使用`PROBE_EDDY_CURRENT_CALIBRATE`对探针校准。\n\n建议将 `z_offset` 设置为 0.5mm。",
+      "expectedFacts": [
+        {
+          "id": "A037-F01",
+          "fact": "注意在自定义`STEP` 的值的时候，特别高的值和太少的校准点回导致很差的校准结果。"
+        },
+        {
+          "id": "A037-F02",
+          "fact": "这个温度应该被配置到`TEMPERATURE_PROBE_CALIBRATE`命令的`TARGET`选项中。"
+        },
+        {
+          "id": "A037-F03",
+          "fact": "当 `[temperature_probe]` 被配置后应该使用`PROBE_EDDY_CURRENT_CALIBRATE`对探针校准。"
+        },
+        {
+          "id": "A037-F04",
+          "fact": "建议将 `z_offset` 设置为 0.5mm。"
+        }
+      ],
+      "relevantSources": [
+        "40-eddy-感应涡流探针.md"
+      ],
+      "mustInclude": [
+        "STEP",
+        "TEMPERATURE_PROBE_CALIBRATE",
+        "PROBE_EDDY_CURRENT_CALIBRATE",
+        "0.5mm"
+      ],
+      "evaluationType": "calibration_procedure"
+    },
+    {
+      "id": "A038",
+      "question": "编写 Klipper 配置示例时，字段语法、文件扩展名、pressure_advance 和默认值应遵循什么规范？",
+      "answerable": true,
+      "expectedAnswer": "使用`field: value`的语法，而不要使用`field=value`。\n\n`printer`配置文件必须以`.cfg`结尾（例如，`2019.cfg`）。\n\n不要在配置示例中指定`pressure_advance`，因为该值是针对耗材的，而不是打印机硬件。\n\n例如，不应该指定`min_extrude_temp: 170`，因为这已经是默认值。",
+      "expectedFacts": [
+        {
+          "id": "A038-F01",
+          "fact": "使用`field: value`的语法，而不要使用`field=value`。"
+        },
+        {
+          "id": "A038-F02",
+          "fact": "`printer`配置文件必须以`.cfg`结尾（例如，`2019.cfg`）。"
+        },
+        {
+          "id": "A038-F03",
+          "fact": "不要在配置示例中指定`pressure_advance`，因为该值是针对耗材的，而不是打印机硬件。"
+        },
+        {
+          "id": "A038-F04",
+          "fact": "例如，不应该指定`min_extrude_temp: 170`，因为这已经是默认值。"
+        }
+      ],
+      "relevantSources": [
+        "41-配置示例.md"
+      ],
+      "mustInclude": [
+        "field: value",
+        ".cfg",
+        "pressure_advance",
+        "min_extrude_temp"
+      ],
+      "evaluationType": "development_constraint"
+    },
+    {
+      "id": "A039",
+      "question": "配置霍尔耗材线径传感器时，如何记录原始值、启用传感器、查询原始读数，以及为什么不需要温度补偿？",
+      "answerable": true,
+      "expectedAnswer": "在配置参数`Raw_dia1`和`Raw_dia2`中写入原始传感器值\n\n工作原理：两个霍尔传感器以差分模式工作，由于传感器的温度漂移相同，不需要特殊的温度补偿。\n\n要启用传感器，发送ENABLE_FILAMENT_WIDTH_SENSOR命令或将`enable`参数改为`true`。\n\n要获得原始传感器值，你可以使用菜单中的选项或在终端发送QUERY_RAW_FILAMENT_WIDTH命令。",
+      "expectedFacts": [
+        {
+          "id": "A039-F01",
+          "fact": "在配置参数`Raw_dia1`和`Raw_dia2`中写入原始传感器值"
+        },
+        {
+          "id": "A039-F02",
+          "fact": "工作原理：两个霍尔传感器以差分模式工作，由于传感器的温度漂移相同，不需要特殊的温度补偿。"
+        },
+        {
+          "id": "A039-F03",
+          "fact": "要启用传感器，发送ENABLE_FILAMENT_WIDTH_SENSOR命令或将`enable`参数改为`true`。"
+        },
+        {
+          "id": "A039-F04",
+          "fact": "要获得原始传感器值，你可以使用菜单中的选项或在终端发送QUERY_RAW_FILAMENT_WIDTH命令。"
+        }
+      ],
+      "relevantSources": [
+        "43-霍尔耗材线径传感器.md"
+      ],
+      "mustInclude": [
+        "Raw_dia1",
+        "差分模式",
+        "ENABLE_FILAMENT_WIDTH_SENSOR",
+        "QUERY_RAW_FILAMENT_WIDTH"
+      ],
+      "evaluationType": "config_query"
+    },
+    {
+      "id": "A040",
+      "question": "多 MCU 归位时，步进电机归属、通信延迟、故障表现和接线收益分别是什么？",
+      "answerable": true,
+      "expectedAnswer": "需要注意的是当一个轴由多个步进电机控制（比如`stepper_z`和`stepper_z1`），这些电机必须连接到同一微控制器上以实现复数微控制器归零。\n\n如果高延迟导致故障（或者有其他通信问题），Klipper 将触发“复位期间通信超时”错误。\n\n为了使用这种“多微控制器归位”功能，硬件必须在主机和所有微控制器之间具有可预测的低延迟。\n\n该功能可以简化接线，因为限位开关或探针可以连接到距离最短的微控制器上。",
+      "expectedFacts": [
+        {
+          "id": "A040-F01",
+          "fact": "需要注意的是当一个轴由多个步进电机控制（比如`stepper_z`和`stepper_z1`），这些电机必须连接到同一微控制器上以实现复数微控制器归零。"
+        },
+        {
+          "id": "A040-F02",
+          "fact": "如果高延迟导致故障（或者有其他通信问题），Klipper 将触发“复位期间通信超时”错误。"
+        },
+        {
+          "id": "A040-F03",
+          "fact": "为了使用这种“多微控制器归位”功能，硬件必须在主机和所有微控制器之间具有可预测的低延迟。"
+        },
+        {
+          "id": "A040-F04",
+          "fact": "该功能可以简化接线，因为限位开关或探针可以连接到距离最短的微控制器上。"
+        }
+      ],
+      "relevantSources": [
+        "46-多微控制器归位与探高.md"
+      ],
+      "mustInclude": [
+        "同一微控制器",
+        "复位期间通信超时",
+        "可预测的低延迟",
+        "简化接线"
+      ],
+      "evaluationType": "architecture"
+    },
+    {
+      "id": "A041",
+      "question": "Klipper 主机与 MCU 通信协议对 sendf 调用、损坏块重传、命令 ID 和数据字典有哪些约束？",
+      "answerable": true,
+      "expectedAnswer": "sendf()宏只能从命令或任务处理程序中调用，而不能从中断或定时器中调用。\n\n此外，如果微控制器检测到一个损坏或顺序错误的块，它可以发送一个 \"nak message block\"实现快速重传。\n\n为了对信息内容进行编解码，主机和微控制器都必须确保使用的命令的ID和每个命令对应的参数数量一致。\n\n为了在微控制器和主机之间建立有意义的通信，双方必须商定一个 \"数据字典\"。",
+      "expectedFacts": [
+        {
+          "id": "A041-F01",
+          "fact": "sendf()宏只能从命令或任务处理程序中调用，而不能从中断或定时器中调用。"
+        },
+        {
+          "id": "A041-F02",
+          "fact": "此外，如果微控制器检测到一个损坏或顺序错误的块，它可以发送一个 \"nak message block\"实现快速重传。"
+        },
+        {
+          "id": "A041-F03",
+          "fact": "为了对信息内容进行编解码，主机和微控制器都必须确保使用的命令的ID和每个命令对应的参数数量一致。"
+        },
+        {
+          "id": "A041-F04",
+          "fact": "为了在微控制器和主机之间建立有意义的通信，双方必须商定一个 \"数据字典\"。"
+        }
+      ],
+      "relevantSources": [
+        "48-协议.md"
+      ],
+      "mustInclude": [
+        "sendf()",
+        "nak message block",
+        "命令的ID",
+        "数据字典"
+      ],
+      "evaluationType": "architecture"
+    },
+    {
+      "id": "A042",
+      "question": "使用 Klipper 控制激光或主轴时，应设置哪些安全措施，M3/M4/M5 如何使用，PWM 频率有什么局限？",
+      "answerable": true,
+      "expectedAnswer": "同时，应该为激光器设置安全定时，保证在上位机和微控制器发生错误时，激光器能自动停止。\n\n通常，cam软件，例如LaserWeb，会使用`M3-M5`命令，它们分别是 主轴顺时针转速*spindle speed CW* (`M3 S[0-255]`)， 主轴逆时针转速*spindle speed CCW* (`M4 S[0-255]`) 和转轴停止 *spindle stop* (`M5`)。\n\n慎重而言，建议在激光器上电期间*始终*佩戴合适波长的护目镜；并在不使用激光时对激光器断电。\n\n尽管相当精确，但每隔0.1秒才能生成一个PWM脉冲，因而几乎无法用作光栅蚀刻。",
+      "expectedFacts": [
+        {
+          "id": "A042-F01",
+          "fact": "同时，应该为激光器设置安全定时，保证在上位机和微控制器发生错误时，激光器能自动停止。"
+        },
+        {
+          "id": "A042-F02",
+          "fact": "通常，cam软件，例如LaserWeb，会使用`M3-M5`命令，它们分别是 主轴顺时针转速*spindle speed CW* (`M3 S[0-255]`)， 主轴逆时针转速*spindle speed CCW* (`M4 S[0-255]`) 和转轴停止 *spindle stop* (`M5`)。"
+        },
+        {
+          "id": "A042-F03",
+          "fact": "慎重而言，建议在激光器上电期间*始终*佩戴合适波长的护目镜；并在不使用激光时对激光器断电。"
+        },
+        {
+          "id": "A042-F04",
+          "fact": "尽管相当精确，但每隔0.1秒才能生成一个PWM脉冲，因而几乎无法用作光栅蚀刻。"
+        }
+      ],
+      "relevantSources": [
+        "51-使用-pwm-工具.md"
+      ],
+      "mustInclude": [
+        "安全定时",
+        "M3 S[0-255]",
+        "护目镜",
+        "0.1秒"
+      ],
+      "evaluationType": "safety_constraint"
+    },
+    {
+      "id": "A043",
+      "question": "综合 CAN 总线配置与故障排查文档，终端电阻和发送队列应如何设置，队列过大有什么后果？",
+      "answerable": true,
+      "expectedAnswer": "CAN总线在 CANH 和 CANL 导线之间必须两个 120 欧姆的电阻。\n\n务必检查CAN总线上所有器件的原理图，以验证该总线上是否有且只有两个120欧姆电阻。\n\n建议使用 `txqueuelen 128` 配置 can0 设备 来增加该大小。\n\n大得多的队列可能会导致消息往返时间出现过度峰值，从而导致无法恢复的错误。",
+      "expectedFacts": [
+        {
+          "id": "A043-F01",
+          "fact": "CAN总线在 CANH 和 CANL 导线之间必须两个 120 欧姆的电阻。"
+        },
+        {
+          "id": "A043-F02",
+          "fact": "务必检查CAN总线上所有器件的原理图，以验证该总线上是否有且只有两个120欧姆电阻。"
+        },
+        {
+          "id": "A043-F03",
+          "fact": "建议使用 `txqueuelen 128` 配置 can0 设备 来增加该大小。"
+        },
+        {
+          "id": "A043-F04",
+          "fact": "大得多的队列可能会导致消息往返时间出现过度峰值，从而导致无法恢复的错误。"
+        }
+      ],
+      "relevantSources": [
+        "16-can-总线.md",
+        "17-canbus故障排除.md"
+      ],
+      "mustInclude": [
+        "两个 120 欧姆",
+        "txqueuelen 128",
+        "过度峰值"
+      ],
+      "evaluationType": "multi_doc_synthesis"
+    },
+    {
+      "id": "A044",
+      "question": "哪些机械或校准操作会让已有探针、床身或三角洲校准结果失效，需要重新测量？",
+      "answerable": true,
+      "expectedAnswer": "如果使用安装在热端侧面的探头（即它有一个X或Y偏移），那么请注意，调整床身倾斜度将使以前在倾斜的床身下进行的任何探针校准失效。\n\n如果修改了打印机的运动系统、喷嘴位置或探针位置中的任意一项，PROBE_CALIBRATE的结果将会需要重新测量。\n\n如果使用的探针是安装在喷嘴的一侧（即，探针对喷嘴存在xy偏移），需注意在进行过三角洲校准之后会使探针校准的结果无效。\n\n打印机设置和校准模型必须一一对应（即，在打印校准模型后，不要再进行DELTA_CALIBRATE或修改打印机参数，否则模型测量无效），再执行下面的命令。",
+      "expectedFacts": [
+        {
+          "id": "A044-F01",
+          "fact": "如果使用安装在热端侧面的探头（即它有一个X或Y偏移），那么请注意，调整床身倾斜度将使以前在倾斜的床身下进行的任何探针校准失效。"
+        },
+        {
+          "id": "A044-F02",
+          "fact": "如果修改了打印机的运动系统、喷嘴位置或探针位置中的任意一项，PROBE_CALIBRATE的结果将会需要重新测量。"
+        },
+        {
+          "id": "A044-F03",
+          "fact": "如果使用的探针是安装在喷嘴的一侧（即，探针对喷嘴存在xy偏移），需注意在进行过三角洲校准之后会使探针校准的结果无效。"
+        },
+        {
+          "id": "A044-F04",
+          "fact": "打印机设置和校准模型必须一一对应（即，在打印校准模型后，不要再进行DELTA_CALIBRATE或修改打印机参数，否则模型测量无效），再执行下面的命令。"
+        }
+      ],
+      "relevantSources": [
+        "04-手动调平.md",
+        "05-探针校准.md",
+        "06-三角校正.md"
+      ],
+      "mustInclude": [
+        "探针校准失效",
+        "重新测量",
+        "探针校准的结果无效",
+        "模型测量无效"
+      ],
+      "evaluationType": "multi_doc_synthesis"
+    },
+    {
+      "id": "A045",
+      "question": "综合输入整形和共振测量文档，低频共振、2HUMP_EI、加速度计接口和 max_accel 应如何选择？",
+      "answerable": true,
+      "expectedAnswer": "请注意，一些整形器，例如2HUMP_EI和3HUMP_EI，不应与shaper_freq = 共振频率一起使用。\n\n另一个需要考虑的因素是，如果共振频率过低（低于20-25 Hz），则最好增加打印机的刚度或减少运动质量。\n\n注意，尽管ADXL345文档推荐使用I2C，但其数据吞吐能力不足，不能实现共振测量的要求。\n\n因此，建议在`[printer]` 部分设置`max_accel` 时不要超过X轴和Y轴的估计值，并保守一些。",
+      "expectedFacts": [
+        {
+          "id": "A045-F01",
+          "fact": "请注意，一些整形器，例如2HUMP_EI和3HUMP_EI，不应与shaper_freq = 共振频率一起使用。"
+        },
+        {
+          "id": "A045-F02",
+          "fact": "另一个需要考虑的因素是，如果共振频率过低（低于20-25 Hz），则最好增加打印机的刚度或减少运动质量。"
+        },
+        {
+          "id": "A045-F03",
+          "fact": "注意，尽管ADXL345文档推荐使用I2C，但其数据吞吐能力不足，不能实现共振测量的要求。"
+        },
+        {
+          "id": "A045-F04",
+          "fact": "因此，建议在`[printer]` 部分设置`max_accel` 时不要超过X轴和Y轴的估计值，并保守一些。"
+        }
+      ],
+      "relevantSources": [
+        "11-共振补偿.md",
+        "12-共振值测量.md"
+      ],
+      "mustInclude": [
+        "2HUMP_EI",
+        "20-25 Hz",
+        "I2C",
+        "max_accel"
+      ],
+      "evaluationType": "multi_doc_synthesis"
+    },
+    {
+      "id": "A046",
+      "question": "这批 Klipper 资料是否提供树脂 SLA 打印机的曝光时间推荐表？",
       "answerable": false,
-      "expectedAnswer": "当前 sources 只覆盖 Klipper 3D 打印机固件、配置、校准和相关接口资料，没有提供树脂光固化 SLA 曝光时间推荐表。",
+      "expectedAnswer": "当前资料只覆盖 Klipper 固件、配置、校准和相关接口，没有提供树脂 SLA 打印机的曝光时间推荐表，因此无法给出具体曝光参数。",
       "expectedFacts": [],
       "relevantSources": [],
       "mustInclude": [
-        "资料不足",
+        "没有提供",
         "SLA",
         "曝光时间"
       ],
       "evaluationType": "abstain"
     },
     {
-      "id": "A999",
-      "question": "这批 Klipper 文档是否说明了某个商业切片软件的付费价格？",
+      "id": "A047",
+      "question": "文档中列出的商业切片软件分别需要支付多少订阅费用？",
       "answerable": false,
-      "expectedAnswer": "当前 sources 不包含商业切片软件价格信息，不能据此回答具体付费价格。",
+      "expectedAnswer": "当前资料提到部分切片软件的配置方式，但未提供商业切片软件的订阅价格，无法据此回答具体费用。",
+      "expectedFacts": [],
+      "relevantSources": [],
+      "mustInclude": [
+        "未提供",
+        "商业切片软件",
+        "订阅价格"
+      ],
+      "evaluationType": "abstain"
+    },
+    {
+      "id": "A048",
+      "question": "如何根据这批文档设置 FarmBot 的灌溉水压和浇水时长？",
+      "answerable": false,
+      "expectedAnswer": "这批资料是 Klipper 3D 打印机固件文档，没有包含 FarmBot 灌溉系统、水压或浇水时长信息，无法据此配置。",
+      "expectedFacts": [],
+      "relevantSources": [],
+      "mustInclude": [
+        "没有包含",
+        "FarmBot",
+        "灌溉"
+      ],
+      "evaluationType": "abstain"
+    },
+    {
+      "id": "A049",
+      "question": "Klipper 文档给出的 Bambu Lab 云服务 API 密钥申请流程是什么？",
+      "answerable": false,
+      "expectedAnswer": "当前资料没有涉及 Bambu Lab 云服务或 API 密钥申请流程，无法从这批文档中确定。",
+      "expectedFacts": [],
+      "relevantSources": [],
+      "mustInclude": [
+        "没有涉及",
+        "Bambu Lab",
+        "API 密钥"
+      ],
+      "evaluationType": "abstain"
+    },
+    {
+      "id": "A050",
+      "question": "这些资料规定的打印机整机保修期限和退换货政策是什么？",
+      "answerable": false,
+      "expectedAnswer": "这批资料不包含具体打印机品牌的保修期限或退换货政策，无法据此给出售后承诺。",
       "expectedFacts": [],
       "relevantSources": [],
       "mustInclude": [
         "不包含",
-        "价格"
+        "保修期限",
+        "退换货政策"
       ],
       "evaluationType": "abstain"
     }

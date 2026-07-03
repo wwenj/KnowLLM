@@ -8,7 +8,9 @@ import type {
   CompileEvaluationDatasetCase,
   CompileEvaluationFactResult,
   CompileEvaluationFactStatus,
+  CompileEvaluationFactImportance,
   CompileEvaluationMatchedSource,
+  CompileEvaluationPassLevel,
   CompileEvaluationRun,
 } from "../evaluation.types";
 import { CompileEvaluationStoreService, emptySummary } from "./compile-evaluation-store.service";
@@ -19,7 +21,9 @@ interface JudgeOutput {
     status?: unknown;
     evidencePath?: unknown;
     evidence?: unknown;
+    wikiEvidence?: unknown;
     reason?: unknown;
+    confidence?: unknown;
   }>;
 }
 
@@ -58,6 +62,10 @@ export class CompileEvaluationService {
 
   getRun(runId: string) {
     return this.store.getRun(runId);
+  }
+
+  deleteRun(runId: string) {
+    return this.store.deleteRun(runId);
   }
 
   private async execute(runId: string, dataset: CompileEvaluationDataset): Promise<void> {
@@ -130,10 +138,14 @@ export class CompileEvaluationService {
         pagePaths: [],
         facts: testCase.expectedFacts.map((fact) => ({
           ...fact,
+          ...normalizeExpectedFactForResult(fact),
           status: "missing",
           evidencePath: "",
-          evidence: "",
+          wikiEvidence: "",
           reason: `未找到已编译 source: ${missing.map((item) => item.filename).join(", ")}`,
+          confidence: 0,
+          weight: factWeight(fact.importance),
+          score: 0,
         })),
         error: "",
       };
@@ -189,8 +201,11 @@ export class CompileEvaluationService {
           content: [
             "你是 LLM Wiki 编译结果评测器。",
             "只判断最终 Wiki 是否正确保留 expectedFacts，不评价文风、页面结构或原始文档本身。",
+            "originalSources 与 expectedFacts.evidence 只用于理解原文依据；判定 correct 必须来自 finalWikiPages。",
             "status 只能是 correct、missing、incorrect。",
             "correct: Wiki 明确支持该事实；missing: Wiki 未包含足够信息；incorrect: Wiki 对该事实给出冲突或错误描述。",
+            "每条事实必须返回 finalWikiPages 中最能支持判断的 evidencePath 与 wikiEvidence；找不到则留空。",
+            "confidence 是 0 到 1 的数字，表示你对该判断的置信度。",
             "只输出 JSON，不输出 Markdown。",
           ].join("\n"),
         },
@@ -199,7 +214,7 @@ export class CompileEvaluationService {
           content: JSON.stringify(
             {
               output_schema: {
-                facts: "array of {factId,status,evidencePath,evidence,reason}",
+                facts: "array of {factId,status,evidencePath,wikiEvidence,reason,confidence}",
               },
               case: { id: args.testCase.id, name: args.testCase.name },
               expectedFacts: args.testCase.expectedFacts,
@@ -217,12 +232,17 @@ export class CompileEvaluationService {
     return args.testCase.expectedFacts.map((fact) => {
       const item = byId.get(fact.id);
       const status = item ? normalizeFactStatus(item.status) : "missing";
+      const weight = factWeight(fact.importance);
       return {
         ...fact,
+        ...normalizeExpectedFactForResult(fact),
         status,
         evidencePath: stringField(item?.evidencePath),
-        evidence: stringField(item?.evidence),
+        wikiEvidence: stringField(item?.wikiEvidence) || stringField(item?.evidence),
         reason: stringField(item?.reason) || (item ? "" : "Judge 未返回该事实的判断"),
+        confidence: numberOrNull(item?.confidence),
+        weight,
+        score: status === "correct" ? weight : 0,
       };
     });
   }
@@ -234,12 +254,59 @@ export function summarize(cases: CompileEvaluationCaseResult[]) {
     if (item.status === "source_missing") summary.sourceMissingCases += 1;
     if (item.status === "failed") summary.failedCases += 1;
     for (const fact of item.facts) {
+      const weight = fact.weight || factWeight(fact.importance);
+      const importance = normalizeImportance(fact.importance);
       summary.totalFacts += 1;
       summary[fact.status] += 1;
+      summary.totalWeight += weight;
+      if (fact.status === "correct") summary.correctWeight += weight;
+      if (importance === "must") {
+        summary.mustTotal += 1;
+        if (fact.status === "correct") summary.mustCorrect += 1;
+      }
     }
   }
-  summary.accuracy = summary.totalFacts ? summary.correct / summary.totalFacts : 0;
+  summary.rawAccuracy = summary.totalFacts ? summary.correct / summary.totalFacts : 0;
+  summary.accuracy = summary.rawAccuracy;
+  summary.weightedScore = summary.totalWeight ? (summary.correctWeight / summary.totalWeight) * 100 : 0;
+  summary.mustAccuracy = summary.mustTotal ? summary.mustCorrect / summary.mustTotal : 0;
+  summary.missingRate = summary.totalFacts ? summary.missing / summary.totalFacts : 0;
+  summary.incorrectRate = summary.totalFacts ? summary.incorrect / summary.totalFacts : 0;
+  summary.passLevel = passLevel(summary.weightedScore, summary.incorrectRate);
   return summary;
+}
+
+export function factWeight(importance: CompileEvaluationFactImportance): number {
+  const normalized = normalizeImportance(importance);
+  if (normalized === "nice") return 1;
+  if (normalized === "should") return 2;
+  return 3;
+}
+
+function normalizeExpectedFactForResult(fact: Partial<CompileEvaluationFactResult>): {
+  sourceFile: string;
+  evidence: string;
+  type: string;
+  importance: CompileEvaluationFactImportance;
+} {
+  return {
+    sourceFile: stringField(fact.sourceFile),
+    evidence: stringField(fact.evidence),
+    type: stringField(fact.type) || "general",
+    importance: normalizeImportance(fact.importance),
+  };
+}
+
+function normalizeImportance(value: unknown): CompileEvaluationFactImportance {
+  if (value === "nice" || value === "should") return value;
+  return "must";
+}
+
+function passLevel(weightedScore: number, incorrectRate: number): CompileEvaluationPassLevel {
+  if (weightedScore >= 95 && incorrectRate <= 0.01) return "excellent";
+  if (weightedScore >= 80 && incorrectRate <= 0.03) return "pass";
+  if (weightedScore >= 60) return "needs_improvement";
+  return "failed";
 }
 
 function parseJudgeOutput(content: string): JudgeOutput {
@@ -266,6 +333,12 @@ function extractContent(response: unknown): string {
 function normalizeFactStatus(value: unknown): CompileEvaluationFactStatus {
   if (value === "correct" || value === "missing" || value === "incorrect") return value;
   throw new Error(`Judge 返回了非法事实状态: ${String(value || "")}`);
+}
+
+function numberOrNull(value: unknown): number | null {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(1, Math.max(0, number));
 }
 
 function extractObject(text: string): string {

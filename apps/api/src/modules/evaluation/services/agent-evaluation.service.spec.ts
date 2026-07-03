@@ -5,8 +5,16 @@ import type { AgentRunDetail } from "../../agent/agent.types";
 import type { AgentRunExecutionService } from "../../agent/services/agent-run-execution.service";
 import type { LlmWikiRetrievalService } from "../../llmWiki/services/llm-wiki-retrieval.service";
 import type { ModelService } from "../../model/model.service";
-import type { AgentEvaluationDataset, AgentEvaluationRun } from "../evaluation.types";
+import type {
+  AgentEvaluationCaseResult,
+  AgentEvaluationDataset,
+  AgentEvaluationRun,
+} from "../evaluation.types";
 import type { AgentEvaluationStoreService } from "./agent-evaluation-store.service";
+import {
+  emptyAgentSummary,
+  scoreAgentSummary,
+} from "./agent-evaluation-store.service";
 import { AgentEvaluationService, summarizeAgentEvaluation } from "./agent-evaluation.service";
 
 test("agent evaluation starts a normal llmWiki agent run and judges its result", async () => {
@@ -16,7 +24,10 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
     datasetId: "dataset",
     name: "Dataset",
     uploadedAt: "",
-    sources: [{ id: "source-a", filename: "a.md", content: sourceContent, sha256: sha256(sourceContent) }],
+    sources: [
+      { id: "source-a", filename: "a.md", content: sourceContent, sha256: sha256(sourceContent) },
+      { id: "source-b", filename: "b.md", content: "Missing source.", sha256: sha256("Missing source.") },
+    ],
     cases: [
       {
         id: "A001",
@@ -27,6 +38,36 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
         relevantSourceIds: ["source-a"],
         mustInclude: ["TTL"],
         evaluationType: "single_doc_fact",
+      },
+      {
+        id: "A002",
+        question: "What is missing?",
+        answerable: true,
+        expectedAnswer: "Missing source.",
+        expectedFacts: [{ id: "A002-F01", fact: "Missing source." }],
+        relevantSourceIds: ["source-b"],
+        mustInclude: [],
+        evaluationType: "source_missing",
+      },
+      {
+        id: "A003",
+        question: "Will the Agent fail?",
+        answerable: true,
+        expectedAnswer: "No.",
+        expectedFacts: [{ id: "A003-F01", fact: "No." }],
+        relevantSourceIds: ["source-a"],
+        mustInclude: [],
+        evaluationType: "agent_failure",
+      },
+      {
+        id: "A004",
+        question: "Will the Judge fail?",
+        answerable: true,
+        expectedAnswer: "No.",
+        expectedFacts: [{ id: "A004-F01", fact: "No." }],
+        relevantSourceIds: ["source-a"],
+        mustInclude: [],
+        evaluationType: "judge_failure",
       },
     ],
   };
@@ -87,6 +128,8 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
   };
 
   let executionStarted = false;
+  let executionShouldFail = false;
+  let judgeShouldFail = false;
   const agentRunId = "d".repeat(32);
   const agentDetail: AgentRunDetail = {
     runId: agentRunId,
@@ -118,6 +161,7 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
   const execution = {
     start: () => {
       executionStarted = true;
+      if (executionShouldFail) throw new Error("Agent failed");
       return { runId: agentRunId, agentType: "llmWiki", status: "running", done: Promise.resolve(agentDetail) };
     },
   };
@@ -127,12 +171,14 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
       choices: [
         {
           message: {
-            content: JSON.stringify({
-              facts: [{ factId: "A001-F01", status: "correct", evidencePath: "concepts/a.md", evidence: "TTL is 2 hours." }],
-              faithfulness: { status: "correct", reason: "supported" },
-              answerCorrectness: { status: "correct", reason: "matches expected" },
-              abstainCorrectness: { status: "not_applicable", reason: "" },
-            }),
+            content: judgeShouldFail
+              ? "invalid"
+              : JSON.stringify({
+                  facts: [{ factId: "A001-F01", status: "correct", evidencePath: "concepts/a.md", evidence: "TTL is 2 hours." }],
+                  faithfulness: { status: "correct", reason: "supported" },
+                  answerCorrectness: { status: "correct", reason: "matches expected" },
+                  abstainCorrectness: { status: "not_applicable", reason: "" },
+                }),
           },
         },
       ],
@@ -154,10 +200,122 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
   assert.equal(finalRun.cases[0].agentRunId, agentRunId);
   assert.equal(finalRun.cases[0].sourceHit, true);
   assert.equal(finalRun.cases[0].facts[0].status, "correct");
+  assert.equal(finalRun.cases[0].expectedAnswer, "TTL is 2 hours.");
+  assert.equal(finalRun.cases[0].evaluationType, "single_doc_fact");
   assert.equal(finalRun.summary.sourceHitRate, 1);
   assert.equal(finalRun.summary.factAccuracy, 1);
   assert.equal(finalRun.summary.avgRounds, 1);
+
+  service.createRun({ datasetId: "dataset", judgeModel: "judge", agentModel: "judge", caseIds: ["A002"] });
+  await waitFor(() => run?.status === "success");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].status, "source_missing");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].expectedAnswer, "Missing source.");
+
+  executionShouldFail = true;
+  service.createRun({ datasetId: "dataset", judgeModel: "judge", agentModel: "judge", caseIds: ["A003"] });
+  await waitFor(() => run?.status === "success");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].status, "agent_failed");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].evaluationType, "agent_failure");
+
+  executionShouldFail = false;
+  judgeShouldFail = true;
+  service.createRun({ datasetId: "dataset", judgeModel: "judge", agentModel: "judge", caseIds: ["A004"] });
+  await waitFor(() => run?.status === "success");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].status, "judge_failed");
+  assert.equal((store.getRun() as AgentEvaluationRun).cases[0].expectedAnswer, "No.");
 });
+
+test("agent evaluation score penalizes failed cases with answer-priority weights", () => {
+  const summary = summarizeAgentEvaluation([
+    createCaseResult(),
+    createCaseResult({
+      caseId: "A002",
+      status: "agent_failed",
+      agentRunId: "",
+      facts: [],
+      sourceHit: null,
+      faithfulness: { status: "not_applicable", reason: "" },
+      answerCorrectness: { status: "not_applicable", reason: "" },
+    }),
+  ]);
+
+  assert.equal(summary.taskCorrectnessRate, 0.5);
+  assert.equal(summary.completionRate, 0.5);
+  assert.equal(summary.overallScore, 72.5);
+  assert.equal(summary.passLevel, "needs_improvement");
+});
+
+test("agent evaluation score normalizes non-applicable metrics for abstain cases", () => {
+  const summary = summarizeAgentEvaluation([
+    createCaseResult({
+      answerable: false,
+      facts: [],
+      sourceHit: null,
+      faithfulness: { status: "not_applicable", reason: "" },
+      answerCorrectness: { status: "not_applicable", reason: "" },
+      abstainCorrectness: { status: "correct", reason: "" },
+    }),
+  ]);
+
+  assert.equal(summary.overallScore, 100);
+  assert.equal(summary.passLevel, "excellent");
+});
+
+test("agent evaluation score uses 90, 80 and 60 grade boundaries", () => {
+  assert.equal(summaryAtRate(0.9).passLevel, "excellent");
+  assert.equal(summaryAtRate(0.8).passLevel, "pass");
+  assert.equal(summaryAtRate(0.6).passLevel, "needs_improvement");
+  assert.equal(summaryAtRate(0.59).passLevel, "failed");
+});
+
+function summaryAtRate(rate: number) {
+  const count = Math.round(rate * 100);
+  return scoreAgentSummary({
+    ...emptyAgentSummary(),
+    totalCases: 100,
+    completedCases: count,
+    totalFacts: 100,
+    correctFacts: count,
+    factAccuracy: rate,
+    sourceHitCases: count,
+    sourceHitTotal: 100,
+    sourceHitRate: rate,
+    faithfulCases: count,
+    faithfulnessTotal: 100,
+    faithfulnessRate: rate,
+    answerCorrectCases: count,
+    answerCorrectnessTotal: 100,
+    answerCorrectnessRate: rate,
+  });
+}
+
+function createCaseResult(overrides: Partial<AgentEvaluationCaseResult> = {}): AgentEvaluationCaseResult {
+  return {
+    caseId: "A001",
+    question: "Question?",
+    expectedAnswer: "Answer.",
+    evaluationType: "single_doc_fact",
+    answerable: true,
+    status: "success",
+    agentRunId: "run",
+    agentStatus: "success",
+    matchedSources: [],
+    expectedSourceIds: ["source-a"],
+    hitSourceIds: ["source-a"],
+    sourceHit: true,
+    mustInclude: [],
+    mustIncludeHits: [],
+    answerMarkdown: "Answer.",
+    facts: [{ id: "A001-F01", fact: "Answer.", status: "correct", evidencePath: "a.md", evidence: "Answer.", reason: "" }],
+    faithfulness: { status: "correct", reason: "" },
+    answerCorrectness: { status: "correct", reason: "" },
+    abstainCorrectness: { status: "not_applicable", reason: "" },
+    metrics: { rounds: 1, readPages: 1, keptPages: 1, rawSources: 0, modelCalls: 1, totalTokens: 10, stopReason: "complete" },
+    events: [],
+    error: "",
+    ...overrides,
+  };
+}
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {

@@ -42,6 +42,13 @@ export class AgentEvaluationStoreService implements OnModuleInit {
     return dataset;
   }
 
+  deleteDataset(datasetId: string): { deleted: true } {
+    const file = this.datasetPath(datasetId);
+    if (!fs.existsSync(file)) throw new Error("Agent 评测数据集不存在");
+    fs.unlinkSync(file);
+    return { deleted: true };
+  }
+
   createRun(args: {
     dataset: AgentEvaluationDataset;
     caseIds: string[];
@@ -72,14 +79,22 @@ export class AgentEvaluationStoreService implements OnModuleInit {
   }
 
   saveRun(run: AgentEvaluationRun): AgentEvaluationRun {
-    writeJson(this.runPath(run.runId), run);
-    return run;
+    const normalized = normalizeAgentRun(run);
+    writeJson(this.runPath(run.runId), normalized);
+    return normalized;
   }
 
   getRun(runId: string): AgentEvaluationRun {
     const run = readJson<AgentEvaluationRun | null>(this.runPath(runId), null);
     if (!run) throw new Error("Agent 评测运行记录不存在");
-    return run;
+    return normalizeAgentRun(run);
+  }
+
+  deleteRun(runId: string): { deleted: true } {
+    const run = this.getRun(runId);
+    if (run.status === "running") throw new Error("运行中的 Agent 评测不能删除");
+    fs.unlinkSync(this.runPath(runId));
+    return { deleted: true };
   }
 
   listRuns(limit = 50): AgentEvaluationRunSummary[] {
@@ -89,6 +104,7 @@ export class AgentEvaluationStoreService implements OnModuleInit {
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map((entry) => readJson<AgentEvaluationRun | null>(path.join(this.runsRoot(), entry.name), null))
       .filter((item): item is AgentEvaluationRun => Boolean(item))
+      .map(normalizeAgentRun)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 200))
       .map(toRunSummary);
@@ -125,7 +141,7 @@ export class AgentEvaluationStoreService implements OnModuleInit {
 }
 
 export function emptyAgentSummary(): AgentEvaluationRun["summary"] {
-  return {
+  return scoreAgentSummary({
     totalCases: 0,
     completedCases: 0,
     sourceMissingCases: 0,
@@ -147,13 +163,67 @@ export function emptyAgentSummary(): AgentEvaluationRun["summary"] {
     abstainCorrectCases: 0,
     abstainTotal: 0,
     abstainAccuracy: 0,
+    taskCorrectnessRate: 0,
+    completionRate: 0,
+    overallScore: 0,
+    passLevel: "failed",
     avgRounds: 0,
     avgReadPages: 0,
     avgKeptPages: 0,
     avgRawSources: 0,
     avgModelCalls: 0,
     avgTotalTokens: 0,
+  });
+}
+
+export function scoreAgentSummary(summary: AgentEvaluationRun["summary"]): AgentEvaluationRun["summary"] {
+  const taskCorrectnessRate = ratio(
+    summary.answerCorrectCases + summary.abstainCorrectCases,
+    summary.totalCases,
+  );
+  const completionRate = ratio(summary.completedCases, summary.totalCases);
+  const dimensions = [
+    { rate: taskCorrectnessRate, weight: 50, applicable: summary.totalCases > 0 },
+    { rate: summary.faithfulnessRate, weight: 25, applicable: summary.faithfulnessTotal > 0 },
+    { rate: summary.factAccuracy, weight: 15, applicable: summary.totalFacts > 0 },
+    { rate: summary.sourceHitRate, weight: 5, applicable: summary.sourceHitTotal > 0 },
+    { rate: completionRate, weight: 5, applicable: summary.totalCases > 0 },
+  ].filter((item) => item.applicable);
+  const totalWeight = dimensions.reduce((sum, item) => sum + item.weight, 0);
+  const overallScore = totalWeight
+    ? (dimensions.reduce((sum, item) => sum + item.rate * item.weight, 0) / totalWeight) * 100
+    : 0;
+
+  return {
+    ...summary,
+    taskCorrectnessRate,
+    completionRate,
+    overallScore,
+    passLevel: agentPassLevel(overallScore),
   };
+}
+
+function normalizeAgentRun(run: AgentEvaluationRun): AgentEvaluationRun {
+  return {
+    ...run,
+    cases: run.cases.map((item) => ({
+      ...item,
+      expectedAnswer: item.expectedAnswer || "",
+      evaluationType: item.evaluationType || "general",
+    })),
+    summary: scoreAgentSummary(run.summary),
+  };
+}
+
+function agentPassLevel(score: number): AgentEvaluationRun["summary"]["passLevel"] {
+  if (score >= 90) return "excellent";
+  if (score >= 80) return "pass";
+  if (score >= 60) return "needs_improvement";
+  return "failed";
+}
+
+function ratio(value: number, total: number): number {
+  return total ? value / total : 0;
 }
 
 function toDatasetSummary(dataset: AgentEvaluationDataset): AgentEvaluationDatasetSummary {

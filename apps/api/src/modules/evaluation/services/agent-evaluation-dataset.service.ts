@@ -5,7 +5,6 @@ import { nowIso, sha256 } from "../../../common/fs-json";
 import type {
   AgentEvaluationDataset,
   AgentEvaluationDatasetCase,
-  AgentEvaluationDatasetSummary,
   AgentEvaluationDatasetSource,
   AgentEvaluationExpectedFact,
 } from "../evaluation.types";
@@ -28,21 +27,15 @@ export class AgentEvaluationDatasetService {
   }
 
   list() {
-    const uploaded = this.store.listDatasets();
-    const byId = new Map<string, AgentEvaluationDatasetSummary>();
-    for (const item of this.listBuiltinDatasets().map(toDatasetSummary)) byId.set(item.datasetId, item);
-    for (const item of uploaded) byId.set(item.datasetId, item);
-    return { items: [...byId.values()].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)) };
+    return { items: this.store.listDatasets() };
   }
 
   get(datasetId: string) {
-    try {
-      return this.store.getDataset(datasetId);
-    } catch {
-      const dataset = this.listBuiltinDatasets().find((item) => item.datasetId === datasetId);
-      if (dataset) return dataset;
-      throw new Error("Agent 评测数据集不存在");
-    }
+    return this.store.getDataset(datasetId);
+  }
+
+  delete(datasetId: string) {
+    return this.store.deleteDataset(datasetId);
   }
 
   private listBuiltinDatasets(): AgentEvaluationDataset[] {
@@ -261,16 +254,4 @@ function findEvalRoot(): string | null {
     current = next;
   }
   return null;
-}
-
-function toDatasetSummary(dataset: AgentEvaluationDataset): AgentEvaluationDatasetSummary {
-  return {
-    datasetId: dataset.datasetId,
-    name: dataset.name,
-    uploadedAt: dataset.uploadedAt,
-    sourceCount: dataset.sources.length,
-    caseCount: dataset.cases.length,
-    factCount: dataset.cases.reduce((sum, item) => sum + item.expectedFacts.length, 0),
-    abstainCaseCount: dataset.cases.filter((item) => !item.answerable).length,
-  };
 }

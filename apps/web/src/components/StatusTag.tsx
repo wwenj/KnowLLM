@@ -15,7 +15,7 @@ const map: Record<string, { label: string; cls: string }> = {
 export function StatusTag({ status, labels }: { status: Status; labels?: Record<string, string> }) {
   const item = map[status] ?? { label: status, cls: "bg-slate-100 text-slate-600 border-slate-200" };
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${item.cls}`}>
+    <span className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs leading-5 ${item.cls}`}>
       {labels?.[status] || item.label}
     </span>
   );

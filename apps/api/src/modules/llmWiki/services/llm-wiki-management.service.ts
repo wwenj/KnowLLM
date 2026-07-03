@@ -36,8 +36,8 @@ export class LlmWikiManagementService implements OnModuleInit {
     return this.store.createSource(filename, data);
   }
 
-  ingestSource(sourceId: string) {
-    return this.ingest.ingestSource(sourceId);
+  ingestSource(sourceId: string, model = "") {
+    return this.ingest.ingestSource(sourceId, model);
   }
 
   renameSource(sourceId: string, filename: string) {

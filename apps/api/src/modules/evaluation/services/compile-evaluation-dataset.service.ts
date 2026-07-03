@@ -1,10 +1,14 @@
 import { Injectable } from "@nestjs/common";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { nowIso, sha256 } from "../../../common/fs-json";
+import { findWorkspaceRoot, getApiRoot } from "../../../config/env";
 import type {
   CompileEvaluationDataset,
   CompileEvaluationDatasetCase,
   CompileEvaluationDatasetSource,
   CompileEvaluationExpectedFact,
+  CompileEvaluationFactImportance,
 } from "../evaluation.types";
 import { CompileEvaluationStoreService } from "./compile-evaluation-store.service";
 
@@ -31,10 +35,15 @@ export class CompileEvaluationDatasetService {
   get(datasetId: string) {
     return this.store.getDataset(datasetId);
   }
+
+  delete(datasetId: string) {
+    return this.store.deleteDataset(datasetId);
+  }
 }
 
 export function normalizeDataset(value: unknown): CompileEvaluationDataset {
-  const raw = record(value);
+  const input = expandDirectoryDataset(record(value));
+  const raw = record(input);
   const datasetId = safeId(raw.datasetId, "datasetId");
   const name = requiredString(raw.name, "name", 200);
   const sourceValues = array(raw.sources, "sources");
@@ -45,9 +54,84 @@ export function normalizeDataset(value: unknown): CompileEvaluationDataset {
   const sources = sourceValues.map(normalizeSource);
   assertUnique(sources.map((item) => item.id), "source id");
   const sourceIds = new Set(sources.map((item) => item.id));
-  const cases = caseValues.map((item) => normalizeCase(item, sourceIds));
+  const sourceById = new Map(sources.map((item) => [item.id, item]));
+  const cases = caseValues.map((item) => normalizeCase(item, sourceIds, sourceById));
   assertUnique(cases.map((item) => item.id), "case id");
   return { datasetId, name, uploadedAt: nowIso(), sources, cases };
+}
+
+function expandDirectoryDataset(raw: Record<string, unknown>): unknown {
+  if (Array.isArray(raw.sources)) return raw;
+  if (!Array.isArray(raw.cases)) return raw;
+
+  const datasetId = safeId(raw.datasetId, "datasetId");
+  const datasetDir = path.join(findWorkspaceRoot(getApiRoot()), "eval", datasetId);
+  const sourceDir = safeRelativePath(optionalString(raw.sourceDir, 200) || "sources", "sourceDir");
+  const manifest = readSourceManifest(path.join(datasetDir, "source_manifest.json"));
+  const sourcesDir = path.join(datasetDir, sourceDir);
+  const manifestSources = array(manifest.sources, "source_manifest.sources").map(record);
+  const sourceIdByFilename = new Map(
+    manifestSources.map((source) => [
+      requiredString(source.filename, "source_manifest.source.filename", 300),
+      safeId(source.id, "source_manifest.source.id"),
+    ]),
+  );
+
+  return {
+    datasetId,
+    name: optionalString(raw.name, 200) || optionalString(manifest.name, 200) || datasetId,
+    sources: manifestSources.map((source) => {
+      const filename = requiredString(source.filename, "source_manifest.source.filename", 300);
+      const contentPath = resolveInside(sourcesDir, filename, "source filename");
+      if (!fs.existsSync(contentPath)) throw new Error(`source 文件不存在: ${filename}`);
+      return {
+        id: safeId(source.id, "source_manifest.source.id"),
+        filename,
+        content: fs.readFileSync(contentPath, "utf8"),
+      };
+    }),
+    cases: raw.cases.map((item) => expandDirectoryCase(item, sourceIdByFilename)),
+  };
+}
+
+function expandDirectoryCase(value: unknown, sourceIdByFilename: Map<string, string>): unknown {
+  const raw = record(value);
+  if (Array.isArray(raw.sourceIds)) return raw;
+  const sourceFiles = array(raw.sourceFiles, "case.sourceFiles").map((item) => requiredString(item, "case.sourceFile", 300));
+  return {
+    ...raw,
+    sourceIds: sourceFiles.map((filename) => {
+      const sourceId = sourceIdByFilename.get(filename);
+      if (!sourceId) throw new Error(`case 引用了不存在的 source 文件: ${filename}`);
+      return sourceId;
+    }),
+  };
+}
+
+function readSourceManifest(file: string): Record<string, unknown> {
+  if (!fs.existsSync(file)) throw new Error(`目录版评测集缺少 source_manifest.json: ${file}`);
+  try {
+    return record(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch {
+    throw new Error("source_manifest.json 不是合法 JSON");
+  }
+}
+
+function resolveInside(root: string, relativePath: string, field: string): string {
+  const safePath = safeRelativePath(relativePath, field);
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, safePath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`${field} 不能指向评测目录外`);
+  }
+  return resolved;
+}
+
+function safeRelativePath(value: string, field: string): string {
+  if (!value || path.isAbsolute(value) || value.split(/[\\/]/).includes("..")) {
+    throw new Error(`${field} 必须是相对路径`);
+  }
+  return value;
 }
 
 function normalizeSource(value: unknown): CompileEvaluationDatasetSource {
@@ -67,14 +151,20 @@ function sourceContent(value: unknown): string {
   return value;
 }
 
-function normalizeCase(value: unknown, sourceIds: Set<string>): CompileEvaluationDatasetCase {
+function normalizeCase(
+  value: unknown,
+  sourceIds: Set<string>,
+  sourceById: Map<string, CompileEvaluationDatasetSource>,
+): CompileEvaluationDatasetCase {
   const raw = record(value);
   const sourceIdList = array(raw.sourceIds, "case.sourceIds").map((item) => safeId(item, "case.sourceId"));
   if (!sourceIdList.length) throw new Error("case.sourceIds 不能为空");
   for (const sourceId of sourceIdList) {
     if (!sourceIds.has(sourceId)) throw new Error(`case 引用了不存在的 source: ${sourceId}`);
   }
-  const expectedFacts = array(raw.expectedFacts, "case.expectedFacts").map(normalizeFact);
+  const expectedFacts = array(raw.expectedFacts, "case.expectedFacts").map((item) =>
+    normalizeFact(item, sourceIdList, sourceById),
+  );
   if (!expectedFacts.length) throw new Error("case.expectedFacts 不能为空");
   assertUnique(expectedFacts.map((item) => item.id), "fact id");
   return {
@@ -85,11 +175,25 @@ function normalizeCase(value: unknown, sourceIds: Set<string>): CompileEvaluatio
   };
 }
 
-function normalizeFact(value: unknown): CompileEvaluationExpectedFact {
+function normalizeFact(
+  value: unknown,
+  sourceIds: string[],
+  sourceById: Map<string, CompileEvaluationDatasetSource>,
+): CompileEvaluationExpectedFact {
   const raw = record(value);
+  const fallbackSourceFile = sourceById.get(sourceIds[0])?.filename || "";
+  const selectedFilenames = new Set(sourceIds.map((id) => sourceById.get(id)?.filename).filter(Boolean));
+  const sourceFile = optionalString(raw.sourceFile, 300) || fallbackSourceFile;
+  if (sourceFile && selectedFilenames.size && !selectedFilenames.has(sourceFile)) {
+    throw new Error(`fact.sourceFile 不属于当前 case: ${sourceFile}`);
+  }
   return {
     id: safeId(raw.id, "fact.id"),
     fact: requiredString(raw.fact, "fact.fact", 2000),
+    sourceFile,
+    evidence: optionalString(raw.evidence, 8000),
+    type: optionalString(raw.type, 100) || "general",
+    importance: normalizeImportance(raw.importance),
   };
 }
 
@@ -114,6 +218,18 @@ function requiredString(value: unknown, field: string, max: number): string {
   if (!text) throw new Error(`${field} 不能为空`);
   if (text.length > max) throw new Error(`${field} 过长`);
   return text;
+}
+
+function optionalString(value: unknown, max: number): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (text.length > max) throw new Error("字符串字段过长");
+  return text;
+}
+
+function normalizeImportance(value: unknown): CompileEvaluationFactImportance {
+  const text = optionalString(value, 20);
+  if (text === "should" || text === "nice") return text;
+  return "must";
 }
 
 function assertUnique(values: string[], field: string): void {

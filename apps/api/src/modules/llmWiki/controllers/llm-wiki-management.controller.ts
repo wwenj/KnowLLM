@@ -44,8 +44,11 @@ export class LlmWikiManagementController {
   }
 
   @Post("sources/:sourceId/ingest")
-  ingestSource(@Param("sourceId") sourceId: string) {
-    return this.run(() => this.wiki.ingestSource(sourceId));
+  ingestSource(
+    @Param("sourceId") sourceId: string,
+    @Body("model") model = "",
+  ) {
+    return this.run(() => this.wiki.ingestSource(sourceId, model));
   }
 
   @Post("sources/:sourceId/rename")

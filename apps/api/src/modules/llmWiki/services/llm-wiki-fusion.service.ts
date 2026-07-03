@@ -51,6 +51,7 @@ export class LlmWikiFusionService {
     source: LlmWikiSourceMeta;
     sourceContent: string;
     draft: LlmWikiDraftPage;
+    model: string;
   }): Promise<LlmWikiFusionResult> {
     if (args.draft.type === "summary") {
       return {
@@ -75,7 +76,7 @@ export class LlmWikiFusionService {
 
     try {
       const res = await this.model.chat({
-        model: llmWikiConfig.model,
+        model: args.model,
         temperature: 0.2,
         response_format: { type: "json_object" },
         messages: [

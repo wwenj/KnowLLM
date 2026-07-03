@@ -114,9 +114,10 @@ export const llmWikiApi = {
   schema: () => http.get<LlmWikiSchema>("/api/llm-wiki/manage/schema"),
   saveSchema: (content: string) =>
     http.post<LlmWikiSchema>("/api/llm-wiki/manage/schema/save", { content }),
-  ingestSource: (sourceId: string) =>
+  ingestSource: (sourceId: string, model: string) =>
     http.post<LlmWikiSource>(
       `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/ingest`,
+      { model },
     ),
   renameSource: (sourceId: string, filename: string) =>
     http.post<LlmWikiSource>(

@@ -9,18 +9,31 @@ import {
 } from "lucide-react";
 import type { RefObject } from "react";
 import type { LlmWikiStats } from "@/api/llmWiki";
+import type { ModelOption } from "@/api/model";
+import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface LlmWikiHeaderProps {
   stats: LlmWikiStats;
   uploading: boolean;
   loading: boolean;
+  modelLoading: boolean;
+  model: string;
+  modelOptions: ModelOption[];
   fileRef: RefObject<HTMLInputElement | null>;
   onUpload: (files?: FileList | null) => void;
   onOpenWiki: () => void;
   onOpenSearch: () => void;
   onOpenSchema: () => void;
   onOpenDiagnostics: () => void;
+  onModelChange: (model: string) => void;
   onRefresh: () => void;
 }
 
@@ -28,12 +41,16 @@ export function LlmWikiHeader({
   stats,
   uploading,
   loading,
+  modelLoading,
+  model,
+  modelOptions,
   fileRef,
   onUpload,
   onOpenWiki,
   onOpenSearch,
   onOpenSchema,
   onOpenDiagnostics,
+  onModelChange,
   onRefresh,
 }: LlmWikiHeaderProps) {
   return (
@@ -53,6 +70,29 @@ export function LlmWikiHeader({
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex min-w-[240px] items-center gap-2">
+          <span className="shrink-0 text-xs font-medium text-slate-600">
+            解析模型
+          </span>
+          <Select
+            value={model}
+            onValueChange={onModelChange}
+            disabled={modelLoading || !modelOptions.length}
+          >
+            <SelectTrigger className="h-8 min-w-0 flex-1 bg-white text-xs">
+              <SelectValue
+                placeholder={modelLoading ? "加载模型中" : "未配置可用模型"}
+              />
+            </SelectTrigger>
+            <SelectContent>
+              {modelOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {modelOptionLabel(option)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <input
           ref={fileRef}
           type="file"

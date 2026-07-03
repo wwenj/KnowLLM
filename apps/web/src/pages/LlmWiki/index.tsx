@@ -12,6 +12,7 @@ import {
   type LlmWikiStats,
   type LlmWikiTree,
 } from "@/api/llmWiki";
+import { modelApi, type ModelOption } from "@/api/model";
 import { DiagnosticsDialog } from "./components/DiagnosticsDialog";
 import { LlmWikiDialogs } from "./components/LlmWikiDialogs";
 import { LlmWikiHeader } from "./components/LlmWikiHeader";
@@ -22,11 +23,16 @@ import { defaultSourcePageSize, emptyStats } from "./constants";
 import type { BulkAction, RawSource, StatusFilter } from "./types";
 import { isWikiPageTarget } from "./utils";
 
+const INGEST_MODEL_STORAGE_KEY = "knowllm.llmWiki.ingestModel";
+
 export function LlmWiki() {
   const [sources, setSources] = useState<LlmWikiSource[]>([]);
   const [stats, setStats] = useState<LlmWikiStats>(emptyStats);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [modelLoading, setModelLoading] = useState(true);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [ingestModel, setIngestModel] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState<StatusFilter>("all");
   const [nameFilter, setNameFilter] = useState("");
@@ -87,6 +93,30 @@ export function LlmWiki() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadModels = async () => {
+      setModelLoading(true);
+      try {
+        const res = await modelApi.list(true);
+        if (cancelled) return;
+        const options = res.items || [];
+        const stored = window.localStorage.getItem(INGEST_MODEL_STORAGE_KEY) || "";
+        const selected = options.some((option) => option.id === stored)
+          ? stored
+          : options[0]?.id || "";
+        setModelOptions(options);
+        setIngestModel(selected);
+      } finally {
+        if (!cancelled) setModelLoading(false);
+      }
+    };
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!sources.some((source) => source.status === "ingesting")) return;
@@ -162,7 +192,11 @@ export function LlmWiki() {
   };
 
   const handleIngest = async (source: LlmWikiSource) => {
-    await llmWikiApi.ingestSource(source.source_id);
+    if (!ingestModel) {
+      toast.error("请先选择解析模型");
+      return;
+    }
+    await llmWikiApi.ingestSource(source.source_id, ingestModel);
     toast.success(source.status === "ready" ? "已启动重新解析" : "已启动解析");
     await refresh(true);
   };
@@ -206,6 +240,10 @@ export function LlmWiki() {
   };
 
   const handleBulkIngest = async () => {
+    if (!ingestModel) {
+      toast.error("请先选择解析模型");
+      return;
+    }
     const targets = selectedSources.filter(
       (source) => source.status !== "ingesting",
     );
@@ -216,7 +254,7 @@ export function LlmWiki() {
     setBulkAction("ingest");
     try {
       for (const source of targets) {
-        await llmWikiApi.ingestSource(source.source_id);
+        await llmWikiApi.ingestSource(source.source_id, ingestModel);
       }
       toast.success(`已启动 ${targets.length} 个文档解析`);
       clearSelection();
@@ -436,12 +474,19 @@ export function LlmWiki() {
         stats={stats}
         uploading={uploading}
         loading={loading}
+        modelLoading={modelLoading}
+        model={ingestModel}
+        modelOptions={modelOptions}
         fileRef={fileRef}
         onUpload={(files) => void handleUpload(files)}
         onOpenWiki={() => void openWiki()}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSchema={() => void openSchema()}
         onOpenDiagnostics={() => void openDiagnostics()}
+        onModelChange={(model) => {
+          setIngestModel(model);
+          window.localStorage.setItem(INGEST_MODEL_STORAGE_KEY, model);
+        }}
         onRefresh={() => void refresh()}
       />
 

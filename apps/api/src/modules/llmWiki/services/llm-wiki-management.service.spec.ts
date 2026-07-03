@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { LlmWikiIngestService } from "./llm-wiki-ingest.service";
+import type { ModelService } from "../../model/model.service";
+import type { LlmWikiCompilerService } from "./llm-wiki-compiler.service";
+import type { LlmWikiFusionService } from "./llm-wiki-fusion.service";
+import { LlmWikiIngestService } from "./llm-wiki-ingest.service";
 import type { LlmWikiIssueService } from "./llm-wiki-issue.service";
 import type { LlmWikiLintService } from "./llm-wiki-lint.service";
 import { LlmWikiManagementService } from "./llm-wiki-management.service";
@@ -19,7 +22,13 @@ test("management service owns writes and delegates ingest without exposing inter
     savePage: (path: string) => ({ path }),
     deletePage: (path: string) => calls.push(`delete:${path}`),
   };
-  const ingest = { ingestSource: (sourceId: string) => ({ source_id: sourceId }) };
+  const ingestCalls: Array<{ sourceId: string; model: string }> = [];
+  const ingest = {
+    ingestSource: (sourceId: string, model: string) => {
+      ingestCalls.push({ sourceId, model });
+      return { source_id: sourceId };
+    },
+  };
   const issues = { upsertMany: () => [], list: () => ({ items: [] }), resolve: (id: string) => ({ id }) };
   const search = { invalidate: () => calls.push("invalidate") };
   const schema = { read: () => ({ content: "" }), save: (content: string) => ({ content }) };
@@ -34,7 +43,10 @@ test("management service owns writes and delegates ingest without exposing inter
   );
 
   assert.equal(service.uploadSource("a.md", Buffer.from("a")).filename, "a.md");
-  assert.equal(service.ingestSource("a".repeat(32)).source_id, "a".repeat(32));
+  assert.equal(
+    service.ingestSource("a".repeat(32), "provider-a:model-a").source_id,
+    "a".repeat(32),
+  );
   assert.equal(service.savePage("concepts/a.md", "# A").path, "concepts/a.md");
   service.deletePage("concepts/a.md");
   service.deleteSource("a".repeat(32));
@@ -45,4 +57,37 @@ test("management service owns writes and delegates ingest without exposing inter
     "invalidate",
     "invalidate",
   ]);
+  assert.deepEqual(ingestCalls, [
+    { sourceId: "a".repeat(32), model: "provider-a:model-a" },
+  ]);
+});
+
+test("ingest rejects an unavailable explicit model before changing source status", () => {
+  let prepared = false;
+  const store = {
+    getSource: (sourceId: string) => ({
+      source_id: sourceId,
+      status: "uploaded",
+    }),
+    prepareIngest: () => {
+      prepared = true;
+      return {};
+    },
+  };
+  const model = { resolveModel: () => "" };
+  const service = new LlmWikiIngestService(
+    store as unknown as LlmWikiStoreService,
+    {} as LlmWikiCompilerService,
+    {} as LlmWikiFusionService,
+    {} as LlmWikiIssueService,
+    {} as LlmWikiSearchService,
+    {} as LlmWikiSchemaService,
+    model as ModelService,
+  );
+
+  assert.throws(
+    () => service.ingestSource("a".repeat(32), "missing:model"),
+    /解析模型不存在或不可用/,
+  );
+  assert.equal(prepared, false);
 });

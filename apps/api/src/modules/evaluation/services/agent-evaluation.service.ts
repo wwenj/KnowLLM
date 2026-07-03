@@ -19,7 +19,11 @@ import type {
   AgentEvaluationRun,
   AgentEvaluationSourcePolicy,
 } from "../evaluation.types";
-import { AgentEvaluationStoreService, emptyAgentSummary } from "./agent-evaluation-store.service";
+import {
+  AgentEvaluationStoreService,
+  emptyAgentSummary,
+  scoreAgentSummary,
+} from "./agent-evaluation-store.service";
 
 interface AgentJudgeOutput {
   facts?: Array<{
@@ -78,6 +82,10 @@ export class AgentEvaluationService {
 
   getRun(runId: string) {
     return this.store.getRun(runId);
+  }
+
+  deleteRun(runId: string) {
+    return this.store.deleteRun(runId);
   }
 
   private async execute(runId: string, dataset: AgentEvaluationDataset): Promise<void> {
@@ -185,9 +193,7 @@ export class AgentEvaluationService {
         resultJson,
       });
       return {
-        caseId: testCase.id,
-        question: testCase.question,
-        answerable: testCase.answerable,
+        ...baseCaseResult(testCase, matchedSources),
         status: "success",
         agentRunId,
         agentStatus: agentDetail.status,
@@ -208,9 +214,7 @@ export class AgentEvaluationService {
       };
     } catch (error) {
       return {
-        caseId: testCase.id,
-        question: testCase.question,
-        answerable: testCase.answerable,
+        ...baseCaseResult(testCase, matchedSources),
         status: "judge_failed",
         agentRunId,
         agentStatus: agentDetail.status,
@@ -379,7 +383,7 @@ export function summarizeAgentEvaluation(cases: AgentEvaluationCaseResult[]) {
   summary.avgRawSources = average(metricCases.map((item) => item.metrics.rawSources));
   summary.avgModelCalls = average(metricCases.map((item) => item.metrics.modelCalls));
   summary.avgTotalTokens = average(metricCases.map((item) => item.metrics.totalTokens));
-  return summary;
+  return scoreAgentSummary(summary);
 }
 
 function sourceMissingResult(
@@ -408,6 +412,8 @@ function baseCaseResult(
   return {
     caseId: testCase.id,
     question: testCase.question,
+    expectedAnswer: testCase.expectedAnswer,
+    evaluationType: testCase.evaluationType,
     answerable: testCase.answerable,
     status: "pending",
     agentRunId: "",
