@@ -174,6 +174,80 @@ test("compile evaluation summary counts fact statuses", () => {
   );
 });
 
+test("compile evaluation pass level gates excellent and pass by must accuracy", () => {
+  const lowMustAccuracy = summarize([
+    {
+      caseId: "case",
+      name: "Case",
+      status: "success",
+      matchedSources: [],
+      pagePaths: [],
+      error: "",
+      facts: [
+        ...Array.from({ length: 8 }, (_, index) => factResult(`must-correct-${index}`, "correct", "must")),
+        ...Array.from({ length: 2 }, (_, index) => factResult(`must-missing-${index}`, "missing", "must")),
+        ...Array.from({ length: 70 }, (_, index) => factResult(`should-correct-${index}`, "correct", "should")),
+      ],
+    },
+  ]);
+  const highMustAccuracy = summarize([
+    {
+      caseId: "case",
+      name: "Case",
+      status: "success",
+      matchedSources: [],
+      pagePaths: [],
+      error: "",
+      facts: Array.from({ length: 20 }, (_, index) => factResult(`must-correct-${index}`, "correct", "must")),
+    },
+  ]);
+
+  assert.equal(Math.round(lowMustAccuracy.weightedScore), 96);
+  assert.equal(lowMustAccuracy.mustAccuracy, 0.8);
+  assert.equal(lowMustAccuracy.passLevel, "needs_improvement");
+  assert.equal(highMustAccuracy.weightedScore, 100);
+  assert.equal(highMustAccuracy.mustAccuracy, 1);
+  assert.equal(highMustAccuracy.passLevel, "excellent");
+});
+
+test("compile evaluation pass level gates excellent and pass by incorrect rate", () => {
+  const passButNotExcellent = summarize([
+    {
+      caseId: "case",
+      name: "Case",
+      status: "success",
+      matchedSources: [],
+      pagePaths: [],
+      error: "",
+      facts: [
+        ...Array.from({ length: 98 }, (_, index) => factResult(`correct-${index}`, "correct", "must")),
+        ...Array.from({ length: 2 }, (_, index) => factResult(`incorrect-${index}`, "incorrect", "must")),
+      ],
+    },
+  ]);
+  const tooManyIncorrect = summarize([
+    {
+      caseId: "case",
+      name: "Case",
+      status: "success",
+      matchedSources: [],
+      pagePaths: [],
+      error: "",
+      facts: [
+        ...Array.from({ length: 96 }, (_, index) => factResult(`correct-${index}`, "correct", "must")),
+        ...Array.from({ length: 4 }, (_, index) => factResult(`incorrect-${index}`, "incorrect", "must")),
+      ],
+    },
+  ]);
+
+  assert.equal(passButNotExcellent.weightedScore, 98);
+  assert.equal(passButNotExcellent.incorrectRate, 0.02);
+  assert.equal(passButNotExcellent.passLevel, "pass");
+  assert.equal(tooManyIncorrect.weightedScore, 96);
+  assert.equal(tooManyIncorrect.incorrectRate, 0.04);
+  assert.equal(tooManyIncorrect.passLevel, "needs_improvement");
+});
+
 test("compile evaluation marks facts missing when source is not compiled", async () => {
   const dataset = createDataset();
   let chatCalled = false;

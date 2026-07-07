@@ -13,6 +13,7 @@ import type {
 import type { AgentEvaluationStoreService } from "./agent-evaluation-store.service";
 import {
   emptyAgentSummary,
+  scoreAgentCase,
   scoreAgentSummary,
 } from "./agent-evaluation-store.service";
 import { AgentEvaluationService, summarizeAgentEvaluation } from "./agent-evaluation.service";
@@ -245,6 +246,54 @@ test("agent evaluation score penalizes failed cases with answer-priority weights
   assert.equal(summary.passLevel, "needs_improvement");
 });
 
+test("agent evaluation score uses graded fact coverage for task correctness", () => {
+  const summary = summarizeAgentEvaluation([
+    createCaseResult({ caseId: "A001", facts: createFacts(2, 3), answerCorrectness: { status: "incorrect", reason: "" } }),
+    createCaseResult({ caseId: "A002", facts: createFacts(3, 3) }),
+    createCaseResult({ caseId: "A003", facts: createFacts(2, 3), answerCorrectness: { status: "incorrect", reason: "" } }),
+    createCaseResult({ caseId: "A004", facts: createFacts(3, 3) }),
+    createCaseResult({ caseId: "A005", facts: createFacts(3, 3) }),
+    createCaseResult({ caseId: "A006", facts: createFacts(3, 3) }),
+    createCaseResult({ caseId: "A007", facts: createFacts(2, 3), answerCorrectness: { status: "incorrect", reason: "" } }),
+    createCaseResult({ caseId: "A008", facts: createFacts(4, 4) }),
+    createCaseResult({ caseId: "A009", facts: createFacts(2, 4), answerCorrectness: { status: "incorrect", reason: "" } }),
+    createCaseResult({ caseId: "A010", facts: createFacts(4, 4) }),
+  ]);
+
+  assert.equal(summary.answerCorrectnessRate, 0.6);
+  assert.equal(summary.factAccuracy, 28 / 33);
+  assert.equal(summary.taskCorrectnessRate, 0.775);
+  assert.equal(Math.round(summary.overallScore * 100) / 100, 86.48);
+  assert.equal(summary.passLevel, "pass");
+});
+
+test("agent evaluation case score gives partial credit and penalizes incorrect facts harder", () => {
+  const missing = scoreAgentCase(createCaseResult({
+    facts: createFacts(1, 2),
+    answerCorrectness: { status: "incorrect", reason: "" },
+  }));
+  const incorrect = scoreAgentCase(createCaseResult({
+    facts: [
+      { id: "F1", fact: "correct", status: "correct", evidencePath: "", evidence: "", reason: "" },
+      { id: "F2", fact: "wrong", status: "incorrect", evidencePath: "", evidence: "", reason: "" },
+    ],
+    answerCorrectness: { status: "incorrect", reason: "" },
+  }));
+
+  assert.equal(missing.factScore, 0.5);
+  assert.equal(missing.taskScore, 0.35);
+  assert.equal(incorrect.factScore, 0);
+  assert.equal(incorrect.taskScore, 0);
+});
+
+test("agent evaluation case score gives zero task score for non-success cases", () => {
+  const sourceMissing = scoreAgentCase(createCaseResult({ status: "source_missing", facts: createFacts(0, 2) }));
+  const failed = scoreAgentCase(createCaseResult({ status: "agent_failed", facts: [] }));
+
+  assert.equal(sourceMissing.taskScore, 0);
+  assert.equal(failed.taskScore, 0);
+});
+
 test("agent evaluation score normalizes non-applicable metrics for abstain cases", () => {
   const summary = summarizeAgentEvaluation([
     createCaseResult({
@@ -286,7 +335,19 @@ function summaryAtRate(rate: number) {
     answerCorrectCases: count,
     answerCorrectnessTotal: 100,
     answerCorrectnessRate: rate,
+    taskCorrectnessRate: rate,
   });
+}
+
+function createFacts(correct: number, total: number): AgentEvaluationCaseResult["facts"] {
+  return Array.from({ length: total }, (_, index) => ({
+    id: `F${index + 1}`,
+    fact: `Fact ${index + 1}`,
+    status: index < correct ? "correct" : "missing",
+    evidencePath: "",
+    evidence: "",
+    reason: "",
+  }));
 }
 
 function createCaseResult(overrides: Partial<AgentEvaluationCaseResult> = {}): AgentEvaluationCaseResult {
@@ -307,6 +368,8 @@ function createCaseResult(overrides: Partial<AgentEvaluationCaseResult> = {}): A
     mustIncludeHits: [],
     answerMarkdown: "Answer.",
     facts: [{ id: "A001-F01", fact: "Answer.", status: "correct", evidencePath: "a.md", evidence: "Answer.", reason: "" }],
+    factScore: 1,
+    taskScore: 1,
     faithfulness: { status: "correct", reason: "" },
     answerCorrectness: { status: "correct", reason: "" },
     abstainCorrectness: { status: "not_applicable", reason: "" },

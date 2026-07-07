@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { ensureDir, nowIso, randomId, readJson, writeJson } from "../../../common/fs-json";
 import { getDataRoot } from "../../../config/data-root";
 import type {
+  AgentEvaluationCaseResult,
   AgentEvaluationDataset,
   AgentEvaluationDatasetSummary,
   AgentEvaluationRun,
@@ -176,11 +177,84 @@ export function emptyAgentSummary(): AgentEvaluationRun["summary"] {
   });
 }
 
+export function summarizeAgentCases(cases: AgentEvaluationCaseResult[]): AgentEvaluationRun["summary"] {
+  const summary = emptyAgentSummary();
+  summary.totalCases = cases.length;
+  const metricCases = cases.filter((item) => item.agentRunId);
+  let taskScoreTotal = 0;
+  for (const raw of cases) {
+    const item = normalizeAgentCaseResult(raw);
+    taskScoreTotal += item.taskScore;
+    if (item.status === "success") summary.completedCases += 1;
+    if (item.status === "source_missing") summary.sourceMissingCases += 1;
+    if (item.status !== "success" && item.status !== "source_missing") summary.failedCases += 1;
+    if (item.sourceHit !== null) {
+      summary.sourceHitTotal += 1;
+      if (item.sourceHit) summary.sourceHitCases += 1;
+    }
+    for (const fact of item.facts) {
+      summary.totalFacts += 1;
+      if (fact.status === "correct") summary.correctFacts += 1;
+      if (fact.status === "missing") summary.missingFacts += 1;
+      if (fact.status === "incorrect") summary.incorrectFacts += 1;
+    }
+    if (item.faithfulness.status !== "not_applicable") {
+      summary.faithfulnessTotal += 1;
+      if (item.faithfulness.status === "correct") summary.faithfulCases += 1;
+    }
+    if (item.answerCorrectness.status !== "not_applicable") {
+      summary.answerCorrectnessTotal += 1;
+      if (item.answerCorrectness.status === "correct") summary.answerCorrectCases += 1;
+    }
+    if (item.abstainCorrectness.status !== "not_applicable") {
+      summary.abstainTotal += 1;
+      if (item.abstainCorrectness.status === "correct") summary.abstainCorrectCases += 1;
+    }
+  }
+  summary.factAccuracy = ratio(summary.correctFacts, summary.totalFacts);
+  summary.sourceHitRate = ratio(summary.sourceHitCases, summary.sourceHitTotal);
+  summary.faithfulnessRate = ratio(summary.faithfulCases, summary.faithfulnessTotal);
+  summary.answerCorrectnessRate = ratio(summary.answerCorrectCases, summary.answerCorrectnessTotal);
+  summary.abstainAccuracy = ratio(summary.abstainCorrectCases, summary.abstainTotal);
+  summary.taskCorrectnessRate = ratio(taskScoreTotal, summary.totalCases);
+  summary.avgRounds = average(metricCases.map((item) => item.metrics.rounds));
+  summary.avgReadPages = average(metricCases.map((item) => item.metrics.readPages));
+  summary.avgKeptPages = average(metricCases.map((item) => item.metrics.keptPages));
+  summary.avgRawSources = average(metricCases.map((item) => item.metrics.rawSources));
+  summary.avgModelCalls = average(metricCases.map((item) => item.metrics.modelCalls));
+  summary.avgTotalTokens = average(metricCases.map((item) => item.metrics.totalTokens));
+  return scoreAgentSummary(summary);
+}
+
+export function normalizeAgentCaseResult(item: AgentEvaluationCaseResult): AgentEvaluationCaseResult {
+  const normalized = {
+    ...item,
+    expectedAnswer: item.expectedAnswer || "",
+    evaluationType: item.evaluationType || "general",
+  };
+  const scores = scoreAgentCase(normalized);
+  return { ...normalized, ...scores };
+}
+
+export function scoreAgentCase(item: AgentEvaluationCaseResult): { factScore: number; taskScore: number } {
+  const binaryAnswerScore = item.answerable
+    ? item.answerCorrectness.status === "correct" ? 1 : 0
+    : item.abstainCorrectness.status === "correct" ? 1 : 0;
+  const correctFacts = item.facts.filter((fact) => fact.status === "correct").length;
+  const incorrectFacts = item.facts.filter((fact) => fact.status === "incorrect").length;
+  const factScore = item.facts.length
+    ? clampRate((correctFacts - incorrectFacts) / item.facts.length)
+    : binaryAnswerScore;
+  const taskScore = item.status === "success"
+    ? item.answerable ? 0.7 * factScore + 0.3 * binaryAnswerScore : binaryAnswerScore
+    : 0;
+  return { factScore, taskScore };
+}
+
 export function scoreAgentSummary(summary: AgentEvaluationRun["summary"]): AgentEvaluationRun["summary"] {
-  const taskCorrectnessRate = ratio(
-    summary.answerCorrectCases + summary.abstainCorrectCases,
-    summary.totalCases,
-  );
+  const taskCorrectnessRate = Number.isFinite(summary.taskCorrectnessRate)
+    ? clampRate(summary.taskCorrectnessRate)
+    : ratio(summary.answerCorrectCases + summary.abstainCorrectCases, summary.totalCases);
   const completionRate = ratio(summary.completedCases, summary.totalCases);
   const dimensions = [
     { rate: taskCorrectnessRate, weight: 50, applicable: summary.totalCases > 0 },
@@ -204,14 +278,11 @@ export function scoreAgentSummary(summary: AgentEvaluationRun["summary"]): Agent
 }
 
 function normalizeAgentRun(run: AgentEvaluationRun): AgentEvaluationRun {
+  const cases = run.cases.map(normalizeAgentCaseResult);
   return {
     ...run,
-    cases: run.cases.map((item) => ({
-      ...item,
-      expectedAnswer: item.expectedAnswer || "",
-      evaluationType: item.evaluationType || "general",
-    })),
-    summary: scoreAgentSummary(run.summary),
+    cases,
+    summary: cases.length ? summarizeAgentCases(cases) : scoreAgentSummary(run.summary),
   };
 }
 
@@ -224,6 +295,16 @@ function agentPassLevel(score: number): AgentEvaluationRun["summary"]["passLevel
 
 function ratio(value: number, total: number): number {
   return total ? value / total : 0;
+}
+
+function clampRate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function average(values: number[]): number {
+  const valid = values.filter((value) => Number.isFinite(value));
+  return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : 0;
 }
 
 function toDatasetSummary(dataset: AgentEvaluationDataset): AgentEvaluationDatasetSummary {

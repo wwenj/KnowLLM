@@ -230,6 +230,12 @@ function AgentCaseDetail({ item, verdict }: { item: AgentEvaluationCaseResult; v
 
       <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-3">
         <div className="flex flex-wrap gap-2">
+          <span className="inline-flex h-6 items-center rounded-full border border-slate-200 bg-white px-2 text-xs text-slate-600">
+            任务 {formatPercent(item.taskScore || 0)}
+          </span>
+          <span className="inline-flex h-6 items-center rounded-full border border-slate-200 bg-white px-2 text-xs text-slate-600">
+            事实 {formatPercent(item.factScore || 0)}
+          </span>
           <MetricBadge label="回答" result={item.answerCorrectness} />
           <MetricBadge label="忠实" result={item.faithfulness} />
           <MetricBadge label="拒答" result={item.abstainCorrectness} />
