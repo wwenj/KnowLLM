@@ -11,6 +11,8 @@
 - `compile`：验证原始资料中的关键事实，是否在 Wiki 编译后被保留。
 - `agent`：验证 Agent 是否能找到证据，并生成被证据支持的答案。
 
+![llmWiki 两段式评测拆解](../assets/eval/README/01-eval-split.png)
+
 ## 设计依据
 
 市场上的评测方法大致有三类：
@@ -43,6 +45,8 @@ sources
 ```
 
 `gold facts` 是核心标准。每条事实都要能回到原文证据，Agent 问答中的 expected facts 也应尽量复用这些事实，避免编译评测和问答评测使用两套互相矛盾的答案标准。
+
+![从真实文档派生 Gold Facts 和评测用例](../assets/eval/README/02-gold-facts.png)
 
 ## llmWiki 编译评测
 
@@ -119,6 +123,8 @@ overallScore =
 - `factAccuracy`：事实覆盖是否充分，是细粒度质量指标。
 - `sourceHitRate`：是否找到来源，是检索诊断指标。
 - `completionRate`：是否稳定跑完，是工程稳定性指标。
+
+![llmWiki 评分模型](../assets/eval/README/03-score-model.png)
 
 等级口径：
 
