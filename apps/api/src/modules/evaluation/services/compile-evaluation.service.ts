@@ -6,6 +6,7 @@ import type {
   CompileEvaluationCaseResult,
   CompileEvaluationDataset,
   CompileEvaluationDatasetCase,
+  CompileEvaluationExpectedFact,
   CompileEvaluationFactResult,
   CompileEvaluationFactStatus,
   CompileEvaluationFactImportance,
@@ -146,6 +147,9 @@ export class CompileEvaluationService {
           confidence: 0,
           weight: factWeight(fact.importance),
           score: 0,
+          coveredByClaims: false,
+          judgeNeedsReview: false,
+          unsupportedCorrect: false,
         })),
         error: "",
       };
@@ -156,13 +160,30 @@ export class CompileEvaluationService {
       (page) => page.path !== "index.md" && page.sources.some((sourceId) => matchedIds.has(sourceId)),
     );
     const pages = pageRefs.map((page) => this.retrieval.readPage(page.path));
+    const pageClaims = pages
+      .map((page) => this.retrieval.readPageClaims(page.path))
+      .filter((claim): claim is NonNullable<typeof claim> => !!claim);
+    const claimedFactIds = new Set(pageClaims.flatMap((claim) => claim.factIds));
+    const ledgerFacts = this.retrieval
+      .listFacts([...matchedIds])
+      .filter((fact) => claimedFactIds.has(fact.factId));
+    const coveredByClaims = new Map(
+      testCase.expectedFacts.map((fact) => [fact.id, expectedFactCoveredByClaims(fact, ledgerFacts)] as const),
+    );
     try {
-      const facts = await this.judge({
+      const judgedFacts = await this.judge({
         model: judgeModel,
         testCase,
         sources: sources.map(({ id, filename, content }) => ({ id, filename, content })),
         pages: pages.map(({ path, title, content }) => ({ path, title, content })),
       });
+      const facts = judgedFacts.map((fact) =>
+        finalizeJudgeFact({
+          fact,
+          coveredByClaims: coveredByClaims.get(fact.id) || false,
+          pages: pages.map(({ path, content }) => ({ path, content })),
+        }),
+      );
       return {
         caseId: testCase.id,
         name: testCase.name,
@@ -243,9 +264,62 @@ export class CompileEvaluationService {
         confidence: numberOrNull(item?.confidence),
         weight,
         score: status === "correct" ? weight : 0,
+        coveredByClaims: false,
+        judgeNeedsReview: false,
+        unsupportedCorrect: false,
       };
     });
   }
+}
+
+function finalizeJudgeFact(args: {
+  fact: CompileEvaluationFactResult;
+  coveredByClaims: boolean;
+  pages: Array<{ path: string; content: string }>;
+}): CompileEvaluationFactResult {
+  const evidenceHits =
+    args.fact.status !== "correct" ||
+    Boolean(args.fact.wikiEvidence && wikiEvidenceHitsPages(args.fact.wikiEvidence, args.pages));
+  if (!evidenceHits) {
+    return {
+      ...args.fact,
+      status: "missing",
+      score: 0,
+      coveredByClaims: args.coveredByClaims,
+      judgeNeedsReview: true,
+      unsupportedCorrect: true,
+      reason: args.fact.reason
+        ? `${args.fact.reason}; Judge correct 的 wikiEvidence 未命中最终页面正文`
+        : "Judge correct 的 wikiEvidence 未命中最终页面正文",
+    };
+  }
+  return {
+    ...args.fact,
+    coveredByClaims: args.coveredByClaims,
+    judgeNeedsReview: false,
+    unsupportedCorrect: false,
+  };
+}
+
+function expectedFactCoveredByClaims(
+  expected: CompileEvaluationExpectedFact,
+  facts: Array<{ fact: string; evidence: string; entities: string[]; type: string }>,
+): boolean {
+  const expectedFact = normalizeText(expected.fact);
+  const expectedEvidence = normalizeText(expected.evidence);
+  return facts.some((fact) => {
+    const ledgerText = normalizeText([fact.fact, fact.evidence, fact.type, fact.entities.join(" ")].join(" "));
+    return textOverlaps(expectedFact, ledgerText) || textOverlaps(expectedEvidence, ledgerText);
+  });
+}
+
+function wikiEvidenceHitsPages(
+  wikiEvidence: string,
+  pages: Array<{ path: string; content: string }>,
+): boolean {
+  const needle = normalizeText(wikiEvidence);
+  if (!needle) return false;
+  return pages.some((page) => normalizeText(page.content).includes(needle) || textOverlaps(needle, normalizeText(page.content)));
 }
 
 export function summarize(cases: CompileEvaluationCaseResult[]) {
@@ -260,6 +334,9 @@ export function summarize(cases: CompileEvaluationCaseResult[]) {
       summary[fact.status] += 1;
       summary.totalWeight += weight;
       if (fact.status === "correct") summary.correctWeight += weight;
+      if (fact.coveredByClaims) summary.coveredByClaims += 1;
+      if (fact.judgeNeedsReview) summary.judgeNeedsReview += 1;
+      if (fact.unsupportedCorrect) summary.unsupportedCorrect += 1;
       if (importance === "must") {
         summary.mustTotal += 1;
         if (fact.status === "correct") summary.mustCorrect += 1;
@@ -345,6 +422,29 @@ function extractObject(text: string): string {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   return start >= 0 && end > start ? text.slice(start, end + 1) : "";
+}
+
+function normalizeText(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[`*_#[\](){}|>~"'，。；：！？、,.!?;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function textOverlaps(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a.length >= 12 && b.includes(a)) return true;
+  if (b.length >= 12 && a.includes(b)) return true;
+  const terms = uniqueTerms(a);
+  if (terms.length < 3) return false;
+  const bSet = new Set(uniqueTerms(b));
+  const matched = terms.filter((term) => bSet.has(term)).length;
+  return matched / terms.length >= 0.6;
+}
+
+function uniqueTerms(text: string): string[] {
+  return [...new Set(text.split(/\s+/).filter((item) => item.length >= 2))];
 }
 
 function stringField(value: unknown): string {

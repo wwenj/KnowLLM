@@ -1,7 +1,7 @@
 export function isWikiMarkdownPath(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^(index\.md|summaries\/[a-f0-9]{32}\.md|(?:concepts|entities)\/[A-Za-z0-9._-]+\.md)$/.test(value)
+    /^(index\.md|summaries\/[a-f0-9]{32}\.md|(?:concepts|entities|references|procedures|changelogs|troubleshooting)\/[A-Za-z0-9._-]+\.md)$/.test(value)
   );
 }
 

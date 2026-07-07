@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Pagination } from "@/components/ui/pagination";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   llmWikiApi,
   type LlmWikiIssue,
-  type LlmWikiLintMode,
   type LlmWikiPage,
   type LlmWikiSearchHit,
   type LlmWikiSchema,
   type LlmWikiSource,
+  type LlmWikiSourceArtifacts,
   type LlmWikiStats,
   type LlmWikiTree,
 } from "@/api/llmWiki";
@@ -17,6 +18,7 @@ import { DiagnosticsDialog } from "./components/DiagnosticsDialog";
 import { LlmWikiDialogs } from "./components/LlmWikiDialogs";
 import { LlmWikiHeader } from "./components/LlmWikiHeader";
 import { SourceBulkActions } from "./components/SourceBulkActions";
+import { SourceCompilePanel } from "./components/SourceCompilePanel";
 import { SourceFilters } from "./components/SourceFilters";
 import { SourceTable } from "./components/SourceTable";
 import { defaultSourcePageSize, emptyStats } from "./constants";
@@ -32,7 +34,7 @@ export function LlmWiki() {
   const [uploading, setUploading] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [ingestModel, setIngestModel] = useState("");
+  const [ingestModel, setIngestModel] = useState(readStoredIngestModel);
   const [nameDraft, setNameDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState<StatusFilter>("all");
   const [nameFilter, setNameFilter] = useState("");
@@ -42,6 +44,10 @@ export function LlmWiki() {
   const [deleteSource, setDeleteSource] = useState<LlmWikiSource | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [activeSourceId, setActiveSourceId] = useState("");
+  const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
+  const [sourceArtifacts, setSourceArtifacts] = useState<LlmWikiSourceArtifacts | null>(null);
+  const [sourceArtifactsLoading, setSourceArtifactsLoading] = useState(false);
   const [sourcePage, setSourcePage] = useState(1);
   const [sourcePageSize, setSourcePageSize] = useState(defaultSourcePageSize);
   const [bulkAction, setBulkAction] = useState<BulkAction>(null);
@@ -57,7 +63,6 @@ export function LlmWiki() {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<LlmWikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
-  const [lintMode, setLintMode] = useState<LlmWikiLintMode>("all");
   const [lintLoading, setLintLoading] = useState(false);
   const [schemaOpen, setSchemaOpen] = useState(false);
   const [schema, setSchema] = useState<LlmWikiSchema | null>(null);
@@ -81,6 +86,10 @@ export function LlmWiki() {
       );
       setSources(nextSources);
       setStats(res.stats || emptyStats);
+      setActiveSourceId((current) => {
+        if (current && nextSources.some((source) => source.source_id === current)) return current;
+        return nextSources[0]?.source_id || "";
+      });
       setSelectedSourceIds((ids) => ids.filter((id) => selectableIds.has(id)));
     } finally {
       if (!silent) setLoading(false);
@@ -102,12 +111,17 @@ export function LlmWiki() {
         const res = await modelApi.list(true);
         if (cancelled) return;
         const options = res.items || [];
-        const stored = window.localStorage.getItem(INGEST_MODEL_STORAGE_KEY) || "";
-        const selected = options.some((option) => option.id === stored)
-          ? stored
-          : options[0]?.id || "";
         setModelOptions(options);
-        setIngestModel(selected);
+        setIngestModel((current) => {
+          const stored = readStoredIngestModel();
+          const candidate = current || stored;
+          if (candidate && options.some((option) => option.id === candidate)) {
+            return candidate;
+          }
+          const fallback = options[0]?.id || "";
+          if (fallback) window.localStorage.setItem(INGEST_MODEL_STORAGE_KEY, fallback);
+          return fallback;
+        });
       } finally {
         if (!cancelled) setModelLoading(false);
       }
@@ -125,6 +139,33 @@ export function LlmWiki() {
     }, 1500);
     return () => window.clearInterval(timer);
   }, [refresh, sources]);
+
+  const activeSource = useMemo(
+    () => sources.find((source) => source.source_id === activeSourceId) || null,
+    [activeSourceId, sources],
+  );
+
+  const loadSourceArtifacts = useCallback(async (sourceId = activeSourceId, silent = false) => {
+    if (!sourceId) {
+      setSourceArtifacts(null);
+      return;
+    }
+    if (!silent) setSourceArtifactsLoading(true);
+    try {
+      const res = await llmWikiApi.sourceArtifacts(sourceId, silent);
+      setSourceArtifacts(res);
+    } finally {
+      if (!silent) setSourceArtifactsLoading(false);
+    }
+  }, [activeSourceId]);
+
+  useEffect(() => {
+    if (!activeSourceId) {
+      setSourceArtifacts(null);
+      return;
+    }
+    void loadSourceArtifacts(activeSourceId, true);
+  }, [activeSourceId, activeSource?.status, activeSource?.compile?.latestJobStatus, activeSource?.compile?.latestStage, loadSourceArtifacts]);
 
   const filteredSources = useMemo(() => {
     const keyword = nameFilter.trim().toLowerCase();
@@ -173,6 +214,11 @@ export function LlmWiki() {
   const somePageSelected = pageSelectedCount > 0 && !allPageSelected;
   const bulkBusy = bulkAction !== null;
 
+  const handleModelChange = (model: string) => {
+    setIngestModel(model);
+    window.localStorage.setItem(INGEST_MODEL_STORAGE_KEY, model);
+  };
+
   const handleUpload = async (files?: FileList | null) => {
     const selected = Array.from(files || []);
     if (!selected.length) return;
@@ -197,8 +243,20 @@ export function LlmWiki() {
       return;
     }
     await llmWikiApi.ingestSource(source.source_id, ingestModel);
+    setActiveSourceId(source.source_id);
     toast.success(source.status === "ready" ? "已启动重新解析" : "已启动解析");
     await refresh(true);
+    await loadSourceArtifacts(source.source_id, true);
+  };
+
+  const handleStopIngest = async (source: LlmWikiSource) => {
+    await llmWikiApi.stopIngest(source.source_id);
+    toast.success("已停止解析，文档已恢复为未解析状态");
+    await refresh(true);
+    if (activeSourceId === source.source_id) {
+      setSourceArtifacts(null);
+      await loadSourceArtifacts(source.source_id, true);
+    }
   };
 
   const setSourceSelected = (source: LlmWikiSource, selected: boolean) => {
@@ -259,6 +317,7 @@ export function LlmWiki() {
       toast.success(`已启动 ${targets.length} 个文档解析`);
       clearSelection();
       await refresh(true);
+      if (activeSourceId) await loadSourceArtifacts(activeSourceId, true);
     } finally {
       setBulkAction(null);
     }
@@ -281,6 +340,7 @@ export function LlmWiki() {
     setRenameSource(null);
     setRenameValue("");
     await refresh(true);
+    if (activeSourceId === renameSource.source_id) await loadSourceArtifacts(renameSource.source_id, true);
   };
 
   const confirmDelete = async () => {
@@ -292,6 +352,7 @@ export function LlmWiki() {
     );
     setDeleteSource(null);
     await refresh(true);
+    setSourceArtifacts(null);
     if (wikiOpen) await reloadTree();
   };
 
@@ -313,6 +374,7 @@ export function LlmWiki() {
       clearSelection();
       setBulkDeleteOpen(false);
       await refresh(true);
+      setSourceArtifacts(null);
       if (wikiOpen) await reloadTree();
     } finally {
       setBulkAction(null);
@@ -322,6 +384,12 @@ export function LlmWiki() {
   const openRaw = async (source: LlmWikiSource) => {
     const res = await llmWikiApi.rawSource(source.source_id);
     setRawSource(res);
+  };
+
+  const selectSource = async (source: LlmWikiSource) => {
+    setActiveSourceId(source.source_id);
+    setSourceDetailOpen(true);
+    await loadSourceArtifacts(source.source_id);
   };
 
   const reloadTree = async () => {
@@ -431,7 +499,7 @@ export function LlmWiki() {
     setDiagnosticsOpen(true);
     setLintLoading(true);
     try {
-      await llmWikiApi.lint(lintMode);
+      await llmWikiApi.lint("all");
       const next = await loadIssues(true);
       if (!next.length) {
         toast.success("诊断未发现 open issue");
@@ -484,8 +552,7 @@ export function LlmWiki() {
         onOpenSchema={() => void openSchema()}
         onOpenDiagnostics={() => void openDiagnostics()}
         onModelChange={(model) => {
-          setIngestModel(model);
-          window.localStorage.setItem(INGEST_MODEL_STORAGE_KEY, model);
+          handleModelChange(model);
         }}
         onRefresh={() => void refresh()}
       />
@@ -525,11 +592,13 @@ export function LlmWiki() {
           allPageSelected={allPageSelected}
           somePageSelected={somePageSelected}
           pageSelectableCount={pageSelectableSources.length}
+          activeSourceId={sourceDetailOpen ? activeSourceId : ""}
           onTogglePageSelected={togglePageSelected}
           onSelectChange={setSourceSelected}
-          onIngest={(source) => void handleIngest(source)}
-          onOpenRaw={(source) => void openRaw(source)}
-          onOpenWiki={(path) => void openWiki(path)}
+              onSelectSource={(source) => void selectSource(source)}
+              onIngest={(source) => void handleIngest(source)}
+              onStopIngest={(source) => void handleStopIngest(source)}
+              onOpenRaw={(source) => void openRaw(source)}
           onRename={handleRename}
           onDelete={setDeleteSource}
         />
@@ -546,6 +615,24 @@ export function LlmWiki() {
           </div>
         )}
       </section>
+
+      <Dialog open={sourceDetailOpen} onOpenChange={setSourceDetailOpen}>
+        <DialogContent className="flex max-h-[90vh] min-h-[720px] flex-col overflow-hidden p-0 sm:max-w-[1180px]">
+          <DialogTitle className="sr-only">
+            {activeSource?.filename || "文档编译详情"}
+          </DialogTitle>
+          <SourceCompilePanel
+            source={activeSource}
+            artifacts={sourceArtifacts}
+            loading={sourceArtifactsLoading}
+            onIngest={(source) => void handleIngest(source)}
+            onStopIngest={(source) => void handleStopIngest(source)}
+            onOpenRaw={(source) => void openRaw(source)}
+            onOpenPage={(path) => void openWiki(path)}
+            onRefresh={() => void loadSourceArtifacts(activeSourceId)}
+          />
+        </DialogContent>
+      </Dialog>
 
       <LlmWikiDialogs
         wikiOpen={wikiOpen}
@@ -604,8 +691,6 @@ export function LlmWiki() {
         issues={issues}
         issuesLoading={issuesLoading}
         lintLoading={lintLoading}
-        lintMode={lintMode}
-        onLintModeChange={setLintMode}
         onRunLint={() => void runLint()}
         onRefresh={() => void loadIssues()}
         onResolve={(issue) => void resolveIssue(issue)}
@@ -614,4 +699,9 @@ export function LlmWiki() {
       />
     </div>
   );
+}
+
+function readStoredIngestModel(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(INGEST_MODEL_STORAGE_KEY) || "";
 }

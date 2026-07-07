@@ -1,7 +1,72 @@
 import { http } from "./http";
 
 export type LlmWikiSourceStatus = "uploaded" | "ingesting" | "ready" | "failed";
-export type LlmWikiPageType = "index" | "summary" | "concept" | "entity";
+export type LlmWikiPageType =
+  | "index"
+  | "summary"
+  | "concept"
+  | "entity"
+  | "reference"
+  | "procedure"
+  | "changelog"
+  | "troubleshooting";
+
+export type LlmWikiIngestJobStatus = "running" | "success" | "failed";
+export type LlmWikiIngestJobEventStatus = "pending" | "running" | "success" | "failed";
+
+export interface LlmWikiCoverageReport {
+  mustTotal: number;
+  mustCovered: number;
+  mustCoverage: number;
+  missingMustFactIds: string[];
+}
+
+export interface LlmWikiPublishGateIssue {
+  kind: "auto_fixed" | "blocked_publish" | "human_review";
+  target: string;
+  message: string;
+  details: string;
+  source_ids: string[];
+}
+
+export interface LlmWikiIngestJobEvent {
+  stage: string;
+  status: LlmWikiIngestJobEventStatus;
+  message: string;
+  at: string;
+}
+
+export interface LlmWikiIngestJobReport {
+  jobId: string;
+  sourceId: string;
+  status: LlmWikiIngestJobStatus;
+  stage: string;
+  model: string;
+  startedAt: string;
+  endedAt: string;
+  pages: string[];
+  factCount: number;
+  coverage: LlmWikiCoverageReport;
+  issues: LlmWikiPublishGateIssue[];
+  error: string;
+  events?: LlmWikiIngestJobEvent[];
+}
+
+export interface LlmWikiSourceCompileSummary {
+  model: string;
+  latestJobId: string;
+  latestJobStatus: LlmWikiIngestJobStatus | "";
+  latestStage: string;
+  startedAt: string;
+  endedAt: string;
+  factCount: number;
+  pageCount: number;
+  pageClaimCount: number;
+  mustCoverage: number | null;
+  blockedIssues: number;
+  humanReviewIssues: number;
+  error: string;
+}
 
 export interface LlmWikiSource {
   source_id: string;
@@ -15,6 +80,7 @@ export interface LlmWikiSource {
   ingested_at: string;
   error: string;
   touched_pages: string[];
+  compile?: LlmWikiSourceCompileSummary;
 }
 
 export interface LlmWikiStats {
@@ -71,11 +137,47 @@ export interface LlmWikiManifest {
     sourceCount: number;
     readySources: number;
     pageCount: number;
+    factCount?: number;
+    pageClaimCount?: number;
   };
   schema: LlmWikiSchema;
   index: string;
   pages: LlmWikiPageRef[];
-  sources: Array<Pick<LlmWikiSource, "source_id" | "filename" | "status" | "touched_pages">>;
+  pageClaims?: Array<{ path: string; factCount: number; sourceIds: string[] }>;
+  facts?: Array<{ sourceId: string; count: number }>;
+  sources: Array<Pick<LlmWikiSource, "source_id" | "filename" | "status" | "touched_pages" | "sha256" | "ingested_at">>;
+}
+
+export interface LlmWikiSourceArtifacts {
+  source: LlmWikiSource;
+  sourceMap: {
+    title: string;
+    sha256: string;
+    sectionCount: number;
+    sections: Array<{
+      sectionId: string;
+      title: string;
+      headingPath: string[];
+      startOffset: number;
+      endOffset: number;
+    }>;
+  } | null;
+  factLedger: {
+    model: string;
+    generatedAt: string;
+    factCount: number;
+    typeCounts: Record<string, number>;
+    importanceCounts: Record<string, number>;
+    retentionCounts: Record<string, number>;
+  } | null;
+  pageClaims: Array<{
+    path: string;
+    factCount: number;
+    sourceIds: string[];
+    updatedAt?: string;
+  }>;
+  pages: LlmWikiPageRef[];
+  latestJob: LlmWikiIngestJobReport | null;
 }
 
 export type LlmWikiLintMode = "structural" | "evidence" | "all";
@@ -95,7 +197,18 @@ export interface LlmWikiIssue {
 
 export const llmWikiApi = {
   overview: (silent = false) =>
-    http.get<{ stats: LlmWikiStats; recent: LlmWikiSource[] }>(
+    http.get<{
+      stats: LlmWikiStats;
+      recent: LlmWikiSource[];
+      jobs: LlmWikiIngestJobReport[];
+      publishGate: {
+        latestStatus: string;
+        latestStage: string;
+        latestCoverage: number | null;
+        blockedCount: number;
+        humanReviewCount: number;
+      };
+    }>(
       "/api/llm-wiki/manage/overview",
       undefined,
       silent ? { silent: true } : undefined,
@@ -115,9 +228,13 @@ export const llmWikiApi = {
   saveSchema: (content: string) =>
     http.post<LlmWikiSchema>("/api/llm-wiki/manage/schema/save", { content }),
   ingestSource: (sourceId: string, model: string) =>
-    http.post<LlmWikiSource>(
+    http.post<{ jobId: string; sourceId: string; status: LlmWikiIngestJobStatus }>(
       `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/ingest`,
       { model },
+    ),
+  stopIngest: (sourceId: string) =>
+    http.post<{ ok: boolean; sourceId: string; status: LlmWikiSourceStatus; stopped: boolean }>(
+      `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/ingest/stop`,
     ),
   renameSource: (sourceId: string, filename: string) =>
     http.post<LlmWikiSource>(
@@ -125,8 +242,14 @@ export const llmWikiApi = {
       { filename },
     ),
   deleteSource: (sourceId: string) =>
-    http.post<{ ok: boolean; source_id: string }>(
+    http.post<{ ok: boolean; source_id: string; rebuildJobs: LlmWikiIngestJobReport[] }>(
       `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/delete`,
+    ),
+  sourceArtifacts: (sourceId: string, silent = false) =>
+    http.get<LlmWikiSourceArtifacts>(
+      `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/artifacts`,
+      undefined,
+      silent ? { silent: true } : undefined,
     ),
   rawSource: (sourceId: string) =>
     http.get<{ source_id: string; filename: string; content: string }>(
@@ -138,6 +261,10 @@ export const llmWikiApi = {
     const groups = [
       { group: "Root", pages: manifest.pages.filter((page) => page.path === "index.md") },
       { group: "Summaries", pages: manifest.pages.filter((page) => page.path.startsWith("summaries/")) },
+      { group: "References", pages: manifest.pages.filter((page) => page.path.startsWith("references/")) },
+      { group: "Procedures", pages: manifest.pages.filter((page) => page.path.startsWith("procedures/")) },
+      { group: "Changelogs", pages: manifest.pages.filter((page) => page.path.startsWith("changelogs/")) },
+      { group: "Troubleshooting", pages: manifest.pages.filter((page) => page.path.startsWith("troubleshooting/")) },
       { group: "Concepts", pages: manifest.pages.filter((page) => page.path.startsWith("concepts/")) },
       { group: "Entities", pages: manifest.pages.filter((page) => page.path.startsWith("entities/")) },
     ].filter((group) => group.pages.length > 0);

@@ -7,6 +7,7 @@ export const llmWikiConfig = {
   maxSourceChars: 120_000,
   maxWikiFileBytes: 1024 * 1024,
   maxSearchResults: 20,
+  ingestConcurrency: positiveInt(process.env.LLM_WIKI_INGEST_CONCURRENCY, 2),
   model:
     process.env.LLM_WIKI_MODEL ||
     process.env.KNOWLEDGE_MODEL ||
@@ -14,3 +15,8 @@ export const llmWikiConfig = {
     process.env.OPENAI_MODEL ||
     ""
 };
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}

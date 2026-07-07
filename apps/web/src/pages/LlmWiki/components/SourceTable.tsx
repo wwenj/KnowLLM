@@ -2,8 +2,8 @@ import { AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type { LlmWikiSource } from "@/api/llmWiki";
 import { Button } from "@/components/ui/button";
-import { wikiStatusLabels } from "../constants";
-import { formatBytes, formatTime, wikiStatusClass } from "../utils";
+import { ingestStageLabels, wikiStatusLabels } from "../constants";
+import { formatPercent, formatTime, wikiStatusClass } from "../utils";
 import { SourceSelectionCheckbox } from "./SourceSelectionCheckbox";
 
 interface SourceTableProps {
@@ -14,11 +14,13 @@ interface SourceTableProps {
   allPageSelected: boolean;
   somePageSelected: boolean;
   pageSelectableCount: number;
+  activeSourceId: string;
   onTogglePageSelected: (selected: boolean) => void;
   onSelectChange: (source: LlmWikiSource, selected: boolean) => void;
+  onSelectSource: (source: LlmWikiSource) => void;
   onIngest: (source: LlmWikiSource) => void;
+  onStopIngest: (source: LlmWikiSource) => void;
   onOpenRaw: (source: LlmWikiSource) => void;
-  onOpenWiki: (path?: string) => void;
   onRename: (source: LlmWikiSource) => void;
   onDelete: (source: LlmWikiSource) => void;
 }
@@ -31,11 +33,13 @@ export function SourceTable({
   allPageSelected,
   somePageSelected,
   pageSelectableCount,
+  activeSourceId,
   onTogglePageSelected,
   onSelectChange,
+  onSelectSource,
   onIngest,
+  onStopIngest,
   onOpenRaw,
-  onOpenWiki,
   onRename,
   onDelete,
 }: SourceTableProps) {
@@ -44,12 +48,12 @@ export function SourceTable({
       <table className="w-full min-w-[1080px] table-fixed text-sm">
         <colgroup>
           {selectionMode && <col className="w-[44px]" />}
-          <col className="w-[31%]" />
+          <col className="w-[30%]" />
           <col className="w-[104px]" />
-          <col className="w-[96px]" />
-          <col className="w-[180px]" />
-          <col className="w-[100px]" />
-          <col className="w-[252px]" />
+          <col className="w-[210px]" />
+          <col className="w-[160px]" />
+          <col className="w-[150px]" />
+          <col className="w-[224px]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-slate-100/95 text-xs text-slate-600 shadow-[0_1px_0_rgb(203_213_225)] backdrop-blur">
           <tr>
@@ -66,9 +70,9 @@ export function SourceTable({
             )}
             <th className="px-3 py-2.5 text-center font-medium">文档</th>
             <th className="px-3 py-2.5 text-center font-medium">状态</th>
-            <th className="px-3 py-2.5 text-center font-medium">大小</th>
-            <th className="px-3 py-2.5 text-center font-medium">上传时间</th>
-            <th className="px-3 py-2.5 text-center font-medium">页面数</th>
+            <th className="px-3 py-2.5 text-center font-medium">编译</th>
+            <th className="px-3 py-2.5 text-center font-medium">产物</th>
+            <th className="px-3 py-2.5 text-center font-medium">更新时间</th>
             <th className="px-3 py-2.5 text-center font-medium">操作</th>
           </tr>
         </thead>
@@ -77,15 +81,17 @@ export function SourceTable({
             sources.map((source) => {
               const selected = selectedSourceIdSet.has(source.source_id);
               const ingesting = source.status === "ingesting";
-              const summaryPath = `summaries/${source.source_id}.md`;
               const uploadedTime = formatTime(source.uploaded_at);
               const ingestedTime = formatTime(source.ingested_at) || "-";
+              const active = source.source_id === activeSourceId;
+              const compile = source.compile;
               return (
                 <tr
                   key={source.source_id}
                   className={[
                     "align-middle transition-colors hover:bg-slate-50/80",
                     selectionMode && selected ? "bg-indigo-50/50" : "",
+                    active ? "bg-sky-50/70" : "",
                   ].join(" ")}
                 >
                   {selectionMode && (
@@ -103,15 +109,13 @@ export function SourceTable({
                       <button
                         className={[
                           "block min-w-0 max-w-full truncate whitespace-nowrap text-center font-medium underline-offset-4 hover:underline",
-                          source.status === "ready"
+                          active
+                            ? "text-sky-800"
+                            : source.status === "ready"
                             ? "text-indigo-700 hover:text-indigo-800"
                             : "text-slate-900 hover:text-slate-700",
                         ].join(" ")}
-                        onClick={() =>
-                          onOpenWiki(
-                            source.status === "ready" ? summaryPath : "index.md",
-                          )
-                        }
+                        onClick={() => onSelectSource(source)}
                         title={source.filename}
                       >
                         {source.filename}
@@ -138,28 +142,55 @@ export function SourceTable({
                       {wikiStatusLabels[source.status]}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-center text-slate-600">
-                    {formatBytes(source.size)}
+                  <td className="px-3 py-2 text-center">
+                    <div className="mx-auto max-w-[190px] space-y-1">
+                      <div className="truncate text-xs text-slate-700" title={compile?.model || ""}>
+                        {compile?.model || "-"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {compile?.latestStage
+                          ? ingestStageLabels[compile.latestStage] || compile.latestStage
+                          : "-"}
+                        {compile?.mustCoverage !== null && compile?.mustCoverage !== undefined
+                          ? ` · ${formatPercent(compile.mustCoverage)}`
+                          : ""}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-center">
+                    <span className="text-slate-700">{compile?.pageCount || source.touched_pages.length || 0}</span>
+                    <span className="ml-1 text-xs text-slate-400">pages</span>
+                    <span className="mx-1 text-slate-300">/</span>
+                    <span className="text-slate-700">{compile?.factCount || 0}</span>
+                    <span className="ml-1 text-xs text-slate-400">facts</span>
                   </td>
                   <td
                     className="whitespace-nowrap px-3 py-2 text-center text-slate-500"
-                    title={`上传时间：${uploadedTime || "-"}\n解析时间：${ingestedTime}`}
+                    title={`上传：${uploadedTime || "-"}\n解析：${ingestedTime}`}
                   >
-                    {uploadedTime}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-center">
-                    {source.touched_pages.length || "-"}
+                    {ingestedTime !== "-" ? ingestedTime : uploadedTime}
                   </td>
                   <td className="px-3 py-2 text-center">
                     <div className="inline-flex items-center justify-center gap-1 whitespace-nowrap">
                       <Button
                         size="xs"
                         variant="ghost"
-                        className="min-w-[68px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
-                        disabled={ingesting}
-                        onClick={() => onIngest(source)}
+                        className="min-w-[54px] bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800"
+                        onClick={() => onSelectSource(source)}
                       >
-                        {source.status === "ready" ? "重新解析" : "解析"}
+                        详情
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className={
+                          ingesting
+                            ? "min-w-[68px] bg-rose-50 text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+                            : "min-w-[68px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
+                        }
+                        onClick={() => (ingesting ? onStopIngest(source) : onIngest(source))}
+                      >
+                        {ingesting ? "停止" : source.status === "ready" ? "重新解析" : "解析"}
                       </Button>
                       <Button
                         size="xs"

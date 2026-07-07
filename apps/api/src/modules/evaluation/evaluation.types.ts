@@ -60,6 +60,9 @@ export interface CompileEvaluationFactResult extends CompileEvaluationExpectedFa
   confidence: number | null;
   weight: number;
   score: number;
+  coveredByClaims: boolean;
+  judgeNeedsReview: boolean;
+  unsupportedCorrect: boolean;
 }
 
 export interface CompileEvaluationCaseResult {
@@ -87,6 +90,9 @@ export interface CompileEvaluationSummary {
   correctWeight: number;
   mustTotal: number;
   mustCorrect: number;
+  coveredByClaims: number;
+  judgeNeedsReview: number;
+  unsupportedCorrect: number;
   passLevel: CompileEvaluationPassLevel;
   sourceMissingCases: number;
   failedCases: number;

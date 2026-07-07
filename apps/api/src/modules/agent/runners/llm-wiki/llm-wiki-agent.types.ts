@@ -33,7 +33,13 @@ export interface LlmWikiAgentInput extends Record<string, unknown> {
 }
 
 export interface WikiManifest {
-  stats: { sourceCount: number; pageCount: number; readySources: number };
+  stats: {
+    sourceCount: number;
+    pageCount: number;
+    readySources: number;
+    factCount?: number;
+    pageClaimCount?: number;
+  };
   schema: LlmWikiSchema;
   index: string;
   pages: LlmWikiPageRef[];
@@ -150,7 +156,7 @@ export interface SourceReview {
 export interface KnowledgeSnippet {
   path: string;
   title: string;
-  type: "summary" | "concept" | "entity" | "index";
+  type: "summary" | "concept" | "entity" | "reference" | "procedure" | "changelog" | "troubleshooting" | "index";
   tags: string[];
   sources: string[];
   content: string;
