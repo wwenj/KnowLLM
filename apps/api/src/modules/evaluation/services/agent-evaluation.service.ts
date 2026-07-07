@@ -21,8 +21,7 @@ import type {
 } from "../evaluation.types";
 import {
   AgentEvaluationStoreService,
-  emptyAgentSummary,
-  scoreAgentSummary,
+  summarizeAgentCases,
 } from "./agent-evaluation-store.service";
 
 interface AgentJudgeOutput {
@@ -342,48 +341,7 @@ export class AgentEvaluationService {
 }
 
 export function summarizeAgentEvaluation(cases: AgentEvaluationCaseResult[]) {
-  const summary = emptyAgentSummary();
-  summary.totalCases = cases.length;
-  const metricCases = cases.filter((item) => item.agentRunId);
-  for (const item of cases) {
-    if (item.status === "success") summary.completedCases += 1;
-    if (item.status === "source_missing") summary.sourceMissingCases += 1;
-    if (item.status !== "success" && item.status !== "source_missing") summary.failedCases += 1;
-    if (item.sourceHit !== null) {
-      summary.sourceHitTotal += 1;
-      if (item.sourceHit) summary.sourceHitCases += 1;
-    }
-    for (const fact of item.facts) {
-      summary.totalFacts += 1;
-      if (fact.status === "correct") summary.correctFacts += 1;
-      if (fact.status === "missing") summary.missingFacts += 1;
-      if (fact.status === "incorrect") summary.incorrectFacts += 1;
-    }
-    if (item.faithfulness.status !== "not_applicable") {
-      summary.faithfulnessTotal += 1;
-      if (item.faithfulness.status === "correct") summary.faithfulCases += 1;
-    }
-    if (item.answerCorrectness.status !== "not_applicable") {
-      summary.answerCorrectnessTotal += 1;
-      if (item.answerCorrectness.status === "correct") summary.answerCorrectCases += 1;
-    }
-    if (item.abstainCorrectness.status !== "not_applicable") {
-      summary.abstainTotal += 1;
-      if (item.abstainCorrectness.status === "correct") summary.abstainCorrectCases += 1;
-    }
-  }
-  summary.factAccuracy = ratio(summary.correctFacts, summary.totalFacts);
-  summary.sourceHitRate = ratio(summary.sourceHitCases, summary.sourceHitTotal);
-  summary.faithfulnessRate = ratio(summary.faithfulCases, summary.faithfulnessTotal);
-  summary.answerCorrectnessRate = ratio(summary.answerCorrectCases, summary.answerCorrectnessTotal);
-  summary.abstainAccuracy = ratio(summary.abstainCorrectCases, summary.abstainTotal);
-  summary.avgRounds = average(metricCases.map((item) => item.metrics.rounds));
-  summary.avgReadPages = average(metricCases.map((item) => item.metrics.readPages));
-  summary.avgKeptPages = average(metricCases.map((item) => item.metrics.keptPages));
-  summary.avgRawSources = average(metricCases.map((item) => item.metrics.rawSources));
-  summary.avgModelCalls = average(metricCases.map((item) => item.metrics.modelCalls));
-  summary.avgTotalTokens = average(metricCases.map((item) => item.metrics.totalTokens));
-  return scoreAgentSummary(summary);
+  return summarizeAgentCases(cases);
 }
 
 function sourceMissingResult(
@@ -426,6 +384,8 @@ function baseCaseResult(
     mustIncludeHits: [],
     answerMarkdown: "",
     facts: [],
+    factScore: 0,
+    taskScore: 0,
     faithfulness: metric("not_applicable", ""),
     answerCorrectness: metric("not_applicable", ""),
     abstainCorrectness: metric("not_applicable", ""),
@@ -568,15 +528,6 @@ function includesLoose(text: string, needle: string): boolean {
 
 function toPlainEvent(event: AgentRunEvent): Record<string, unknown> {
   return { ...event };
-}
-
-function ratio(value: number, total: number): number {
-  return total ? value / total : 0;
-}
-
-function average(values: number[]): number {
-  const filtered = values.filter((value) => Number.isFinite(value));
-  return filtered.length ? filtered.reduce((sum, value) => sum + value, 0) / filtered.length : 0;
 }
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {

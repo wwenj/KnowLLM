@@ -272,7 +272,7 @@ export function summarize(cases: CompileEvaluationCaseResult[]) {
   summary.mustAccuracy = summary.mustTotal ? summary.mustCorrect / summary.mustTotal : 0;
   summary.missingRate = summary.totalFacts ? summary.missing / summary.totalFacts : 0;
   summary.incorrectRate = summary.totalFacts ? summary.incorrect / summary.totalFacts : 0;
-  summary.passLevel = passLevel(summary.weightedScore, summary.incorrectRate);
+  summary.passLevel = passLevel(summary.weightedScore, summary.incorrectRate, summary.mustAccuracy);
   return summary;
 }
 
@@ -302,9 +302,9 @@ function normalizeImportance(value: unknown): CompileEvaluationFactImportance {
   return "must";
 }
 
-function passLevel(weightedScore: number, incorrectRate: number): CompileEvaluationPassLevel {
-  if (weightedScore >= 95 && incorrectRate <= 0.01) return "excellent";
-  if (weightedScore >= 80 && incorrectRate <= 0.03) return "pass";
+function passLevel(weightedScore: number, incorrectRate: number, mustAccuracy: number): CompileEvaluationPassLevel {
+  if (weightedScore >= 95 && incorrectRate <= 0.01 && mustAccuracy >= 0.95) return "excellent";
+  if (weightedScore >= 80 && incorrectRate <= 0.03 && mustAccuracy >= 0.85) return "pass";
   if (weightedScore >= 60) return "needs_improvement";
   return "failed";
 }

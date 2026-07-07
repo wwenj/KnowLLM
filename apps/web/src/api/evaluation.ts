@@ -241,6 +241,8 @@ export interface AgentEvaluationCaseResult {
   mustIncludeHits: string[];
   answerMarkdown: string;
   facts: AgentEvaluationFactResult[];
+  factScore: number;
+  taskScore: number;
   faithfulness: AgentEvaluationMetricResult;
   answerCorrectness: AgentEvaluationMetricResult;
   abstainCorrectness: AgentEvaluationMetricResult;
