@@ -1,4 +1,10 @@
+# OS metadata
 .DS_Store
+._*
+__MACOSX/
+Thumbs.db
+desktop.ini
+
 node_modules/
 dist/
 build/
