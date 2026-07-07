@@ -19,6 +19,11 @@ export function formatTime(value?: string): string {
   return date.toLocaleString();
 }
 
+export function formatPercent(value?: number | null): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  return `${Math.round(value * 100)}%`;
+}
+
 export function isWikiPageTarget(target?: string): boolean {
   const value = String(target || "").trim();
   if (!value || /^[a-f0-9]{32}$/i.test(value)) return false;
@@ -33,6 +38,13 @@ export function wikiStatusClass(status: LlmWikiSource["status"]): string {
     failed: "border-rose-200 bg-rose-50 text-rose-700",
   };
   return statusClasses[status];
+}
+
+export function jobStatusClass(status?: string): string {
+  if (status === "success") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (status === "running") return "border-indigo-200 bg-indigo-50 text-indigo-700";
+  return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
 export function issueSeverityClass(severity: LlmWikiIssue["severity"]): string {
@@ -53,14 +65,10 @@ export function countIssues(issues: LlmWikiIssue[]) {
 
 export function issueAdvice(kind: string): string {
   const advice: Record<string, string> = {
-    dead_link: "打开页面，修正或删除对应 wikilink。",
-    orphan_page: "从相关页面增加链接，或确认该页可独立存在后标记解决。",
-    index_missing: "打开页面核对后手动维护 index，或重新 ingest/rebuild index。",
-    missing_claim_source: "在正文关键结论旁补充 source id 标注。",
-    schema_drift: "按当前 schema 重新 ingest，或人工确认后标记解决。",
     conflict: "人工回读 source，对冲突结论做保留、改写或标注未确认。",
-    weak_evidence: "补充证据 source，或在页面中标注证据不足。",
-    needs_reconcile: "删除或变更 source 后需要人工核对页面剩余结论。",
+    human_review: "人工确认原文证据或语义冲突，再决定是否保留。",
+    needs_review: "回到页面和 source 核对证据是否足够。",
+    blocked_publish: "查看 ingest job，修正 source 或编译逻辑后重新解析。",
   };
-  return advice[kind] || "打开目标页面核对，完成处理后标记解决。";
+  return advice[kind] || "核对对应 source 和页面后处理。";
 }

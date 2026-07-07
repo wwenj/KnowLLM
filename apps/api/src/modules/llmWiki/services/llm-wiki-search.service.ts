@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { Index } from "flexsearch";
 import { llmWikiConfig } from "../llm-wiki.config";
-import { LlmWikiPage, LlmWikiSearchHit } from "../contracts/llm-wiki.types";
+import { LlmWikiFact, LlmWikiPage, LlmWikiSearchHit } from "../contracts/llm-wiki.types";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";
 
 interface IndexedPage {
@@ -55,9 +55,34 @@ export class LlmWikiSearchService {
     if (!this.dirty) return;
     this.index = new Index({ tokenize: "full", cache: false });
     this.pages.clear();
+    const factById = new Map(this.store.listFacts().map((fact) => [fact.factId, fact]));
+    const sourceFilename = new Map(this.store.listSources().map((source) => [source.source_id, source.filename]));
     for (const page of this.store.listPages()) {
       const body = stripFrontmatter(page.content);
-      const text = [page.title, page.path, page.type, page.tags.join(" "), body].join("\n");
+      const claims = this.store.readPageClaims(page.path);
+      const claimFacts = (claims?.factIds || [])
+        .map((id) => factById.get(id))
+        .filter((fact): fact is LlmWikiFact => !!fact);
+      const sectionText = claimFacts
+        .map((fact) => {
+          const section = this.store
+            .readSourceMap(fact.sourceId)
+            ?.sections.find((item) => item.sectionId === fact.sectionId);
+          return section?.headingPath.join(" > ") || "";
+        })
+        .join("\n");
+      const factText = claimFacts
+        .map((fact) =>
+          [
+            fact.fact,
+            fact.evidence,
+            fact.type,
+            fact.entities.join(" "),
+            sourceFilename.get(fact.sourceId) || "",
+          ].join("\n"),
+        )
+        .join("\n");
+      const text = [page.title, page.path, page.type, page.tags.join(" "), body, factText, sectionText].join("\n");
       this.index.add(page.path, text);
       this.pages.set(page.path, { page, body, text });
     }

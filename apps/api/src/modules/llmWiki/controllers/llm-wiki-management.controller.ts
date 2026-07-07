@@ -35,6 +35,11 @@ export class LlmWikiManagementController {
     return this.run(() => this.wiki.listSources());
   }
 
+  @Get("sources/:sourceId/artifacts")
+  sourceArtifacts(@Param("sourceId") sourceId: string) {
+    return this.run(() => this.wiki.sourceArtifacts(sourceId));
+  }
+
   @ApiConsumes("multipart/form-data")
   @Post("sources/upload")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: llmWikiConfig.maxUploadBytes } }))
@@ -51,14 +56,29 @@ export class LlmWikiManagementController {
     return this.run(() => this.wiki.ingestSource(sourceId, model));
   }
 
+  @Post("sources/:sourceId/ingest/stop")
+  stopIngest(@Param("sourceId") sourceId: string) {
+    return this.run(() => this.wiki.stopIngest(sourceId));
+  }
+
   @Post("sources/:sourceId/rename")
   renameSource(@Param("sourceId") sourceId: string, @Body("filename") filename = "") {
     return this.run(() => this.wiki.renameSource(sourceId, filename));
   }
 
   @Post("sources/:sourceId/delete")
-  deleteSource(@Param("sourceId") sourceId: string) {
-    return this.run(() => this.wiki.deleteSource(sourceId));
+  deleteSource(@Param("sourceId") sourceId: string, @Body("model") model = "") {
+    return this.run(() => this.wiki.deleteSource(sourceId, model));
+  }
+
+  @Get("ingest-jobs/:jobId")
+  ingestJob(@Param("jobId") jobId: string) {
+    return this.run(() => this.wiki.getIngestJob(jobId));
+  }
+
+  @Post("rebuild")
+  rebuild(@Body("model") model = "") {
+    return this.run(() => this.wiki.rebuild(model));
   }
 
   @Get("schema")

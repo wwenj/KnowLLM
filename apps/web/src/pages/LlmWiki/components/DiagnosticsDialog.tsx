@@ -7,7 +7,7 @@ import {
   RefreshCw,
   Wrench,
 } from "lucide-react";
-import type { LlmWikiIssue, LlmWikiLintMode } from "@/api/llmWiki";
+import type { LlmWikiIssue } from "@/api/llmWiki";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,13 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   countIssues,
   formatTime,
@@ -36,8 +29,6 @@ interface DiagnosticsDialogProps {
   issues: LlmWikiIssue[];
   issuesLoading: boolean;
   lintLoading: boolean;
-  lintMode: LlmWikiLintMode;
-  onLintModeChange: (mode: LlmWikiLintMode) => void;
   onRunLint: () => void;
   onRefresh: () => void;
   onResolve: (issue: LlmWikiIssue) => void;
@@ -51,8 +42,6 @@ export function DiagnosticsDialog({
   issues,
   issuesLoading,
   lintLoading,
-  lintMode,
-  onLintModeChange,
   onRunLint,
   onRefresh,
   onResolve,
@@ -88,21 +77,6 @@ export function DiagnosticsDialog({
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={lintMode}
-              onValueChange={(value) =>
-                onLintModeChange(value as LlmWikiLintMode)
-              }
-            >
-              <SelectTrigger className="h-9 w-[130px] bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper" align="end">
-                <SelectItem value="all">全部检查</SelectItem>
-                <SelectItem value="structural">结构检查</SelectItem>
-                <SelectItem value="evidence">证据检查</SelectItem>
-              </SelectContent>
-            </Select>
             <Button
               variant="outline"
               disabled={issuesLoading || lintLoading}

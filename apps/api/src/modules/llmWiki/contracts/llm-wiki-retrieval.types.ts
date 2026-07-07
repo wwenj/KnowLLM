@@ -11,10 +11,21 @@ export interface LlmWikiRetrievalManifest {
     sourceCount: number;
     readySources: number;
     pageCount: number;
+    factCount: number;
+    pageClaimCount: number;
   };
   schema: LlmWikiSchema;
   index: string;
   pages: LlmWikiPageRef[];
+  pageClaims: Array<{
+    path: string;
+    factCount: number;
+    sourceIds: string[];
+  }>;
+  facts: Array<{
+    sourceId: string;
+    count: number;
+  }>;
   sources: Array<
     Pick<
       LlmWikiSourceMeta,

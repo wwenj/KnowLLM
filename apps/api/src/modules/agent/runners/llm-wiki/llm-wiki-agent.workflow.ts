@@ -299,6 +299,7 @@ export class LlmWikiAgentWorkflow {
         "requiredPaths 代表第一轮必须读取的候选页面,后续 reviewer 可以移除。",
         "optionalPaths 和 searchQueries 用来扩大第一轮召回。",
         "不要编造 wiki path; path 必须来自 manifest.pages 或 index 中明确出现的页面。",
+        "页面类型语义：reference 查命令/配置/API，procedure 查操作流程，changelog 查版本变更，troubleshooting 查错误排障，concept/entity 查解释和关系，summary 查 source 总览。",
       ].join("\n"),
       payload,
     });
@@ -512,6 +513,7 @@ export class LlmWikiAgentWorkflow {
         "如果证据足够,输出 stop=true 和 stopReason=complete。",
         "如果还缺证据,只能使用允许动作继续检索; 不要编造 path/sourceId。",
         "如果 Wiki 没有足够材料,输出 stop=true 和 stopReason=insufficient_evidence。",
+        "优先把 Wiki 页面当作语义知识层阅读，不要把页面当 facts 碎片重新拼接。",
       ].join("\n"),
       payload,
     });
@@ -1059,6 +1061,7 @@ function manifestForPrompt(manifest: WikiManifest | null) {
   return {
     stats: manifest.stats,
     schema: schemaForPrompt(manifest),
+    pageTypeGuide: pageTypeGuide(),
     index: truncate(manifest.index, 7000),
     pages: manifest.pages.slice(0, 260).map((page) => ({
       path: page.path,
@@ -1076,6 +1079,18 @@ function schemaForPrompt(manifest: WikiManifest | null) {
   return {
     sha256: manifest.schema.sha256,
     content: truncate(manifest.schema.content, 4000),
+  };
+}
+
+function pageTypeGuide() {
+  return {
+    summary: "source 的整体理解、边界和入口链接",
+    reference: "命令、配置、参数、默认值、字段、API 示例",
+    procedure: "安装、校准、操作等连续步骤",
+    changelog: "版本、日期、配置变更和行为变化",
+    troubleshooting: "错误、异常、现象、原因和处理方式",
+    concept: "概念解释、机制和适用边界",
+    entity: "实体、模块、对象、系统或组件说明",
   };
 }
 

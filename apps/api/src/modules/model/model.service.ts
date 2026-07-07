@@ -8,11 +8,25 @@ export interface ChatMessage {
   content: unknown;
 }
 
+export type JsonSchema = Record<string, unknown>;
+
+export type RawChatResponseFormat =
+  | { type: "json_object" }
+  | {
+      type: "json_schema";
+      json_schema: {
+        name: string;
+        strict?: boolean;
+        schema: JsonSchema;
+      };
+    };
+
 export interface RawChatOptions {
   model?: string;
   messages: ChatMessage[];
   temperature?: number;
-  response_format?: { type: "json_object" };
+  response_format?: RawChatResponseFormat;
+  signal?: AbortSignal;
 }
 
 interface ChatCompletionResponse {
@@ -20,9 +34,16 @@ interface ChatCompletionResponse {
     message?: {
       content?: unknown;
       reasoning_content?: unknown;
+      tool_calls?: ChatToolCall[];
     };
     text?: unknown;
   }>;
+}
+
+interface ChatToolCall {
+  function?: {
+    arguments?: unknown;
+  };
 }
 
 export interface ModelOption {
@@ -99,7 +120,9 @@ export class ModelService {
 
   async chat(options: RawChatOptions): Promise<ChatCompletionResponse> {
     const response = await this.request(options);
-    return (await response.json()) as ChatCompletionResponse;
+    return normalizeChatCompletionResponse(
+      (await response.json()) as ChatCompletionResponse,
+    );
   }
 
   private async request(options: RawChatOptions): Promise<Response> {
@@ -114,21 +137,23 @@ export class ModelService {
     if (!resolved.unsupportedParameters.includes("temperature")) {
       body.temperature = options.temperature ?? 0.2;
     }
-    if (
-      options.response_format &&
-      !resolved.unsupportedParameters.includes("response_format")
-    ) {
-      body.response_format = options.response_format;
-    }
+    applyResponseFormat(body, resolved, options.response_format);
 
-    const response = await fetch(`${resolved.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${resolved.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    const url = chatCompletionsUrl(resolved, options);
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${resolved.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: options.signal,
+      });
+    } catch (err) {
+      throw new Error(formatFetchFailure(err, url));
+    }
     if (!response.ok) {
       const text = await response.text();
       throw new Error(`模型调用失败: ${response.status} ${text.slice(0, 300)}`);
@@ -276,6 +301,195 @@ export class ModelService {
         path.join(getApiRoot(), "env", "models.local.json"),
     );
   }
+}
+
+function chatCompletionsUrl(
+  model: ResolvedModel,
+  options: Pick<RawChatOptions, "response_format">,
+): string {
+  let baseUrl = model.baseUrl;
+  if (usesDeepSeekStrictToolCall(model, options.response_format)) {
+    baseUrl = baseUrl.endsWith("/beta") ? baseUrl : `${baseUrl}/beta`;
+  }
+  return `${baseUrl}/chat/completions`;
+}
+
+function formatFetchFailure(err: unknown, url: string): string {
+  const target = safeUrlForError(url);
+  if (!(err instanceof Error)) return `模型请求失败: ${target}: ${String(err)}`;
+  const cause = formatErrorCause(err);
+  return `模型请求失败: ${target}: ${err.message}${cause ? ` (${cause})` : ""}`;
+}
+
+function formatErrorCause(err: Error): string {
+  const cause = (err as Error & { cause?: unknown }).cause;
+  if (!cause || typeof cause !== "object") return "";
+  const record = cause as { code?: unknown; errno?: unknown; syscall?: unknown; message?: unknown };
+  return [record.code, record.errno, record.syscall, record.message]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function safeUrlForError(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.replace(/[?].*$/, "");
+  }
+}
+
+function applyResponseFormat(
+  body: Record<string, unknown>,
+  model: ResolvedModel,
+  format?: RawChatResponseFormat,
+): void {
+  if (!format) return;
+  const provider = model.provider.toLowerCase();
+  if (provider === "anthropic" || provider === "claude") {
+    applyAnthropicResponseFormat(body, model, format);
+    return;
+  }
+  if (provider === "gemini" || provider === "google") {
+    applyGeminiResponseFormat(body, model, format);
+    return;
+  }
+  if (provider === "deepseek") {
+    applyDeepSeekResponseFormat(body, model, format);
+    return;
+  }
+  if (model.unsupportedParameters.includes("response_format")) return;
+  body.response_format = format;
+}
+
+function applyAnthropicResponseFormat(
+  body: Record<string, unknown>,
+  model: ResolvedModel,
+  format: RawChatResponseFormat,
+): void {
+  if (
+    model.unsupportedParameters.includes("output_config") ||
+    model.unsupportedParameters.includes("response_format")
+  ) {
+    return;
+  }
+  if (format.type === "json_schema") {
+    body.output_config = {
+      format: {
+        type: "json_schema",
+        schema: format.json_schema.schema,
+      },
+    };
+    return;
+  }
+  body.output_config = {
+    format: {
+      type: "json_schema",
+      schema: {
+        type: "object",
+        additionalProperties: true,
+      },
+    },
+  };
+}
+
+function applyGeminiResponseFormat(
+  body: Record<string, unknown>,
+  model: ResolvedModel,
+  format: RawChatResponseFormat,
+): void {
+  if (
+    model.unsupportedParameters.includes("response_format") ||
+    model.unsupportedParameters.includes("gemini_response_format")
+  ) {
+    return;
+  }
+  if (format.type === "json_schema") {
+    body.response_format = {
+      type: "text",
+      mime_type: "application/json",
+      schema: format.json_schema.schema,
+    };
+    return;
+  }
+  body.response_format = { type: "json_object" };
+}
+
+function applyDeepSeekResponseFormat(
+  body: Record<string, unknown>,
+  model: ResolvedModel,
+  format: RawChatResponseFormat,
+): void {
+  if (format.type === "json_schema") {
+    if (!canUseStrictToolCall(model)) return;
+    const name = normalizeToolName(format.json_schema.name);
+    body.tools = [
+      {
+        type: "function",
+        function: {
+          name,
+          description: "Return the response in the required JSON schema.",
+          strict: format.json_schema.strict !== false,
+          parameters: format.json_schema.schema,
+        },
+      },
+    ];
+    body.tool_choice = { type: "function", function: { name } };
+    return;
+  }
+  if (!model.unsupportedParameters.includes("response_format")) {
+    body.response_format = { type: "json_object" };
+  }
+}
+
+function usesDeepSeekStrictToolCall(
+  model: ResolvedModel,
+  format?: RawChatResponseFormat,
+): boolean {
+  return (
+    model.provider.toLowerCase() === "deepseek" &&
+    format?.type === "json_schema" &&
+    canUseStrictToolCall(model)
+  );
+}
+
+function canUseStrictToolCall(model: ResolvedModel): boolean {
+  return (
+    !model.unsupportedParameters.includes("tools") &&
+    !model.unsupportedParameters.includes("tool_choice")
+  );
+}
+
+function normalizeChatCompletionResponse(
+  body: ChatCompletionResponse,
+): ChatCompletionResponse {
+  for (const choice of body.choices || []) {
+    const message = choice.message;
+    if (!message) continue;
+    const existing = typeof message.content === "string" ? message.content : "";
+    if (existing.trim()) continue;
+    const toolArguments = firstToolCallArguments(message.tool_calls);
+    if (toolArguments) message.content = toolArguments;
+  }
+  return body;
+}
+
+function firstToolCallArguments(toolCalls?: ChatToolCall[]): string {
+  for (const call of toolCalls || []) {
+    const args = call.function?.arguments;
+    if (typeof args === "string" && args.trim()) return args;
+  }
+  return "";
+}
+
+function normalizeToolName(name: string): string {
+  const normalized = name
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64);
+  return normalized || "structured_output";
 }
 
 function publicModel({

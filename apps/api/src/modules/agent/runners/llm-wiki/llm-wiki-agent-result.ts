@@ -171,7 +171,16 @@ export function coverageSummaryFromState(state: LlmWikiAgentState): string {
 }
 
 function normalizePageType(value: string): KnowledgeSnippet["type"] {
-  return value === "summary" || value === "concept" || value === "entity" || value === "index" ? value : "concept";
+  return value === "summary" ||
+    value === "concept" ||
+    value === "entity" ||
+    value === "reference" ||
+    value === "procedure" ||
+    value === "changelog" ||
+    value === "troubleshooting" ||
+    value === "index"
+    ? value
+    : "concept";
 }
 
 function citationsFromPages(pages: RetrievedPage[]) {

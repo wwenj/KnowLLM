@@ -1,6 +1,33 @@
 export type LlmWikiSourceStatus = "uploaded" | "ingesting" | "ready" | "failed";
 
-export type LlmWikiPageType = "index" | "summary" | "concept" | "entity";
+export type LlmWikiPageType =
+  | "index"
+  | "summary"
+  | "concept"
+  | "entity"
+  | "reference"
+  | "procedure"
+  | "changelog"
+  | "troubleshooting";
+
+export type LlmWikiFactType =
+  | "definition"
+  | "command"
+  | "config"
+  | "parameter"
+  | "default"
+  | "procedure_step"
+  | "warning"
+  | "constraint"
+  | "exception"
+  | "version_change"
+  | "api_request"
+  | "api_response"
+  | "error_case"
+  | "relationship";
+
+export type LlmWikiFactImportance = "must" | "should" | "nice";
+export type LlmWikiFactRetention = "exact" | "semantic" | "background";
 
 export interface LlmWikiSourceMeta {
   source_id: string;
@@ -14,6 +41,75 @@ export interface LlmWikiSourceMeta {
   ingested_at: string;
   error: string;
   touched_pages: string[];
+}
+
+export interface LlmWikiSourceCompileSummary {
+  model: string;
+  latestJobId: string;
+  latestJobStatus: LlmWikiIngestJobStatus | "";
+  latestStage: string;
+  startedAt: string;
+  endedAt: string;
+  factCount: number;
+  pageCount: number;
+  pageClaimCount: number;
+  mustCoverage: number | null;
+  blockedIssues: number;
+  humanReviewIssues: number;
+  error: string;
+}
+
+export interface LlmWikiSourceWithCompile extends LlmWikiSourceMeta {
+  compile: LlmWikiSourceCompileSummary;
+}
+
+export interface LlmWikiSourceSection {
+  sectionId: string;
+  title: string;
+  headingPath: string[];
+  level: number;
+  startOffset: number;
+  endOffset: number;
+  content: string;
+}
+
+export interface LlmWikiSourceMap {
+  sourceId: string;
+  filename: string;
+  sha256: string;
+  title: string;
+  sections: LlmWikiSourceSection[];
+}
+
+export interface LlmWikiFact {
+  factId: string;
+  sourceId: string;
+  sectionId: string;
+  type: LlmWikiFactType;
+  importance: LlmWikiFactImportance;
+  fact: string;
+  evidence: string;
+  sourceSpan: {
+    start: number;
+    end: number;
+  };
+  entities: string[];
+  retention: LlmWikiFactRetention;
+}
+
+export interface LlmWikiFactLedger {
+  sourceId: string;
+  schemaHash: string;
+  model: string;
+  generatedAt: string;
+  facts: LlmWikiFact[];
+}
+
+export interface LlmWikiPageClaims {
+  path: string;
+  factIds: string[];
+  sourceIds: string[];
+  updatedAt?: string;
 }
 
 export interface LlmWikiStats {
@@ -88,7 +184,10 @@ export type LlmWikiIssueKind =
   | "needs_review"
   | "index_missing"
   | "oversized_page"
-  | "stale_source_digest";
+  | "stale_source_digest"
+  | "auto_fixed"
+  | "blocked_publish"
+  | "human_review";
 
 export type LlmWikiIssueSeverity = "info" | "warning" | "error";
 
@@ -131,6 +230,10 @@ export interface LlmWikiCompiledOutput {
   };
   concepts?: LlmWikiCompilerPage[];
   entities?: LlmWikiCompilerPage[];
+  references?: LlmWikiCompilerPage[];
+  procedures?: LlmWikiCompilerPage[];
+  changelogs?: LlmWikiCompilerPage[];
+  troubleshooting?: LlmWikiCompilerPage[];
 }
 
 export interface LlmWikiNormalizedPage {
@@ -143,6 +246,30 @@ export interface LlmWikiNormalizedPage {
 
 export interface LlmWikiDraftPage extends LlmWikiNormalizedPage {
   source_id: string;
+  factIds?: string[];
+}
+
+export interface LlmWikiSemanticPagePlan {
+  path: string;
+  title: string;
+  type: Exclude<LlmWikiPageType, "index">;
+  tags: string[];
+  semanticGoal: string;
+  factIds: string[];
+  linkTargets: string[];
+}
+
+export interface LlmWikiSemanticWriterPage extends LlmWikiNormalizedPage {
+  claimedFactIds: string[];
+}
+
+export interface LlmWikiCompileResult {
+  sourceMap: LlmWikiSourceMap;
+  factLedger: LlmWikiFactLedger;
+  pages: LlmWikiDraftPage[];
+  pageClaims: LlmWikiPageClaims[];
+  coverage: LlmWikiCoverageReport;
+  issues: LlmWikiPublishGateIssue[];
 }
 
 export interface LlmWikiFusionResult {
@@ -151,6 +278,73 @@ export interface LlmWikiFusionResult {
   sources: string[];
   change_summary: string;
   issues: LlmWikiIssue[];
+}
+
+export type LlmWikiIngestJobStatus = "running" | "success" | "failed";
+export type LlmWikiIngestJobEventStatus = "pending" | "running" | "success" | "failed";
+
+export interface LlmWikiIngestJobEvent {
+  stage: string;
+  status: LlmWikiIngestJobEventStatus;
+  message: string;
+  at: string;
+}
+
+export interface LlmWikiPublishGateIssue {
+  kind: "auto_fixed" | "blocked_publish" | "human_review";
+  target: string;
+  message: string;
+  details: string;
+  source_ids: string[];
+}
+
+export interface LlmWikiCoverageReport {
+  mustTotal: number;
+  mustCovered: number;
+  mustCoverage: number;
+  missingMustFactIds: string[];
+}
+
+export interface LlmWikiIngestJobReport {
+  jobId: string;
+  sourceId: string;
+  status: LlmWikiIngestJobStatus;
+  stage: string;
+  model: string;
+  startedAt: string;
+  endedAt: string;
+  pages: string[];
+  factCount: number;
+  coverage: LlmWikiCoverageReport;
+  issues: LlmWikiPublishGateIssue[];
+  error: string;
+  events?: LlmWikiIngestJobEvent[];
+}
+
+export interface LlmWikiSourceArtifacts {
+  source: LlmWikiSourceWithCompile;
+  sourceMap: {
+    title: string;
+    sha256: string;
+    sectionCount: number;
+    sections: Array<Pick<LlmWikiSourceSection, "sectionId" | "title" | "headingPath" | "startOffset" | "endOffset">>;
+  } | null;
+  factLedger: {
+    model: string;
+    generatedAt: string;
+    factCount: number;
+    typeCounts: Record<string, number>;
+    importanceCounts: Record<string, number>;
+    retentionCounts: Record<string, number>;
+  } | null;
+  pageClaims: Array<{
+    path: string;
+    factCount: number;
+    sourceIds: string[];
+    updatedAt?: string;
+  }>;
+  pages: LlmWikiPageRef[];
+  latestJob: LlmWikiIngestJobReport | null;
 }
 
 export interface LlmWikiPageContribution {

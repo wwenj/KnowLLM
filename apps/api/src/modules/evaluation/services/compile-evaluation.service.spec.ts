@@ -55,9 +55,11 @@ test("compile evaluation reads only pages linked to matched ready sources", asyn
   const readPaths: string[] = [];
   const retrieval = {
     getManifest: () => ({
-      stats: { sourceCount: 2, readySources: 2, pageCount: 2 },
+      stats: { sourceCount: 2, readySources: 2, pageCount: 2, factCount: 0, pageClaimCount: 0 },
       schema: { content: "", sha256: "", updated_at: "" },
       index: "",
+      pageClaims: [],
+      facts: [],
       sources: [
         {
           source_id: sourceId,
@@ -95,6 +97,8 @@ test("compile evaluation reads only pages linked to matched ready sources", asyn
         links: [],
       };
     },
+    readPageClaims: () => null,
+    listFacts: () => [],
   };
   const model = {
     resolveModel: () => "judge",
@@ -317,6 +321,66 @@ test("compile evaluation records failed case when Judge JSON is invalid", async 
   assert.equal(finalRun.summary.failedCases, 1);
 });
 
+test("compile evaluation does not count correct when Judge evidence is not in final pages", async () => {
+  const dataset = createDataset();
+  const sourceId = "a".repeat(32);
+  const { service, getRun } = createHarness({
+    dataset,
+    manifestSources: [
+      {
+        source_id: sourceId,
+        filename: "a.md",
+        status: "ready",
+        touched_pages: ["concepts/a.md"],
+        sha256: dataset.sources[0].sha256,
+        ingested_at: "2026-06-15T00:00:00.000Z",
+      },
+    ],
+    manifestPages: [
+      { path: "concepts/a.md", title: "A", type: "concept", tags: [], sources: [sourceId], schema_hash: "", updated_at: "" },
+    ],
+    readPage: (path: string) => ({
+      path,
+      title: "A",
+      type: "concept",
+      tags: [],
+      sources: [sourceId],
+      schema_hash: "",
+      updated_at: "",
+      content: "P1 TTL is 2 hours",
+      links: [],
+    }),
+    chat: async () => ({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              facts: [
+                {
+                  factId: "fact-a",
+                  status: "correct",
+                  evidencePath: "concepts/a.md",
+                  wikiEvidence: "unsupported sentence",
+                  confidence: 0.9,
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    }),
+  });
+
+  service.createRun({ datasetId: dataset.datasetId, judgeModel: "judge" });
+  await waitFor(() => getRun()?.status === "success");
+  const finalRun = getRun() as CompileEvaluationRun;
+
+  assert.equal(finalRun.cases[0].facts[0].status, "missing");
+  assert.equal(finalRun.cases[0].facts[0].unsupportedCorrect, true);
+  assert.equal(finalRun.summary.correct, 0);
+  assert.equal(finalRun.summary.unsupportedCorrect, 1);
+});
+
 function expectedFact(id: string, fact: string, importance: CompileEvaluationExpectedFact["importance"] = "must"): CompileEvaluationExpectedFact {
   return {
     id,
@@ -351,6 +415,8 @@ function createHarness(args: {
   manifestSources: unknown[];
   manifestPages: unknown[];
   readPage: (path: string) => unknown;
+  readPageClaims?: (path: string) => unknown;
+  listFacts?: (sourceIds?: string[]) => unknown[];
   chat: () => Promise<unknown>;
 }) {
   let run: CompileEvaluationRun | null = null;
@@ -382,13 +448,23 @@ function createHarness(args: {
   };
   const retrieval = {
     getManifest: () => ({
-      stats: { sourceCount: args.manifestSources.length, readySources: args.manifestSources.length, pageCount: args.manifestPages.length },
+      stats: {
+        sourceCount: args.manifestSources.length,
+        readySources: args.manifestSources.length,
+        pageCount: args.manifestPages.length,
+        factCount: 0,
+        pageClaimCount: 0,
+      },
       schema: { content: "", sha256: "", updated_at: "" },
       index: "",
+      pageClaims: [],
+      facts: [],
       sources: args.manifestSources,
       pages: args.manifestPages,
     }),
     readPage: args.readPage,
+    readPageClaims: args.readPageClaims || (() => null),
+    listFacts: args.listFacts || (() => []),
   };
   const model = {
     resolveModel: () => "judge",
@@ -416,6 +492,9 @@ function factResult(id: string, status: "correct" | "missing" | "incorrect", imp
     confidence: null,
     weight,
     score: status === "correct" ? weight : 0,
+    coveredByClaims: false,
+    judgeNeedsReview: false,
+    unsupportedCorrect: false,
   };
 }
 

@@ -239,6 +239,203 @@ test("model service applies provider unsupported parameters to all its models", 
   );
 });
 
+test("model service adapts json schema response format per provider", async () => {
+  const schemaFormat = {
+    type: "json_schema" as const,
+    json_schema: {
+      name: "wiki_output",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+      },
+    },
+  };
+  await withTempModelConfig(
+    [
+      providerConfig({
+        name: "OpenAI",
+        provider: "openai",
+        baseUrl: "https://openai.test/v1",
+        apiKey: "secret-openai",
+        models: ["gpt"],
+      }),
+      providerConfig({
+        name: "Claude",
+        provider: "anthropic",
+        baseUrl: "https://claude.test/v1",
+        apiKey: "secret-claude",
+        models: ["claude"],
+      }),
+      providerConfig({
+        name: "Gemini",
+        provider: "gemini",
+        baseUrl: "https://gemini.test/v1",
+        apiKey: "secret-gemini",
+        models: ["gemini"],
+      }),
+      providerConfig({
+        name: "DeepSeek",
+        provider: "deepseek",
+        baseUrl: "https://deepseek.test",
+        apiKey: "secret-deepseek",
+        models: ["deepseek"],
+      }),
+      providerConfig({
+        name: "Mimo",
+        provider: "mimo",
+        baseUrl: "https://mimo.test/v1",
+        apiKey: "secret-mimo",
+        models: ["mimo"],
+      }),
+      providerConfig({
+        name: "Unsupported",
+        provider: "openai",
+        baseUrl: "https://unsupported.test/v1",
+        apiKey: "secret-unsupported",
+        models: ["unsupported"],
+        unsupportedParameters: ["response_format"],
+      }),
+    ],
+    async () => {
+      const urls: string[] = [];
+      const bodies: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        urls.push(String(input));
+        bodies.push(
+          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch;
+      try {
+        const service = new ModelService();
+        for (const model of [
+          "openai:gpt",
+          "claude:claude",
+          "gemini:gemini",
+          "deepseek:deepseek",
+          "mimo:mimo",
+          "unsupported:unsupported",
+        ]) {
+          await service.chat({
+            model,
+            messages: [{ role: "user", content: "hello" }],
+            response_format: schemaFormat,
+          });
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      assert.deepEqual(bodies[0].response_format, schemaFormat);
+      assert.deepEqual(bodies[1].output_config, {
+        format: {
+          type: "json_schema",
+          schema: schemaFormat.json_schema.schema,
+        },
+      });
+      assert.deepEqual(bodies[2].response_format, {
+        type: "text",
+        mime_type: "application/json",
+        schema: schemaFormat.json_schema.schema,
+      });
+      assert.equal("response_format" in bodies[3], false);
+      assert.equal(urls[3], "https://deepseek.test/beta/chat/completions");
+      assert.deepEqual(bodies[3].tool_choice, {
+        type: "function",
+        function: { name: "wiki_output" },
+      });
+      assert.deepEqual(bodies[3].tools, [
+        {
+          type: "function",
+          function: {
+            name: "wiki_output",
+            description: "Return the response in the required JSON schema.",
+            strict: true,
+            parameters: schemaFormat.json_schema.schema,
+          },
+        },
+      ]);
+      assert.deepEqual(bodies[4].response_format, schemaFormat);
+      assert.equal("response_format" in bodies[5], false);
+      assert.equal("output_config" in bodies[5], false);
+      assert.equal("tools" in bodies[5], false);
+    },
+  );
+});
+
+test("model service reads strict tool call arguments as assistant content", async () => {
+  await withTempModelConfig(
+    [
+      providerConfig({
+        name: "DeepSeek",
+        provider: "deepseek",
+        baseUrl: "https://deepseek.test",
+        apiKey: "secret-deepseek",
+        models: ["deepseek"],
+      }),
+    ],
+    async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "",
+                  tool_calls: [
+                    { function: { arguments: "{\"ok\":true}" } },
+                  ],
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        )) as typeof fetch;
+      try {
+        const service = new ModelService();
+        const res = await service.chat({
+          model: "deepseek:deepseek",
+          messages: [{ role: "user", content: "hello" }],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "tool output",
+              strict: true,
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: { ok: { type: "boolean" } },
+                required: ["ok"],
+              },
+            },
+          },
+        });
+
+        assert.equal(res.choices?.[0]?.message?.content, "{\"ok\":true}");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+});
+
 function providerConfig(
   overrides: Record<string, unknown>,
 ): Record<string, unknown> {
