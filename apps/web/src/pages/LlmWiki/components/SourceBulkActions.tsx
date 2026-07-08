@@ -40,7 +40,7 @@ export function SourceBulkActions({
           ) : (
             <RefreshCw className="size-3.5" />
           )}
-          批量解析
+          批量编译
         </Button>
         <Button
           size="sm"

@@ -72,7 +72,7 @@ export function LlmWikiHeader({
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="flex min-w-[240px] items-center gap-2">
           <span className="shrink-0 text-xs font-medium text-slate-600">
-            解析模型
+            编译模型
           </span>
           <Select
             value={model}

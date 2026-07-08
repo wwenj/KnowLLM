@@ -7,7 +7,16 @@ export const llmWikiConfig = {
   maxSourceChars: 120_000,
   maxWikiFileBytes: 1024 * 1024,
   maxSearchResults: 20,
-  ingestConcurrency: positiveInt(process.env.LLM_WIKI_INGEST_CONCURRENCY, 2),
+  ingestConcurrency: positiveInt(process.env.LLM_WIKI_INGEST_CONCURRENCY, 1),
+  compilerVersion: "source-integration-v1",
+  promptVersion: "integration-patch-v1",
+  maxCompileSourceChars: positiveInt(process.env.LLM_WIKI_MAX_COMPILE_SOURCE_CHARS, 80_000),
+  maxDigestSourceChars: positiveInt(process.env.LLM_WIKI_MAX_DIGEST_SOURCE_CHARS, 200_000),
+  maxAffectedPages: positiveInt(process.env.LLM_WIKI_MAX_AFFECTED_PAGES, 6),
+  defaultMaxModelCalls: positiveInt(process.env.LLM_WIKI_MAX_MODEL_CALLS, 1),
+  digestMaxModelCalls: positiveInt(process.env.LLM_WIKI_DIGEST_MAX_MODEL_CALLS, 2),
+  tokenPriceInputPerMillion: positiveNumber(process.env.LLM_WIKI_INPUT_PRICE_PER_MTOK, 5),
+  tokenPriceOutputPerMillion: positiveNumber(process.env.LLM_WIKI_OUTPUT_PRICE_PER_MTOK, 30),
   model:
     process.env.LLM_WIKI_MODEL ||
     process.env.KNOWLEDGE_MODEL ||
@@ -19,4 +28,9 @@ export const llmWikiConfig = {
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function positiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

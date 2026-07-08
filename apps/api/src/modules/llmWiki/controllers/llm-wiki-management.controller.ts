@@ -52,8 +52,9 @@ export class LlmWikiManagementController {
   ingestSource(
     @Param("sourceId") sourceId: string,
     @Body("model") model = "",
+    @Body("confirmHash") confirmHash = "",
   ) {
-    return this.run(() => this.wiki.ingestSource(sourceId, model));
+    return this.run(() => this.wiki.ingestSource(sourceId, model, confirmHash));
   }
 
   @Post("sources/:sourceId/ingest/stop")
@@ -67,8 +68,8 @@ export class LlmWikiManagementController {
   }
 
   @Post("sources/:sourceId/delete")
-  deleteSource(@Param("sourceId") sourceId: string, @Body("model") model = "") {
-    return this.run(() => this.wiki.deleteSource(sourceId, model));
+  deleteSource(@Param("sourceId") sourceId: string) {
+    return this.run(() => this.wiki.deleteSource(sourceId));
   }
 
   @Get("ingest-jobs/:jobId")
@@ -79,6 +80,44 @@ export class LlmWikiManagementController {
   @Post("rebuild")
   rebuild(@Body("model") model = "") {
     return this.run(() => this.wiki.rebuild(model));
+  }
+
+  @Post("compile/estimate")
+  estimateCompile(@Body("sourceIds") sourceIds: string[] = []) {
+    return this.run(() => this.wiki.estimateCompile(sourceIds));
+  }
+
+  @Post("compile")
+  compileSources(
+    @Body("sourceIds") sourceIds: string[] = [],
+    @Body("model") model = "",
+    @Body("confirmHash") confirmHash = "",
+  ) {
+    return this.run(() => this.wiki.compileSources(sourceIds, model, confirmHash));
+  }
+
+  @Get("candidates")
+  candidates(@Query("limit") limit = "50") {
+    return this.run(() => this.wiki.listCandidates(Number(limit) || 50));
+  }
+
+  @Post("candidates/:candidateId/publish")
+  publishCandidate(@Param("candidateId") candidateId: string) {
+    return this.run(() => this.wiki.publishCandidate(candidateId));
+  }
+
+  @Get("stale")
+  staleMarkers(@Query("sourceId") sourceId = "") {
+    return this.run(() => this.wiki.listStaleMarkers(sourceId));
+  }
+
+  @Post("stale/repair")
+  repairStale(
+    @Body("sourceIds") sourceIds: string[] = [],
+    @Body("model") model = "",
+    @Body("confirmHash") confirmHash = "",
+  ) {
+    return this.run(() => this.wiki.repairStale(sourceIds, model, confirmHash));
   }
 
   @Get("schema")

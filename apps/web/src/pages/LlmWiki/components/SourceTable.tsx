@@ -80,7 +80,7 @@ export function SourceTable({
           {sources.length ? (
             sources.map((source) => {
               const selected = selectedSourceIdSet.has(source.source_id);
-              const ingesting = source.status === "ingesting";
+              const compiling = source.status === "compile_planned" || source.status === "ingesting";
               const uploadedTime = formatTime(source.uploaded_at);
               const ingestedTime = formatTime(source.ingested_at) || "-";
               const active = source.source_id === activeSourceId;
@@ -98,7 +98,7 @@ export function SourceTable({
                     <td className="px-2 py-2.5 text-center">
                       <SourceSelectionCheckbox
                         checked={selected}
-                        disabled={ingesting || selectionDisabled}
+                        disabled={compiling || selectionDisabled}
                         ariaLabel={`选择 ${source.filename}`}
                         onChange={(checked) => onSelectChange(source, checked)}
                       />
@@ -111,7 +111,7 @@ export function SourceTable({
                           "block min-w-0 max-w-full truncate whitespace-nowrap text-center font-medium underline-offset-4 hover:underline",
                           active
                             ? "text-sky-800"
-                            : source.status === "ready"
+                            : source.status === "published" || source.status === "ready"
                             ? "text-indigo-700 hover:text-indigo-800"
                             : "text-slate-900 hover:text-slate-700",
                         ].join(" ")}
@@ -124,7 +124,7 @@ export function SourceTable({
                         <span
                           className="shrink-0"
                           title={source.error}
-                          aria-label={`解析错误：${source.error}`}
+                          aria-label={`编译错误：${source.error}`}
                           tabIndex={0}
                         >
                           <AlertTriangle
@@ -162,11 +162,11 @@ export function SourceTable({
                     <span className="ml-1 text-xs text-slate-400">pages</span>
                     <span className="mx-1 text-slate-300">/</span>
                     <span className="text-slate-700">{compile?.factCount || 0}</span>
-                    <span className="ml-1 text-xs text-slate-400">facts</span>
+                    <span className="ml-1 text-xs text-slate-400">key claims</span>
                   </td>
                   <td
                     className="whitespace-nowrap px-3 py-2 text-center text-slate-500"
-                    title={`上传：${uploadedTime || "-"}\n解析：${ingestedTime}`}
+                    title={`上传：${uploadedTime || "-"}\n发布：${ingestedTime}`}
                   >
                     {ingestedTime !== "-" ? ingestedTime : uploadedTime}
                   </td>
@@ -184,13 +184,13 @@ export function SourceTable({
                         size="xs"
                         variant="ghost"
                         className={
-                          ingesting
+                          compiling
                             ? "min-w-[68px] bg-rose-50 text-rose-700 hover:bg-rose-100 hover:text-rose-800"
                             : "min-w-[68px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
                         }
-                        onClick={() => (ingesting ? onStopIngest(source) : onIngest(source))}
+                        onClick={() => (compiling ? onStopIngest(source) : onIngest(source))}
                       >
-                        {ingesting ? "停止" : source.status === "ready" ? "重新解析" : "解析"}
+                        {compiling ? "停止" : source.status === "published" || source.status === "ready" ? "重编译" : "编译"}
                       </Button>
                       <Button
                         size="xs"
@@ -226,7 +226,7 @@ export function SourceTable({
                               重命名
                             </DropdownMenu.Item>
                             <DropdownMenu.Item
-                              disabled={ingesting}
+                              disabled={compiling}
                               className="flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-rose-600 outline-none focus:bg-rose-50 data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
                               onSelect={() => onDelete(source)}
                             >

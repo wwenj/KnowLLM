@@ -29,7 +29,7 @@ export class LlmWikiRetrievalService {
     return {
       stats: {
         sourceCount: sources.length,
-        readySources: sources.filter((source) => source.status === "ready").length,
+        readySources: sources.filter((source) => source.status === "published" || source.status === "ready").length,
         pageCount: pages.length,
         factCount: facts.length,
         pageClaimCount: pageClaims.length,
