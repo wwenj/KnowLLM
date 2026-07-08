@@ -32,6 +32,10 @@ export function isWikiPageTarget(target?: string): boolean {
 
 export function wikiStatusClass(status: LlmWikiSource["status"]): string {
   const statusClasses: Record<LlmWikiSource["status"], string> = {
+    raw_uploaded: "border-amber-200 bg-amber-50 text-amber-700",
+    compile_planned: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    candidate_ready: "border-sky-200 bg-sky-50 text-sky-700",
+    published: "border-emerald-200 bg-emerald-50 text-emerald-700",
     uploaded: "border-amber-200 bg-amber-50 text-amber-700",
     ingesting: "border-indigo-200 bg-indigo-50 text-indigo-700",
     ready: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -68,7 +72,7 @@ export function issueAdvice(kind: string): string {
     conflict: "人工回读 source，对冲突结论做保留、改写或标注未确认。",
     human_review: "人工确认原文证据或语义冲突，再决定是否保留。",
     needs_review: "回到页面和 source 核对证据是否足够。",
-    blocked_publish: "查看 ingest job，修正 source 或编译逻辑后重新解析。",
+    blocked_publish: "查看 compile job，修正 source 或编译逻辑后重新生成编译结果。",
   };
   return advice[kind] || "核对对应 source 和页面后处理。";
 }

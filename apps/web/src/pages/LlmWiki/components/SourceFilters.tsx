@@ -79,9 +79,10 @@ export function SourceFilters({
           </SelectTrigger>
           <SelectContent position="popper" align="start">
             <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="uploaded">待解析</SelectItem>
-            <SelectItem value="ingesting">解析中</SelectItem>
-            <SelectItem value="ready">已解析</SelectItem>
+            <SelectItem value="raw_uploaded">待编译</SelectItem>
+            <SelectItem value="compile_planned">编译中</SelectItem>
+            <SelectItem value="candidate_ready">需检查</SelectItem>
+            <SelectItem value="published">已发布</SelectItem>
             <SelectItem value="failed">失败</SelectItem>
           </SelectContent>
         </Select>

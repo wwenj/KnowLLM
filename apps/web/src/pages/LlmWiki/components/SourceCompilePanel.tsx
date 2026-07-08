@@ -31,7 +31,7 @@ interface SourceCompilePanelProps {
   onRefresh: () => void;
 }
 
-const pipelineStages = ["queued", "compiling", "publish_gate", "publishing", "published"];
+const pipelineStages = ["queued", "compiling", "candidate_ready", "published"];
 
 export function SourceCompilePanel({
   source,
@@ -60,6 +60,7 @@ export function SourceCompilePanel({
   const groupedPages = groupPages(pages);
   const issueCount = (compile?.blockedIssues || 0) + (compile?.humanReviewIssues || 0);
   const latestJob = effectiveArtifacts?.latestJob || null;
+  const compiling = current.status === "compile_planned" || current.status === "ingesting";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50/70">
@@ -121,8 +122,8 @@ export function SourceCompilePanel({
 
         <section className="grid grid-cols-2 gap-2">
           <Metric label="pages" value={compile?.pageCount ?? pages.length} />
-          <Metric label="facts" value={effectiveArtifacts?.factLedger?.factCount ?? compile?.factCount ?? 0} />
-          <Metric label="claims" value={compile?.pageClaimCount ?? effectiveArtifacts?.pageClaims.length ?? 0} />
+          <Metric label="key claims" value={effectiveArtifacts?.latestCandidate?.claims.length ?? compile?.factCount ?? 0} />
+          <Metric label="linked pages" value={compile?.pageClaimCount ?? effectiveArtifacts?.pageClaims.length ?? 0} />
           <Metric label="must" value={formatPercent(compile?.mustCoverage)} />
         </section>
 
@@ -188,15 +189,20 @@ export function SourceCompilePanel({
         <section className="rounded-lg border border-slate-200 bg-white p-3">
           <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
             <Database className="size-3.5" />
-            Facts
+            编译结果
           </div>
-          {effectiveArtifacts?.factLedger ? (
+          {effectiveArtifacts?.latestCandidate ? (
             <div className="space-y-2">
-              <InfoRow label="generated" value={formatTime(effectiveArtifacts.factLedger.generatedAt) || "-"} />
-              <ChipGrid items={effectiveArtifacts.factLedger.typeCounts} />
+              <InfoRow label="id" value={effectiveArtifacts.latestCandidate.candidateId} mono />
+              <InfoRow
+                label="status"
+                value={ingestStageLabels[effectiveArtifacts.latestCandidate.status] || effectiveArtifacts.latestCandidate.status}
+              />
+              <InfoRow label="model calls" value={String(effectiveArtifacts.latestCandidate.modelUsage.modelCalls)} />
+              <InfoRow label="cost" value={`$${effectiveArtifacts.latestCandidate.modelUsage.estimatedCostUsd.toFixed(4)}`} />
             </div>
           ) : (
-            <EmptyLine text="暂无 fact ledger" />
+            <EmptyLine text="暂无编译结果" />
           )}
         </section>
 
@@ -222,12 +228,12 @@ export function SourceCompilePanel({
         <section className="rounded-lg border border-slate-200 bg-white p-3">
           <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
             <Clock3 className="size-3.5" />
-            最新解析
+            最新编译
           </div>
           {latestJob ? (
             <JobDetails job={latestJob} />
           ) : (
-            <EmptyLine text="暂无解析记录" />
+            <EmptyLine text="暂无编译记录" />
           )}
         </section>
       </div>
@@ -235,11 +241,11 @@ export function SourceCompilePanel({
       <div className="flex flex-none items-center gap-2 border-t border-slate-200 bg-white p-3">
         <Button
           className="flex-1"
-          variant={current.status === "ingesting" ? "destructive" : "default"}
-          onClick={() => (current.status === "ingesting" ? onStopIngest(current) : onIngest(current))}
+          variant={compiling ? "destructive" : "default"}
+          onClick={() => (compiling ? onStopIngest(current) : onIngest(current))}
         >
-          {current.status === "ingesting" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-          {current.status === "ingesting" ? "停止解析" : current.status === "ready" ? "重新解析" : "解析"}
+          {compiling ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+          {compiling ? "停止编译" : current.status === "published" || current.status === "ready" ? "重编译" : "编译"}
         </Button>
         <Button variant="outline" onClick={() => onOpenRaw(current)}>
           源文
@@ -276,9 +282,9 @@ function JobDetails({ job }: { job: LlmWikiIngestJobReport }) {
       </div>
 
       <div className="grid grid-cols-4 gap-1.5">
-        <MiniMetric label="facts" value={job.factCount || 0} />
+        <MiniMetric label="key claims" value={job.factCount || 0} />
         <MiniMetric label="pages" value={job.pages?.length || 0} />
-        <MiniMetric label="must" value={formatPercent(job.coverage?.mustCoverage)} />
+        <MiniMetric label="must" value={job.coverage?.mustTotal ? formatPercent(job.coverage.mustCoverage) : "-"} />
         <MiniMetric label="issues" value={issues.length} />
       </div>
 
@@ -322,7 +328,7 @@ function JobTimeline({ job }: { job: LlmWikiIngestJobReport }) {
   const events = normalizeJobEvents(job);
   return (
     <div>
-      <div className="mb-1 text-[11px] font-medium uppercase text-slate-400">解析过程</div>
+      <div className="mb-1 text-[11px] font-medium uppercase text-slate-400">编译过程</div>
       <div className="space-y-1.5">
         {events.map((event, index) => (
           <div key={`${event.stage}-${event.at}-${index}`} className="flex gap-2 rounded-md bg-slate-50 px-2 py-1.5">
@@ -388,20 +394,6 @@ function Metric({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
       <div className="text-[11px] uppercase text-slate-400">{label}</div>
       <div className="mt-1 text-lg font-semibold tabular-nums text-slate-900">{value}</div>
-    </div>
-  );
-}
-
-function ChipGrid({ items }: { items: Record<string, number> }) {
-  const entries = Object.entries(items).sort((a, b) => b[1] - a[1]);
-  if (!entries.length) return <EmptyLine text="暂无统计" />;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {entries.map(([key, count]) => (
-        <span key={key} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600">
-          {key} {count}
-        </span>
-      ))}
     </div>
   );
 }

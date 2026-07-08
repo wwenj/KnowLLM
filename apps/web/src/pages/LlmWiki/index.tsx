@@ -4,6 +4,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   llmWikiApi,
+  type LlmWikiCompilePlan,
   type LlmWikiIssue,
   type LlmWikiPage,
   type LlmWikiSearchHit,
@@ -81,7 +82,7 @@ export function LlmWiki() {
       const nextSources = res.items || [];
       const selectableIds = new Set(
         nextSources
-          .filter((source) => source.status !== "ingesting")
+          .filter((source) => !isSourceCompiling(source))
           .map((source) => source.source_id),
       );
       setSources(nextSources);
@@ -133,7 +134,7 @@ export function LlmWiki() {
   }, []);
 
   useEffect(() => {
-    if (!sources.some((source) => source.status === "ingesting")) return;
+    if (!sources.some(isSourceCompiling)) return;
     const timer = window.setInterval(() => {
       void refresh(true);
     }, 1500);
@@ -196,13 +197,13 @@ export function LlmWiki() {
     () =>
       filteredSources.filter(
         (source) =>
-          source.status !== "ingesting" &&
+          !isSourceCompiling(source) &&
           selectedSourceIdSet.has(source.source_id),
       ),
     [filteredSources, selectedSourceIdSet],
   );
   const pageSelectableSources = useMemo(
-    () => pagedSources.filter((source) => source.status !== "ingesting"),
+    () => pagedSources.filter((source) => !isSourceCompiling(source)),
     [pagedSources],
   );
   const pageSelectedCount = pageSelectableSources.filter((source) =>
@@ -239,19 +240,25 @@ export function LlmWiki() {
 
   const handleIngest = async (source: LlmWikiSource) => {
     if (!ingestModel) {
-      toast.error("请先选择解析模型");
+      toast.error("请先选择编译模型");
       return;
     }
-    await llmWikiApi.ingestSource(source.source_id, ingestModel);
+    const estimate = await llmWikiApi.estimateCompile([source.source_id]);
+    if (estimate.plan.blocked) {
+      toast.error(estimate.plan.reason || "当前 source 不能自动编译");
+      return;
+    }
+    if (!window.confirm(compileConfirmText(estimate.plan))) return;
+    const result = await llmWikiApi.compileSources([source.source_id], ingestModel, estimate.plan.hash);
     setActiveSourceId(source.source_id);
-    toast.success(source.status === "ready" ? "已启动重新解析" : "已启动解析");
+    toast.success(compileResultText(result.jobs?.length || 0, result.skipped?.length || 0));
     await refresh(true);
     await loadSourceArtifacts(source.source_id, true);
   };
 
   const handleStopIngest = async (source: LlmWikiSource) => {
     await llmWikiApi.stopIngest(source.source_id);
-    toast.success("已停止解析，文档已恢复为未解析状态");
+    toast.success("已停止编译，文档已恢复为未编译状态");
     await refresh(true);
     if (activeSourceId === source.source_id) {
       setSourceArtifacts(null);
@@ -260,7 +267,7 @@ export function LlmWiki() {
   };
 
   const setSourceSelected = (source: LlmWikiSource, selected: boolean) => {
-    if (source.status === "ingesting") return;
+    if (isSourceCompiling(source)) return;
     setSelectedSourceIds((ids) => {
       if (selected) {
         return ids.includes(source.source_id)
@@ -299,22 +306,27 @@ export function LlmWiki() {
 
   const handleBulkIngest = async () => {
     if (!ingestModel) {
-      toast.error("请先选择解析模型");
+      toast.error("请先选择编译模型");
       return;
     }
     const targets = selectedSources.filter(
-      (source) => source.status !== "ingesting",
+      (source) => !isSourceCompiling(source),
     );
     if (!targets.length) {
-      toast.info("没有可解析的已选文档");
+      toast.info("没有可编译的已选文档");
       return;
     }
     setBulkAction("ingest");
     try {
-      for (const source of targets) {
-        await llmWikiApi.ingestSource(source.source_id, ingestModel);
+      const sourceIds = targets.map((source) => source.source_id);
+      const estimate = await llmWikiApi.estimateCompile(sourceIds);
+      if (estimate.plan.blocked) {
+        toast.error(estimate.plan.reason || "当前批量文档不能自动编译");
+        return;
       }
-      toast.success(`已启动 ${targets.length} 个文档解析`);
+      if (!window.confirm(compileConfirmText(estimate.plan))) return;
+      const result = await llmWikiApi.compileSources(sourceIds, ingestModel, estimate.plan.hash);
+      toast.success(compileResultText(result.jobs?.length || 0, result.skipped?.length || 0));
       clearSelection();
       await refresh(true);
       if (activeSourceId) await loadSourceArtifacts(activeSourceId, true);
@@ -358,7 +370,7 @@ export function LlmWiki() {
 
   const confirmBulkDelete = async () => {
     const targets = selectedSources.filter(
-      (source) => source.status !== "ingesting",
+      (source) => !isSourceCompiling(source),
     );
     if (!targets.length) {
       setBulkDeleteOpen(false);
@@ -704,4 +716,26 @@ export function LlmWiki() {
 function readStoredIngestModel(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(INGEST_MODEL_STORAGE_KEY) || "";
+}
+
+function isSourceCompiling(source: Pick<LlmWikiSource, "status">): boolean {
+  return source.status === "compile_planned" || source.status === "ingesting";
+}
+
+function compileConfirmText(plan: LlmWikiCompilePlan): string {
+  const cost = Number.isFinite(plan.estimatedCostUsd)
+    ? `$${plan.estimatedCostUsd.toFixed(4)}`
+    : "未知";
+  return [
+    `将编译 ${plan.sourceIds.length} 个 source。`,
+    `最多 ${plan.maxModelCalls} 次模型调用，预计 ${plan.estimatedInputTokens + plan.estimatedOutputTokens} tokens，约 ${cost}。`,
+    "确认后才会提交编译任务。",
+  ].join("\n");
+}
+
+function compileResultText(jobCount: number, skippedCount: number): string {
+  if (jobCount && skippedCount) return `已创建 ${jobCount} 个编译任务，复用 ${skippedCount} 个编译结果`;
+  if (jobCount) return `已创建 ${jobCount} 个编译任务`;
+  if (skippedCount) return `hash 未变化，已复用 ${skippedCount} 个编译结果`;
+  return "没有需要编译的 source";
 }
