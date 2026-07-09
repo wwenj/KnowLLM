@@ -27,6 +27,7 @@ import type { BulkAction, RawSource, StatusFilter } from "./types";
 import { isWikiPageTarget } from "./utils";
 
 const INGEST_MODEL_STORAGE_KEY = "knowllm.llmWiki.ingestModel";
+type IssueStatusFilter = "open" | "resolved" | "all";
 
 export function LlmWiki() {
   const [sources, setSources] = useState<LlmWikiSource[]>([]);
@@ -72,6 +73,8 @@ export function LlmWiki() {
   const [schemaSaving, setSchemaSaving] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [issues, setIssues] = useState<LlmWikiIssue[]>([]);
+  const [issueStatus, setIssueStatus] = useState<IssueStatusFilter>("open");
+  const [issueTotals, setIssueTotals] = useState({ open: 0, resolved: 0, all: 0 });
   const [issuesLoading, setIssuesLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -466,11 +469,18 @@ export function LlmWiki() {
     await openWiki(hit.path);
   };
 
-  const loadIssues = async (silent = false) => {
+  const loadIssues = async (status = issueStatus, silent = false) => {
     if (!silent) setIssuesLoading(true);
     try {
-      const res = await llmWikiApi.issues("open");
-      const next = res.items || [];
+      const res = await llmWikiApi.issues("all");
+      const all = res.items || [];
+      setIssueTotals({
+        open: all.filter((issue) => issue.status === "open").length,
+        resolved: all.filter((issue) => issue.status === "resolved").length,
+        all: all.length,
+      });
+      const next =
+        status === "all" ? all : all.filter((issue) => issue.status === status);
       setIssues(next);
       return next;
     } finally {
@@ -504,19 +514,26 @@ export function LlmWiki() {
 
   const openDiagnostics = async () => {
     setDiagnosticsOpen(true);
-    await loadIssues();
+    setIssueStatus("open");
+    await loadIssues("open");
+  };
+
+  const changeIssueStatus = async (status: IssueStatusFilter) => {
+    setIssueStatus(status);
+    await loadIssues(status);
   };
 
   const runLint = async () => {
     setDiagnosticsOpen(true);
+    setIssueStatus("open");
     setLintLoading(true);
     try {
       await llmWikiApi.lint("all");
-      const next = await loadIssues(true);
+      const next = await loadIssues("open", true);
       if (!next.length) {
-        toast.success("诊断未发现 open issue");
+        toast.success("本次检测未发现 open issue");
       } else {
-        toast.info(`检查完成，当前 ${next.length} 个 open issue`);
+        toast.info(`本次检测发现 ${next.length} 个 open issue`);
       }
     } finally {
       setLintLoading(false);
@@ -525,7 +542,7 @@ export function LlmWiki() {
 
   const resolveIssue = async (issue: LlmWikiIssue) => {
     await llmWikiApi.resolveIssue(issue.id);
-    setIssues((items) => items.filter((item) => item.id !== issue.id));
+    await loadIssues(issueStatus, true);
     toast.success("Issue 已解决");
   };
 
@@ -701,10 +718,13 @@ export function LlmWiki() {
         open={diagnosticsOpen}
         onOpenChange={setDiagnosticsOpen}
         issues={issues}
+        issueStatus={issueStatus}
+        issueTotals={issueTotals}
         issuesLoading={issuesLoading}
         lintLoading={lintLoading}
         onRunLint={() => void runLint()}
-        onRefresh={() => void loadIssues()}
+        onRefresh={() => void loadIssues(issueStatus)}
+        onIssueStatusChange={(status) => void changeIssueStatus(status)}
         onResolve={(issue) => void resolveIssue(issue)}
         onOpenTarget={(issue) => void openIssueTarget(issue)}
         onCopyTarget={(issue) => void copyIssueTarget(issue)}

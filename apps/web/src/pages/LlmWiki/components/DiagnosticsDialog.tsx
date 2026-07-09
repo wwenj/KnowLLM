@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   countIssues,
   formatTime,
@@ -27,10 +28,13 @@ interface DiagnosticsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   issues: LlmWikiIssue[];
+  issueStatus: "open" | "resolved" | "all";
+  issueTotals: { open: number; resolved: number; all: number };
   issuesLoading: boolean;
   lintLoading: boolean;
   onRunLint: () => void;
   onRefresh: () => void;
+  onIssueStatusChange: (status: "open" | "resolved" | "all") => void;
   onResolve: (issue: LlmWikiIssue) => void;
   onOpenTarget: (issue: LlmWikiIssue) => void;
   onCopyTarget: (issue: LlmWikiIssue) => void;
@@ -40,10 +44,13 @@ export function DiagnosticsDialog({
   open,
   onOpenChange,
   issues,
+  issueStatus,
+  issueTotals,
   issuesLoading,
   lintLoading,
   onRunLint,
   onRefresh,
+  onIssueStatusChange,
   onResolve,
   onOpenTarget,
   onCopyTarget,
@@ -60,8 +67,16 @@ export function DiagnosticsDialog({
         <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-700">
-              <span>Open</span>
+              <span>Current</span>
               <span className="font-semibold">{issues.length}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-700">
+              <span>Open</span>
+              <span className="font-semibold">{issueTotals.open}</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-700">
+              <span>Resolved</span>
+              <span className="font-semibold">{issueTotals.resolved}</span>
             </span>
             <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">
               <span>Error</span>
@@ -95,10 +110,22 @@ export function DiagnosticsDialog({
               ) : (
                 <Wrench className="size-4" />
               )}
-              立即检查
+              重新检测
             </Button>
           </div>
         </div>
+        <Tabs
+          value={issueStatus}
+          onValueChange={(value) =>
+            onIssueStatusChange(value as "open" | "resolved" | "all")
+          }
+        >
+          <TabsList>
+            <TabsTrigger value="open">Open</TabsTrigger>
+            <TabsTrigger value="resolved">Resolved</TabsTrigger>
+            <TabsTrigger value="all">All</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200">
           <table className="w-full min-w-[980px] text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
@@ -130,11 +157,18 @@ export function DiagnosticsDialog({
                     <Fragment key={issue.id}>
                       <tr className="border-t border-slate-100 align-top">
                         <td className="px-3 py-2">
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs ${issueSeverityClass(issue.severity)}`}
-                          >
-                            {issue.severity}
-                          </span>
+                          <div className="flex flex-col items-start gap-1">
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-xs ${issueSeverityClass(issue.severity)}`}
+                            >
+                              {issue.severity}
+                            </span>
+                            {issueStatus === "all" && (
+                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
+                                {issue.status}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-600">
                           {issue.kind}
@@ -182,13 +216,15 @@ export function DiagnosticsDialog({
                               <Copy className="size-3" />
                               复制
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onResolve(issue)}
-                            >
-                              标记解决
-                            </Button>
+                            {issue.status === "open" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onResolve(issue)}
+                              >
+                                标记解决
+                              </Button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -234,7 +270,7 @@ export function DiagnosticsDialog({
                     colSpan={6}
                     className="px-3 py-10 text-center text-slate-400"
                   >
-                    暂无 open issue
+                    {emptyIssueText(issueStatus)}
                   </td>
                 </tr>
               )}
@@ -244,4 +280,10 @@ export function DiagnosticsDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function emptyIssueText(status: "open" | "resolved" | "all") {
+  if (status === "open") return "当前检测未发现 open issue";
+  if (status === "resolved") return "暂无 resolved issue";
+  return "暂无 issue";
 }

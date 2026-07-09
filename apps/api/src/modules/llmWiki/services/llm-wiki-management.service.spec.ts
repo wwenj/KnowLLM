@@ -221,6 +221,31 @@ test("deleting a source marks stale pages and does not reingest remaining source
   assert.deepEqual(calls, ["invalidate"]);
 });
 
+test("listIssues returns structural lint issues", () => {
+  const issue = {
+    id: "1".repeat(32),
+    kind: "dead_link",
+    severity: "warning",
+    status: "open",
+    target: "concepts/a.md",
+    message: "死链：[[concepts/missing.md]]",
+    details: "",
+    source_ids: [],
+    created_at: "2026-07-09T00:00:00.000Z",
+    updated_at: "2026-07-09T00:00:00.000Z",
+  };
+  const service = new LlmWikiManagementService(
+    {} as LlmWikiStoreService,
+    {} as LlmWikiIngestService,
+    { list: () => ({ items: [issue] }) } as unknown as LlmWikiIssueService,
+    {} as LlmWikiSearchService,
+    {} as LlmWikiSchemaService,
+    {} as LlmWikiLintService,
+  );
+
+  assert.deepEqual(service.listIssues("open").items, [issue]);
+});
+
 function plan(sourceId: string, hash: string): LlmWikiCompilePlan {
   return {
     planId: hash,

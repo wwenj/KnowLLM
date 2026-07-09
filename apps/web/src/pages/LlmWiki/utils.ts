@@ -69,6 +69,11 @@ export function countIssues(issues: LlmWikiIssue[]) {
 
 export function issueAdvice(kind: string): string {
   const advice: Record<string, string> = {
+    dead_link: "补齐目标页面，或删除/改正页面里的双链。",
+    orphan_page: "补入口链接；若页面已无价值，确认后删除。",
+    duplicate_title: "合并重复页面，或调整标题区分语义。",
+    missing_claim_source: "重新编译页面，或修复 page-claims 与页面关系。",
+    oversized_page: "拆分成更小的概念、流程或参考页。",
     conflict: "人工回读 source，对冲突结论做保留、改写或标注未确认。",
     human_review: "人工确认原文证据或语义冲突，再决定是否保留。",
     needs_review: "回到页面和 source 核对证据是否足够。",

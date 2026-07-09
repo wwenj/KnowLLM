@@ -175,11 +175,7 @@ export class LlmWikiManagementService implements OnModuleInit {
   }
 
   listIssues(status?: "open" | "resolved" | "all") {
-    const result = this.issues.list(status || "open");
-    return {
-      ...result,
-      items: result.items.filter((issue) => issue.kind === "human_review" || issue.kind === "conflict" || issue.kind === "needs_review"),
-    };
+    return this.issues.list(status || "open");
   }
 
   resolveIssue(issueId: string) {
