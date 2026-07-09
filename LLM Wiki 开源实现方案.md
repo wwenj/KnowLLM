@@ -384,7 +384,77 @@ POST /api/llm-wiki/manage/stale/repair
 
 需要显式传入 sourceIds 和 confirmHash。
 
-## 11. API 边界
+source 删除产生的 `source_deleted` stale 页面属于维护对象，不是长期保留的正常 Wiki 内容。当前实践是：
+
+- 删除 source 时先保留受影响页面并打 stale marker，避免误删用户仍可能需要的内容。
+- 后续可按 stale marker 清理确认无源页面及其 `page-claims`、`page-contributions`。
+- 清理后重建 `index.md`，再运行 lint 得到当前真实 structural issue。
+
+## 11. 诊断与 Issue 生命周期
+
+诊断分成两层，不能混用：
+
+```text
+compile candidate issues
+  单次编译/发布过程里的 gate 结果。
+
+global wiki issues
+  对已发布 Wiki 当前状态做 lint 扫描得到的结构问题。
+```
+
+candidate issue 只用于编译候选：
+
+```text
+auto_fixed
+blocked_publish
+human_review
+```
+
+global lint 只检测真正需要处理的结构问题：
+
+```text
+dead_link
+  页面里有 [[xxx.md]] 双链，但目标 Wiki 页面不存在。
+
+duplicate_title
+  多个非 index.md 页面标题重复，会影响阅读、检索和页面选择。
+
+missing_claim_source
+  page-claims 指向不存在页面，或正式页面缺少对应 page-claims。
+
+oversized_page
+  页面接近单文件大小上限，建议拆分。
+```
+
+当前明确不作为 open issue 的内容：
+
+```text
+orphan_page
+  页面只从 index.md 进入并不一定是问题。llmWiki 的主入口就是 index，
+  把 summary 或普通页面没有非 index 入链当 warning 会产生大量噪音。
+
+needs_reconcile
+weak_evidence
+  旧链路遗留诊断类型。没有明确当前检测规则时，不自动生成，也不作为当前待处理问题。
+```
+
+issue 生命周期：
+
+- lint 本次检测到的问题写入 `issues/open`。
+- 同一类已不存在的问题移动到 `issues/resolved`。
+- resolved 只是历史归档，不代表一定人工修复。
+- 如果 resolved issue 下次又被检测到，会重新打开为 open。
+- 前端默认看 Open；Resolved/All 只用于审计历史。
+
+因此，当前“重新检测为空”的含义是：
+
+```text
+没有发现 dead link、重复标题、page-claims 不一致或超大页面。
+```
+
+它不代表事实覆盖率完美；事实覆盖仍需要 compile evaluation 判断。
+
+## 12. API 边界
 
 管理接口负责写入、编译、发布和维护：
 
@@ -399,6 +469,9 @@ POST /api/llm-wiki/manage/candidates/:candidateId/publish
 GET  /api/llm-wiki/manage/stale
 POST /api/llm-wiki/manage/stale/repair
 POST /api/llm-wiki/manage/rebuild
+POST /api/llm-wiki/manage/lint
+GET  /api/llm-wiki/manage/issues?status=open|resolved|all
+POST /api/llm-wiki/manage/issues/:issueId/resolve
 ```
 
 只读检索接口供 Agent 使用：
@@ -412,7 +485,7 @@ GET /api/llm-wiki/retrieval/source/:sourceId
 
 Agent 不允许触发编译，不允许在回答过程中修改 Wiki。
 
-## 12. 检索与 Agent
+## 13. 检索与 Agent
 
 Agent 默认路径：
 
@@ -431,7 +504,7 @@ manifest
 - 不把 claims/facts 当主知识入口。
 - 不引入 GBrain 的 MCP、daemon、Postgres、pgvector、graph 平台化架构。
 
-## 13. Evaluation
+## 14. Evaluation
 
 当前编译链路不再依赖 fact ledger 覆盖率作为发布条件。
 
@@ -447,7 +520,7 @@ manifest
 
 旧的 fact/page-claims 覆盖率评测可以保留为 legacy benchmark，但不能再作为新编译发布 gate 的默认依据。
 
-## 14. 模块边界
+## 15. 模块边界
 
 核心模块：
 
@@ -471,7 +544,7 @@ llm-wiki-search.service.ts
   页面搜索索引。
 
 llm-wiki-lint.service.ts
-  health report，不把证据坐标问题制造成人工阻断。
+  当前 Wiki 结构诊断，只生成 dead_link、duplicate_title、missing_claim_source、oversized_page 等 actionable issue。
 ```
 
 历史/兼容模块：
@@ -484,7 +557,7 @@ meta/facts/
 
 这些仍可能被旧数据、旧测试或 legacy evaluation 使用，但不是当前 source-integration 编译主路径。
 
-## 15. 当前取舍
+## 16. 当前取舍
 
 保留：
 
@@ -505,6 +578,8 @@ meta/facts/
 - claims 作为发布硬门槛。
 - source 删除后的全量重编译。
 - rebuild 默认跑 LLM。
+- orphan_page 作为默认 warning。
+- needs_reconcile / weak_evidence 作为当前 open issue。
 
 当前设计目标：
 

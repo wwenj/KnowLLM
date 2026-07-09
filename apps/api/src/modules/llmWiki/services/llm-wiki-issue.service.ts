@@ -77,11 +77,13 @@ export class LlmWikiIssueService implements OnModuleInit {
 
   private upsert(issue: LlmWikiIssue): LlmWikiIssue {
     this.ensureDirs();
-    const file = path.join(this.openRoot(), `${issue.id}.json`);
-    const existing = readJson<LlmWikiIssue>(file);
+    const openFile = path.join(this.openRoot(), `${issue.id}.json`);
+    const resolvedFile = path.join(this.resolvedRoot(), `${issue.id}.json`);
+    const existing = readJson<LlmWikiIssue>(openFile) || readJson<LlmWikiIssue>(resolvedFile);
     const next: LlmWikiIssue = existing
       ? {
           ...existing,
+          status: "open",
           severity: issue.severity,
           message: issue.message,
           details: issue.details,
@@ -89,7 +91,8 @@ export class LlmWikiIssueService implements OnModuleInit {
           updated_at: nowIso(),
         }
       : issue;
-    atomicWriteJson(file, next);
+    fs.rmSync(resolvedFile, { force: true });
+    atomicWriteJson(openFile, next);
     return next;
   }
 
