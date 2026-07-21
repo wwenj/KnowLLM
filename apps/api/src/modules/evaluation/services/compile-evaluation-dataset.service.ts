@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, OnModuleInit } from "@nestjs/common";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { nowIso, sha256 } from "../../../common/fs-json";
@@ -12,9 +12,15 @@ import type {
 } from "../evaluation.types";
 import { CompileEvaluationStoreService } from "./compile-evaluation-store.service";
 
+export const BUILTIN_COMPILE_DATASET_ID = "zh_klipper3d_manual_mini";
+
 @Injectable()
-export class CompileEvaluationDatasetService {
+export class CompileEvaluationDatasetService implements OnModuleInit {
   constructor(private readonly store: CompileEvaluationStoreService) {}
+
+  onModuleInit(): void {
+    this.ensureBuiltInDataset(true);
+  }
 
   upload(data: Buffer): CompileEvaluationDataset {
     if (!data.length) throw new Error("请选择评测数据集 JSON 文件");
@@ -29,16 +35,42 @@ export class CompileEvaluationDatasetService {
   }
 
   list() {
+    this.ensureBuiltInDataset();
     return { items: this.store.listDatasets() };
   }
 
   get(datasetId: string) {
+    if (datasetId === BUILTIN_COMPILE_DATASET_ID) this.ensureBuiltInDataset();
     return this.store.getDataset(datasetId);
   }
 
   delete(datasetId: string) {
+    if (datasetId === BUILTIN_COMPILE_DATASET_ID) throw new Error("内置评测数据集不能删除");
     return this.store.deleteDataset(datasetId);
   }
+
+  private ensureBuiltInDataset(force = false): CompileEvaluationDataset {
+    let existing: CompileEvaluationDataset | null = null;
+    try {
+      existing = this.store.getDataset(BUILTIN_COMPILE_DATASET_ID);
+      if (!force) return existing;
+    } catch {
+      existing = null;
+    }
+    const dataset = loadBuiltInCompileDataset(existing?.uploadedAt || nowIso());
+    return this.store.saveDataset(dataset);
+  }
+}
+
+export function loadBuiltInCompileDataset(uploadedAt = nowIso()): CompileEvaluationDataset {
+  const datasetDir = path.join(findWorkspaceRoot(getApiRoot()), "eval", BUILTIN_COMPILE_DATASET_ID);
+  const file = path.join(datasetDir, "compile_cases.json");
+  if (!fs.existsSync(file)) throw new Error(`内置评测集不存在: ${file}`);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  return {
+    ...normalizeDataset(raw),
+    uploadedAt,
+  };
 }
 
 export function normalizeDataset(value: unknown): CompileEvaluationDataset {

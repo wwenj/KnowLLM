@@ -4,6 +4,7 @@ export const emptyStats: LlmWikiStats = {
   total: 0,
   raw_uploaded: 0,
   compile_planned: 0,
+  analysis_ready: 0,
   candidate_ready: 0,
   published: 0,
   uploaded: 0,
@@ -25,6 +26,11 @@ export const statusStats = [
     dotClassName: "bg-indigo-500",
   },
   {
+    key: "analysis_ready",
+    label: "待生成页面",
+    dotClassName: "bg-violet-500",
+  },
+  {
     key: "candidate_ready",
     label: "需检查",
     dotClassName: "bg-sky-500",
@@ -44,6 +50,7 @@ export const statusStats = [
 export const wikiStatusLabels: Record<LlmWikiSource["status"], string> = {
   raw_uploaded: "待编译",
   compile_planned: "编译中",
+  analysis_ready: "待生成页面",
   candidate_ready: "需检查",
   published: "已发布",
   uploaded: "待编译",
@@ -66,6 +73,9 @@ export const pageTypeLabels: Record<LlmWikiPageType, string> = {
 export const ingestStageLabels: Record<string, string> = {
   queued: "排队",
   compiling: "编译",
+  analyze: "分析",
+  analysis_ready: "分析完成",
+  compose: "生成与验证",
   candidate_ready: "检查通过",
   needs_review: "需要 Review",
   skipped: "跳过",

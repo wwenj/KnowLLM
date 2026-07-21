@@ -4,6 +4,7 @@ import type {
   CompileEvaluationDataset,
   CompileEvaluationDatasetSummary,
 } from "@/api/evaluation";
+import { BUILTIN_COMPILE_EVALUATION_DATASET_ID } from "@/api/evaluation";
 import type { ModelOption } from "@/api/model";
 import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ interface EvaluationConfigPanelProps {
   selectedCaseIds: string[];
   models: ModelOption[];
   judgeModel: string;
+  concurrency: number;
   loading: boolean;
   uploading: boolean;
   submitting: boolean;
@@ -34,7 +36,9 @@ interface EvaluationConfigPanelProps {
   onDatasetChange: (datasetId: string) => void;
   onDeleteDataset: (datasetId: string) => void;
   onJudgeModelChange: (model: string) => void;
+  onConcurrencyChange: (value: number) => void;
   onToggleAll: () => void;
+  onSelectSmokeCases: () => void;
   onToggleCase: (caseId: string) => void;
   onStart: () => void;
 }
@@ -46,6 +50,7 @@ export function EvaluationConfigPanel({
   selectedCaseIds,
   models,
   judgeModel,
+  concurrency,
   loading,
   uploading,
   submitting,
@@ -58,7 +63,9 @@ export function EvaluationConfigPanel({
   onDatasetChange,
   onDeleteDataset,
   onJudgeModelChange,
+  onConcurrencyChange,
   onToggleAll,
+  onSelectSmokeCases,
   onToggleCase,
   onStart,
 }: EvaluationConfigPanelProps) {
@@ -92,6 +99,7 @@ export function EvaluationConfigPanel({
           {datasets.map((item) => {
             const active = item.datasetId === datasetId;
             const deleting = deletingDatasetId === item.datasetId;
+            const builtIn = item.datasetId === BUILTIN_COMPILE_EVALUATION_DATASET_ID;
             return (
               <div
                 key={item.datasetId}
@@ -116,21 +124,25 @@ export function EvaluationConfigPanel({
                     {item.caseCount} Cases · {item.sourceCount} Sources · {item.factCount} Facts
                   </span>
                 </button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  title="删除评测数据集"
-                  disabled={Boolean(deletingDatasetId)}
-                  className="text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                  onClick={() => onDeleteDataset(item.datasetId)}
-                >
-                  {deleting ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="size-3.5" />
-                  )}
-                </Button>
+                {builtIn ? (
+                  <span className="px-1 text-[10px] font-medium text-indigo-600">内置</span>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    title="删除评测数据集"
+                    disabled={Boolean(deletingDatasetId)}
+                    className="text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    onClick={() => onDeleteDataset(item.datasetId)}
+                  >
+                    {deleting ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3.5" />
+                    )}
+                  </Button>
+                )}
               </div>
             );
           })}
@@ -167,6 +179,17 @@ export function EvaluationConfigPanel({
               </SelectContent>
             </Select>
           </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-slate-700">并发 worker</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={concurrency}
+              onChange={(event) => onConcurrencyChange(Math.min(50, Math.max(1, Number(event.target.value) || 1)))}
+              className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800"
+            />
+          </label>
         </div>
 
         <div className="mt-3 grid grid-cols-3 divide-x divide-slate-200 rounded-lg border border-slate-200 bg-slate-50">
@@ -189,6 +212,15 @@ export function EvaluationConfigPanel({
             <div className="mt-0.5 text-xs text-slate-600">Facts</div>
           </div>
         </div>
+        {dataset?.datasetId === BUILTIN_COMPILE_EVALUATION_DATASET_ID && (
+          <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-900">
+            <div className="font-medium">Klipper 内置编译评测</div>
+            <div>
+              当前并发 {concurrency}；预计 {selectedCaseIds.length || dataset.cases.length} 次 Judge 调用；完整集约 46-48 万
+              tokens。
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="flex min-h-0 flex-1 flex-col">
@@ -197,14 +229,24 @@ export function EvaluationConfigPanel({
             评测 Cases{" "}
             {dataset ? `(${selectedCaseIds.length}/${dataset.cases.length})` : ""}
           </span>
-          <button
-            type="button"
-            disabled={!dataset?.cases.length}
-            className="rounded-md px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50 disabled:pointer-events-none disabled:text-slate-400"
-            onClick={onToggleAll}
-          >
-            {allSelected ? "取消全选" : "全选"}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={!dataset?.cases.length}
+              className="rounded-md px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50 disabled:pointer-events-none disabled:text-slate-400"
+              onClick={onSelectSmokeCases}
+            >
+              开发集 5
+            </button>
+            <button
+              type="button"
+              disabled={!dataset?.cases.length}
+              className="rounded-md px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-50 disabled:pointer-events-none disabled:text-slate-400"
+              onClick={onToggleAll}
+            >
+              {allSelected ? "取消全选" : "全选"}
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {dataset?.cases.map((item) => {
@@ -239,7 +281,7 @@ export function EvaluationConfigPanel({
           })}
           {!dataset && (
             <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">
-              请先上传评测配置 JSON
+              正在加载内置评测集
             </div>
           )}
         </div>

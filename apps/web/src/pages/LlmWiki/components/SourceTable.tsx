@@ -45,15 +45,15 @@ export function SourceTable({
 }: SourceTableProps) {
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-white">
-      <table className="w-full min-w-[1080px] table-fixed text-sm">
+      <table className="w-full min-w-[960px] table-fixed text-sm">
         <colgroup>
           {selectionMode && <col className="w-[44px]" />}
-          <col className="w-[30%]" />
-          <col className="w-[104px]" />
-          <col className="w-[210px]" />
-          <col className="w-[160px]" />
-          <col className="w-[150px]" />
-          <col className="w-[224px]" />
+          <col className="w-[22%]" />
+          <col className="w-[88px]" />
+          <col className="w-[168px]" />
+          <col className="w-[128px]" />
+          <col className="w-[132px]" />
+          <col className="w-[196px]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-slate-100/95 text-xs text-slate-600 shadow-[0_1px_0_rgb(203_213_225)] backdrop-blur">
           <tr>
@@ -105,7 +105,7 @@ export function SourceTable({
                     </td>
                   )}
                   <td className="px-3 py-2 text-center">
-                    <div className="mx-auto flex max-w-[300px] items-center justify-center gap-1.5">
+                    <div className="mx-auto flex max-w-[220px] items-center justify-center gap-1.5">
                       <button
                         className={[
                           "block min-w-0 max-w-full truncate whitespace-nowrap text-center font-medium underline-offset-4 hover:underline",
@@ -143,7 +143,7 @@ export function SourceTable({
                     </span>
                   </td>
                   <td className="px-3 py-2 text-center">
-                    <div className="mx-auto max-w-[190px] space-y-1">
+                    <div className="mx-auto max-w-[152px] space-y-1">
                       <div className="truncate text-xs text-slate-700" title={compile?.model || ""}>
                         {compile?.model || "-"}
                       </div>
@@ -171,11 +171,11 @@ export function SourceTable({
                     {ingestedTime !== "-" ? ingestedTime : uploadedTime}
                   </td>
                   <td className="px-3 py-2 text-center">
-                    <div className="inline-flex items-center justify-center gap-1 whitespace-nowrap">
+                    <div className="inline-flex items-center justify-center gap-0.5 whitespace-nowrap">
                       <Button
                         size="xs"
                         variant="ghost"
-                        className="min-w-[54px] bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800"
+                        className="min-w-[44px] px-1.5 bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800"
                         onClick={() => onSelectSource(source)}
                       >
                         详情
@@ -185,8 +185,8 @@ export function SourceTable({
                         variant="ghost"
                         className={
                           compiling
-                            ? "min-w-[68px] bg-rose-50 text-rose-700 hover:bg-rose-100 hover:text-rose-800"
-                            : "min-w-[68px] bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
+                            ? "min-w-[56px] px-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+                            : "min-w-[56px] px-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800"
                         }
                         onClick={() => (compiling ? onStopIngest(source) : onIngest(source))}
                       >
@@ -195,7 +195,7 @@ export function SourceTable({
                       <Button
                         size="xs"
                         variant="ghost"
-                        className="min-w-[54px] bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800"
+                        className="min-w-[44px] px-1.5 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800"
                         onClick={() => onOpenRaw(source)}
                       >
                         源文
@@ -205,7 +205,7 @@ export function SourceTable({
                           <Button
                             size="xs"
                             variant="ghost"
-                            className="min-w-[54px] bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-800"
+                            className="min-w-[44px] px-1.5 bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-800"
                             aria-label={`${source.filename} 更多操作`}
                             title="更多操作"
                           >

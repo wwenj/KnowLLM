@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { nowIso } from "../../../common/fs-json";
+import { nowIso, sha256 } from "../../../common/fs-json";
+import type { LlmWikiRetrievalManifest } from "../../llmWiki/contracts/llm-wiki-retrieval.types";
 import { LlmWikiRetrievalService } from "../../llmWiki/services/llm-wiki-retrieval.service";
 import { ModelService } from "../../model/model.service";
 import type {
@@ -13,6 +14,8 @@ import type {
   CompileEvaluationMatchedSource,
   CompileEvaluationPassLevel,
   CompileEvaluationRun,
+  CompileEvaluationUsage,
+  CompileEvaluationWikiSnapshot,
 } from "../evaluation.types";
 import { CompileEvaluationStoreService, emptySummary } from "./compile-evaluation-store.service";
 
@@ -28,6 +31,19 @@ interface JudgeOutput {
   }>;
 }
 
+interface JudgeResult {
+  facts: CompileEvaluationFactResult[];
+  usage: CompileEvaluationUsage;
+}
+
+class JudgeExecutionError extends Error {
+  constructor(message: string, readonly usage: CompileEvaluationUsage) {
+    super(message);
+  }
+}
+
+const DEFAULT_COMPILE_EVALUATION_CONCURRENCY = positiveInt(process.env.COMPILE_EVALUATION_CONCURRENCY, 20);
+
 @Injectable()
 export class CompileEvaluationService {
   private readonly logger = new Logger(CompileEvaluationService.name);
@@ -38,7 +54,7 @@ export class CompileEvaluationService {
     private readonly model: ModelService,
   ) {}
 
-  createRun(input: unknown) {
+  createRun(input: unknown, retryOfRunId = "") {
     const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
     const dataset = this.store.getDataset(stringField(raw.datasetId));
     const requested = Array.isArray(raw.caseIds) ? raw.caseIds.map(stringField).filter(Boolean) : [];
@@ -50,11 +66,40 @@ export class CompileEvaluationService {
     }
     const judgeModel = this.model.resolveModel(stringField(raw.judgeModel));
     if (!judgeModel) throw new Error("未配置 Judge 模型");
-    const run = this.store.createRun({ dataset, caseIds, judgeModel });
+    const workerCount = Math.min(50, positiveInt(raw.concurrency, DEFAULT_COMPILE_EVALUATION_CONCURRENCY));
+    const snapshot = this.freezeWikiSnapshot();
+    const run = this.store.createRun({
+      dataset,
+      caseIds,
+      judgeModel,
+      datasetHash: sha256(JSON.stringify(dataset)),
+      snapshot,
+      workerCount,
+      retryOfRunId,
+    });
     void this.execute(run.runId, dataset).catch((error) => {
       this.logger.error(`compile evaluation ${run.runId} failed: ${formatError(error)}`);
     });
     return run;
+  }
+
+  retryFailed(runId: string, input: unknown) {
+    const previous = this.store.getRun(runId);
+    if (previous.status === "running") throw new Error("运行中的评测不能重跑失败 case");
+    const failedCaseIds = previous.cases
+      .filter((item) => item.status === "evaluation_failed" || item.status === "failed")
+      .map((item) => item.caseId);
+    if (!failedCaseIds.length) throw new Error("当前评测没有可重跑的失败 case");
+    const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    return this.createRun(
+      {
+        datasetId: previous.datasetId,
+        caseIds: failedCaseIds,
+        judgeModel: stringField(raw.judgeModel) || previous.judgeModel,
+        concurrency: raw.concurrency ?? previous.workerCount,
+      },
+      previous.runId,
+    );
   }
 
   listRuns(limit?: number) {
@@ -72,32 +117,43 @@ export class CompileEvaluationService {
   private async execute(runId: string, dataset: CompileEvaluationDataset): Promise<void> {
     let run = this.store.getRun(runId);
     try {
-      for (const caseId of run.caseIds) {
-        const testCase = dataset.cases.find((item) => item.id === caseId);
-        if (!testCase) continue;
-        run = this.store.saveRun({
-          ...run,
-          progress: { ...run.progress, currentCaseId: caseId },
-        });
-        const result = await this.evaluateCase(dataset, testCase, run.judgeModel);
-        const cases = [...run.cases.filter((item) => item.caseId !== caseId), result];
-        run = this.store.saveRun({
-          ...run,
-          cases,
-          progress: {
-            completed: run.progress.completed + 1,
-            total: run.progress.total,
-            currentCaseId: caseId,
-          },
-          summary: summarize(cases),
-        });
-      }
+      const snapshot = this.store.getSnapshot(runId);
+      const caseOrder = new Map(run.caseIds.map((caseId, index) => [caseId, index]));
+      const cases: CompileEvaluationCaseResult[] = [];
+      let nextIndex = 0;
+      const workerCount = Math.min(run.workerCount, run.caseIds.length);
+      const worker = async () => {
+        while (nextIndex < run.caseIds.length) {
+          const caseId = run.caseIds[nextIndex];
+          nextIndex += 1;
+          if (!caseId) continue;
+          const testCase = dataset.cases.find((item) => item.id === caseId);
+          if (!testCase) continue;
+          const result = await this.evaluateCaseSafely(dataset, testCase, run.judgeModel, snapshot);
+          cases.push(result);
+          cases.sort((a, b) => (caseOrder.get(a.caseId) ?? 0) - (caseOrder.get(b.caseId) ?? 0));
+          run = this.store.saveRun({
+            ...run,
+            cases: [...cases],
+            progress: {
+              completed: cases.length,
+              total: run.progress.total,
+              currentCaseId: caseId,
+            },
+            summary: summarize(cases),
+            usage: summarizeUsage(cases),
+          });
+        }
+      };
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+      const summary = summarize(cases);
       this.store.saveRun({
         ...run,
-        status: "success",
+        status: summary.failedCases ? "partial" : "success",
         endedAt: nowIso(),
         progress: { ...run.progress, currentCaseId: "" },
-        summary: summarize(run.cases),
+        summary,
+        usage: summarizeUsage(cases),
       });
     } catch (error) {
       this.store.saveRun({
@@ -110,23 +166,40 @@ export class CompileEvaluationService {
     }
   }
 
+  private async evaluateCaseSafely(
+    dataset: CompileEvaluationDataset,
+    testCase: CompileEvaluationDatasetCase,
+    judgeModel: string,
+    snapshot: CompileEvaluationWikiSnapshot,
+  ): Promise<CompileEvaluationCaseResult> {
+    try {
+      return await this.evaluateCase(dataset, testCase, judgeModel, snapshot);
+    } catch (error) {
+      return failedCaseResult(
+        testCase,
+        formatError(error),
+        error instanceof JudgeExecutionError ? error.usage : emptyUsage(),
+      );
+    }
+  }
+
   private async evaluateCase(
     dataset: CompileEvaluationDataset,
     testCase: CompileEvaluationDatasetCase,
     judgeModel: string,
+    snapshot: CompileEvaluationWikiSnapshot,
   ): Promise<CompileEvaluationCaseResult> {
-    const manifest = this.retrieval.getManifest();
     const sources = testCase.sourceIds.map((id) => dataset.sources.find((item) => item.id === id)!);
     const matchedSources = sources.map((source): CompileEvaluationMatchedSource => {
-      const matched = manifest.sources
-        .filter((item) => item.status === "ready" && item.sha256 === source.sha256)
-        .sort((a, b) => b.ingested_at.localeCompare(a.ingested_at))[0];
+      const matched = snapshot.sources
+        .filter((item) => isEvaluableSourceStatus(item.status) && item.sha256 === source.sha256)
+        .sort((a, b) => b.ingestedAt.localeCompare(a.ingestedAt))[0];
       return {
         datasetSourceId: source.id,
         filename: source.filename,
         sha256: source.sha256,
-        sourceId: matched?.source_id || null,
-        ingestedAt: matched?.ingested_at || "",
+        sourceId: matched?.sourceId || null,
+        ingestedAt: matched?.ingestedAt || "",
       };
     });
     const missing = matchedSources.filter((item) => !item.sourceId);
@@ -151,59 +224,119 @@ export class CompileEvaluationService {
           judgeNeedsReview: false,
           unsupportedCorrect: false,
         })),
+        usage: emptyUsage(),
         error: "",
       };
     }
 
     const matchedIds = new Set(matchedSources.map((item) => item.sourceId).filter(Boolean) as string[]);
-    const pageRefs = manifest.pages.filter(
-      (page) => page.path !== "index.md" && page.sources.some((sourceId) => matchedIds.has(sourceId)),
+    const pages = snapshot.pages.filter(
+      (page) => page.path !== "index.md" && page.sourceIds.some((sourceId) => matchedIds.has(sourceId)),
     );
-    const pages = pageRefs.map((page) => this.retrieval.readPage(page.path));
-    const pageClaims = pages
-      .map((page) => this.retrieval.readPageClaims(page.path))
-      .filter((claim): claim is NonNullable<typeof claim> => !!claim);
+    const pagePathSet = new Set(pages.map((page) => page.path));
+    const pageClaims = snapshot.pageClaims.filter((claim) => pagePathSet.has(claim.path));
     const claimedFactIds = new Set(pageClaims.flatMap((claim) => claim.factIds));
-    const ledgerFacts = this.retrieval
-      .listFacts([...matchedIds])
-      .filter((fact) => claimedFactIds.has(fact.factId));
+    const ledgerFacts = snapshot.facts.filter(
+      (fact) => matchedIds.has(fact.sourceId) && claimedFactIds.has(fact.factId),
+    );
     const coveredByClaims = new Map(
       testCase.expectedFacts.map((fact) => [fact.id, expectedFactCoveredByClaims(fact, ledgerFacts)] as const),
     );
+    let judged: JudgeResult;
     try {
-      const judgedFacts = await this.judge({
+      judged = await this.judge({
         model: judgeModel,
         testCase,
         sources: sources.map(({ id, filename, content }) => ({ id, filename, content })),
         pages: pages.map(({ path, title, content }) => ({ path, title, content })),
       });
-      const facts = judgedFacts.map((fact) =>
-        finalizeJudgeFact({
-          fact,
-          coveredByClaims: coveredByClaims.get(fact.id) || false,
-          pages: pages.map(({ path, content }) => ({ path, content })),
-        }),
-      );
-      return {
-        caseId: testCase.id,
-        name: testCase.name,
-        status: "success",
-        matchedSources,
-        pagePaths: pages.map((page) => page.path),
-        facts,
-        error: "",
-      };
     } catch (error) {
-      return {
-        caseId: testCase.id,
-        name: testCase.name,
-        status: "failed",
+      return failedCaseResult(
+        testCase,
+        formatError(error),
+        error instanceof JudgeExecutionError ? error.usage : emptyUsage(),
         matchedSources,
-        pagePaths: pages.map((page) => page.path),
-        facts: [],
-        error: formatError(error),
-      };
+        pages.map((page) => page.path),
+      );
     }
+    const facts = judged.facts.map((fact) =>
+      finalizeJudgeFact({
+        fact,
+        coveredByClaims: coveredByClaims.get(fact.id) || false,
+        pages: pages.map(({ path, content }) => ({ path, content })),
+      }),
+    );
+    return {
+      caseId: testCase.id,
+      name: testCase.name,
+      status: "success",
+      matchedSources,
+      pagePaths: pages.map((page) => page.path),
+      facts,
+      usage: judged.usage,
+      error: "",
+    };
+  }
+
+  private freezeWikiSnapshot(): CompileEvaluationWikiSnapshot {
+    let lastError = "";
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const before = this.retrieval.getManifest();
+        const readPages = () => before.pages
+          .filter((page) => page.path !== "index.md")
+          .map((page) => this.retrieval.readPage(page.path))
+          .map((page) => ({ path: page.path, title: page.title, content: page.content, sourceIds: page.sources }));
+        const readClaims = (pagePaths: string[]) => pagePaths
+          .map((pagePath) => this.retrieval.readPageClaims(pagePath))
+          .filter((claim): claim is NonNullable<typeof claim> => !!claim)
+          .map((claim) => ({ path: claim.path, factIds: claim.factIds, sourceIds: claim.sourceIds }));
+        const readFacts = () => this.retrieval.listFacts().map((fact) => ({
+          factId: fact.factId,
+          sourceId: fact.sourceId,
+          fact: fact.fact,
+          evidence: fact.evidence,
+          entities: fact.entities,
+          type: fact.type,
+        }));
+        const pages = readPages();
+        const pagePaths = pages.map((page) => page.path);
+        const pageClaims = readClaims(pagePaths);
+        const facts = readFacts();
+        const pagesCheck = readPages();
+        const pageClaimsCheck = readClaims(pagePaths);
+        const factsCheck = readFacts();
+        const after = this.retrieval.getManifest();
+        if (
+          manifestHash(before) !== manifestHash(after) ||
+          sha256(JSON.stringify({ pages, pageClaims, facts })) !==
+            sha256(JSON.stringify({ pages: pagesCheck, pageClaims: pageClaimsCheck, facts: factsCheck }))
+        ) {
+          lastError = "冻结期间 Wiki 页面、claims 或 facts 发生变化";
+          continue;
+        }
+        const payload = {
+          createdAt: nowIso(),
+          sources: before.sources.map((source) => ({
+            sourceId: source.source_id,
+            filename: source.filename,
+            status: source.status,
+            sha256: source.sha256,
+            ingestedAt: source.ingested_at,
+            compilerVersion: source.compiler_version || "legacy-unknown",
+            promptVersion: source.prompt_version || "legacy-unknown",
+            compileModel: source.compile_model || "unknown",
+          })),
+          pages,
+          pageClaims,
+          facts,
+        };
+        return { ...payload, snapshotHash: sha256(JSON.stringify(payload)) };
+      } catch (error) {
+        lastError = formatError(error);
+      }
+    }
+    throw new Error(`无法冻结一致的 Wiki 快照: ${lastError || "unknown"}`);
   }
 
   private async judge(args: {
@@ -211,64 +344,77 @@ export class CompileEvaluationService {
     testCase: CompileEvaluationDatasetCase;
     sources: Array<{ id: string; filename: string; content: string }>;
     pages: Array<{ path: string; title: string; content: string }>;
-  }): Promise<CompileEvaluationFactResult[]> {
-    const response = await this.model.chat({
-      model: args.model,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: [
-            "你是 LLM Wiki 编译结果评测器。",
-            "只判断最终 Wiki 是否正确保留 expectedFacts，不评价文风、页面结构或原始文档本身。",
-            "originalSources 与 expectedFacts.evidence 只用于理解原文依据；判定 correct 必须来自 finalWikiPages。",
-            "status 只能是 correct、missing、incorrect。",
-            "correct: Wiki 明确支持该事实；missing: Wiki 未包含足够信息；incorrect: Wiki 对该事实给出冲突或错误描述。",
-            "每条事实必须返回 finalWikiPages 中最能支持判断的 evidencePath 与 wikiEvidence；找不到则留空。",
-            "confidence 是 0 到 1 的数字，表示你对该判断的置信度。",
-            "只输出 JSON，不输出 Markdown。",
-          ].join("\n"),
-        },
-        {
-          role: "user",
-          content: JSON.stringify(
-            {
-              output_schema: {
-                facts: "array of {factId,status,evidencePath,wikiEvidence,reason,confidence}",
+  }): Promise<JudgeResult> {
+    let response: unknown;
+    try {
+      response = await this.model.chat({
+        model: args.model,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: [
+              "你是 LLM Wiki 编译结果评测器。",
+              "只判断最终 Wiki 是否正确保留 expectedFacts，不评价文风、页面结构或原始文档本身。",
+              "originalSources 与 expectedFacts.evidence 只用于理解原文依据；判定 correct 必须来自 finalWikiPages。",
+              "status 只能是 correct、missing、incorrect。",
+              "correct: Wiki 明确支持该事实；missing: Wiki 未包含足够信息；incorrect: Wiki 对该事实给出冲突或错误描述。",
+              "每条事实必须返回 finalWikiPages 中最能支持判断的 evidencePath 与 wikiEvidence；找不到则留空。",
+              "confidence 是 0 到 1 的数字，表示你对该判断的置信度。",
+              "只输出 JSON，不输出 Markdown。",
+            ].join("\n"),
+          },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                output_schema: {
+                  facts: "array of {factId,status,evidencePath,wikiEvidence,reason,confidence}",
+                },
+                case: { id: args.testCase.id, name: args.testCase.name },
+                expectedFacts: args.testCase.expectedFacts,
+                originalSources: args.sources,
+                finalWikiPages: args.pages,
               },
-              case: { id: args.testCase.id, name: args.testCase.name },
-              expectedFacts: args.testCase.expectedFacts,
-              originalSources: args.sources,
-              finalWikiPages: args.pages,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    });
-    const output = parseJudgeOutput(extractContent(response));
-    const byId = new Map((output.facts || []).map((item) => [stringField(item.factId), item]));
-    return args.testCase.expectedFacts.map((fact) => {
-      const item = byId.get(fact.id);
-      const status = item ? normalizeFactStatus(item.status) : "missing";
-      const weight = factWeight(fact.importance);
+              null,
+              2,
+            ),
+          },
+        ],
+      });
+    } catch (error) {
+      throw new JudgeExecutionError(formatError(error), { ...emptyUsage(), modelCalls: 1 });
+    }
+    const usage = extractUsage(response);
+    try {
+      const output = parseJudgeOutput(extractContent(response));
+      const byId = new Map((output.facts || []).map((item) => [stringField(item.factId), item]));
       return {
-        ...fact,
-        ...normalizeExpectedFactForResult(fact),
-        status,
-        evidencePath: stringField(item?.evidencePath),
-        wikiEvidence: stringField(item?.wikiEvidence) || stringField(item?.evidence),
-        reason: stringField(item?.reason) || (item ? "" : "Judge 未返回该事实的判断"),
-        confidence: numberOrNull(item?.confidence),
-        weight,
-        score: status === "correct" ? weight : 0,
-        coveredByClaims: false,
-        judgeNeedsReview: false,
-        unsupportedCorrect: false,
+        usage,
+        facts: args.testCase.expectedFacts.map((fact) => {
+          const item = byId.get(fact.id);
+          const status = item ? normalizeFactStatus(item.status) : "missing";
+          const weight = factWeight(fact.importance);
+          return {
+            ...fact,
+            ...normalizeExpectedFactForResult(fact),
+            status,
+            evidencePath: stringField(item?.evidencePath),
+            wikiEvidence: stringField(item?.wikiEvidence) || stringField(item?.evidence),
+            reason: stringField(item?.reason) || (item ? "" : "Judge 未返回该事实的判断"),
+            confidence: numberOrNull(item?.confidence),
+            weight,
+            score: status === "correct" ? weight : 0,
+            coveredByClaims: false,
+            judgeNeedsReview: false,
+            unsupportedCorrect: false,
+          };
+        }),
       };
-    });
+    } catch (error) {
+      throw new JudgeExecutionError(formatError(error), usage);
+    }
   }
 }
 
@@ -279,7 +425,11 @@ function finalizeJudgeFact(args: {
 }): CompileEvaluationFactResult {
   const evidenceHits =
     args.fact.status !== "correct" ||
-    Boolean(args.fact.wikiEvidence && wikiEvidenceHitsPages(args.fact.wikiEvidence, args.pages));
+    Boolean(
+      args.fact.evidencePath &&
+      args.fact.wikiEvidence &&
+      wikiEvidenceHitsPages(args.fact.wikiEvidence, args.fact.evidencePath, args.pages),
+    );
   if (!evidenceHits) {
     return {
       ...args.fact,
@@ -315,18 +465,39 @@ function expectedFactCoveredByClaims(
 
 function wikiEvidenceHitsPages(
   wikiEvidence: string,
+  evidencePath: string,
   pages: Array<{ path: string; content: string }>,
 ): boolean {
   const needle = normalizeText(wikiEvidence);
   if (!needle) return false;
-  return pages.some((page) => normalizeText(page.content).includes(needle) || textOverlaps(needle, normalizeText(page.content)));
+  const page = pages.find((item) => item.path === evidencePath);
+  return Boolean(page && normalizeText(page.content).includes(needle));
+}
+
+function failedCaseResult(
+  testCase: CompileEvaluationDatasetCase,
+  error: string,
+  usage: CompileEvaluationUsage,
+  matchedSources: CompileEvaluationMatchedSource[] = [],
+  pagePaths: string[] = [],
+): CompileEvaluationCaseResult {
+  return {
+    caseId: testCase.id,
+    name: testCase.name,
+    status: "evaluation_failed",
+    matchedSources,
+    pagePaths,
+    facts: [],
+    usage,
+    error,
+  };
 }
 
 export function summarize(cases: CompileEvaluationCaseResult[]) {
   const summary = emptySummary();
   for (const item of cases) {
     if (item.status === "source_missing") summary.sourceMissingCases += 1;
-    if (item.status === "failed") summary.failedCases += 1;
+    if (item.status === "failed" || item.status === "evaluation_failed") summary.failedCases += 1;
     for (const fact of item.facts) {
       const weight = fact.weight || factWeight(fact.importance);
       const importance = normalizeImportance(fact.importance);
@@ -360,6 +531,22 @@ export function factWeight(importance: CompileEvaluationFactImportance): number 
   return 3;
 }
 
+function summarizeUsage(cases: CompileEvaluationCaseResult[]): CompileEvaluationUsage {
+  return cases.reduce(
+    (total, item) => ({
+      modelCalls: total.modelCalls + (item.usage?.modelCalls || 0),
+      inputTokens: total.inputTokens + (item.usage?.inputTokens || 0),
+      outputTokens: total.outputTokens + (item.usage?.outputTokens || 0),
+      totalTokens: total.totalTokens + (item.usage?.totalTokens || 0),
+    }),
+    emptyUsage(),
+  );
+}
+
+function emptyUsage(): CompileEvaluationUsage {
+  return { modelCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+}
+
 function normalizeExpectedFactForResult(fact: Partial<CompileEvaluationFactResult>): {
   sourceFile: string;
   evidence: string;
@@ -386,6 +573,33 @@ function passLevel(weightedScore: number, incorrectRate: number, mustAccuracy: n
   return "failed";
 }
 
+function manifestHash(manifest: LlmWikiRetrievalManifest): string {
+  return sha256(
+    JSON.stringify({
+      sources: manifest.sources.map((item) => ({
+        id: item.source_id,
+        status: item.status,
+        sha256: item.sha256,
+        ingestedAt: item.ingested_at,
+        touchedPages: item.touched_pages,
+      })),
+      pages: manifest.pages.map((item) => ({
+        path: item.path,
+        updatedAt: item.updated_at,
+        schemaHash: item.schema_hash,
+        sources: item.sources,
+      })),
+      pageClaims: manifest.pageClaims,
+      facts: manifest.facts,
+    }),
+  );
+}
+
+function positiveInt(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function parseJudgeOutput(content: string): JudgeOutput {
   const text = content.trim();
   const candidates = [text, text.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim(), extractObject(text)];
@@ -405,6 +619,31 @@ function extractContent(response: unknown): string {
   const content = body.choices?.[0]?.message?.content ?? body.choices?.[0]?.text;
   if (typeof content === "string") return content;
   throw new Error("Judge 未返回内容");
+}
+
+function extractUsage(response: unknown): CompileEvaluationUsage {
+  const usage = (response as {
+    usage?: {
+      prompt_tokens?: unknown;
+      completion_tokens?: unknown;
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+      total_tokens?: unknown;
+    };
+  }).usage;
+  const inputTokens = nonNegativeNumber(usage?.input_tokens ?? usage?.prompt_tokens);
+  const outputTokens = nonNegativeNumber(usage?.output_tokens ?? usage?.completion_tokens);
+  return {
+    modelCalls: 1,
+    inputTokens,
+    outputTokens,
+    totalTokens: nonNegativeNumber(usage?.total_tokens) || inputTokens + outputTokens,
+  };
+}
+
+function nonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function normalizeFactStatus(value: unknown): CompileEvaluationFactStatus {
@@ -449,6 +688,10 @@ function uniqueTerms(text: string): string[] {
 
 function stringField(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isEvaluableSourceStatus(status: string): boolean {
+  return status === "published" || status === "ready";
 }
 
 function formatError(error: unknown): string {

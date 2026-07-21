@@ -84,6 +84,35 @@ test("lint does not report orphan pages as actionable structural issues", () => 
   });
 });
 
+test("issue clear removes only the selected issue status", () => {
+  withTempLint(({ issues }) => {
+    const [openIssue] = issues.upsertMany([
+      {
+        kind: "dead_link",
+        severity: "warning",
+        target: "concepts/a.md",
+        message: "双链目标不存在：concepts/missing.md",
+      },
+    ]);
+    const [resolvedIssue] = issues.upsertMany([
+      {
+        kind: "duplicate_title",
+        severity: "warning",
+        target: "concepts/b.md",
+        message: "标题重复：B",
+      },
+    ]);
+    issues.resolve(resolvedIssue.id);
+
+    assert.equal(issues.clear("open").cleared, 1);
+    assert.equal(issues.list("open").items.some((issue) => issue.id === openIssue.id), false);
+    assert.equal(issues.list("resolved").items.some((issue) => issue.id === resolvedIssue.id), true);
+
+    assert.equal(issues.clear("resolved").cleared, 1);
+    assert.equal(issues.list("all").items.length, 0);
+  });
+});
+
 function withTempLint(
   fn: (ctx: {
     store: LlmWikiStoreService;

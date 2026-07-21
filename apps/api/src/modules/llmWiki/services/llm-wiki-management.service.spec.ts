@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import type { ModelService } from "../../model/model.service";
 import type { LlmWikiCompileCandidate, LlmWikiCompilePlan } from "../contracts/llm-wiki.types";
-import type { LlmWikiCompilerService } from "./llm-wiki-compiler.service";
+import { compilerPromptHash, type LlmWikiCompilerService } from "./llm-wiki-compiler.service";
 import { LlmWikiIngestService } from "./llm-wiki-ingest.service";
 import type { LlmWikiIssueService } from "./llm-wiki-issue.service";
 import type { LlmWikiLintService } from "./llm-wiki-lint.service";
@@ -10,6 +11,7 @@ import { LlmWikiManagementService } from "./llm-wiki-management.service";
 import type { LlmWikiSchemaService } from "./llm-wiki-schema.service";
 import type { LlmWikiSearchService } from "./llm-wiki-search.service";
 import type { LlmWikiStoreService } from "./llm-wiki-store.service";
+import { llmWikiConfig } from "../llm-wiki.config";
 
 test("compile without confirmHash only returns estimate and creates no job", () => {
   const sourceId = "a".repeat(32);
@@ -19,13 +21,14 @@ test("compile without confirmHash only returns estimate and creates no job", () 
     {
       getSource: () => ({ source_id: sourceId, filename: "a.md", status: "raw_uploaded" }),
       readSource: () => "# A",
+      readAnalysisArtifact: () => null,
       listPageRefs: () => [],
       createIngestJob: () => {
         createdJobs += 1;
         throw new Error("must not create job");
       },
     } as unknown as LlmWikiStoreService,
-    { estimateCompilePlan: () => plan(sourceId, "hash-a") } as unknown as LlmWikiCompilerService,
+    { estimateAnalyzePlan: () => plan(sourceId, "hash-a", "analyze") } as unknown as LlmWikiCompilerService,
     { invalidate: () => undefined } as unknown as LlmWikiSearchService,
     { read: () => ({ content: "# Schema", sha256: "schema", updated_at: "" }) } as unknown as LlmWikiSchemaService,
     { resolveModel: () => {
@@ -38,8 +41,34 @@ test("compile without confirmHash only returns estimate and creates no job", () 
 
   assert.equal(result.requiresConfirmation, true);
   assert.equal(result.plan.maxModelCalls, 1);
-  assert.equal(resolveModelCalls, 0);
+  assert.equal(resolveModelCalls, 1);
   assert.equal(createdJobs, 0);
+});
+
+test("bulk estimate blocks mixed analyze and compose phases instead of silently reanalyzing", () => {
+  const analyzedSourceId = "a".repeat(32);
+  const rawSourceId = "d".repeat(32);
+  const service = new LlmWikiIngestService(
+    {
+      getSource: (sourceId: string) => ({ source_id: sourceId, filename: `${sourceId[0]}.md`, status: "raw_uploaded" }),
+      readSource: (sourceId: string) => sourceId === analyzedSourceId ? "# A" : "# D",
+      readAnalysisArtifact: (sourceId: string) => sourceId === analyzedSourceId ? analysisFor(sourceId, "# A") : null,
+      listPageRefs: () => [],
+    } as unknown as LlmWikiStoreService,
+    {
+      estimateAnalyzePlan: ({ sourceId }: { sourceId: string }) => plan(sourceId, `analyze-${sourceId}`, "analyze"),
+      estimateComposePlan: ({ sourceId }: { sourceId: string }) => plan(sourceId, `compose-${sourceId}`, "compose"),
+    } as unknown as LlmWikiCompilerService,
+    { invalidate: () => undefined } as unknown as LlmWikiSearchService,
+    { read: () => ({ content: "# Schema", sha256: "schema", updated_at: "" }) } as unknown as LlmWikiSchemaService,
+    { resolveModel: () => "provider:model" } as unknown as ModelService,
+  );
+
+  const estimate = service.estimateCompile([analyzedSourceId, rawSourceId], "provider:model");
+
+  assert.equal(estimate.plan.blocked, true);
+  assert.match(estimate.plan.reason, /按阶段分批执行/);
+  assert.deepEqual(estimate.sourcePlans.map((item) => item.phase), ["compose", "analyze"]);
 });
 
 test("unchanged source/schema/prompt hash reuses candidate with zero model calls", () => {
@@ -58,6 +87,7 @@ test("unchanged source/schema/prompt hash reuses candidate with zero model calls
         latest_compile_hash: "hash-b",
       }),
       readSource: () => "# B",
+      readAnalysisArtifact: () => analysisFor(sourceId, "# B"),
       listPageRefs: () => [],
       readCompileCandidate: () => candidate,
       getLatestCompileCandidateForSource: () => candidate,
@@ -72,8 +102,8 @@ test("unchanged source/schema/prompt hash reuses candidate with zero model calls
       },
     } as unknown as LlmWikiStoreService,
     {
-      estimateCompilePlan: () => plan(sourceId, "hash-b"),
-      compileSource: () => {
+      estimateComposePlan: () => plan(sourceId, "hash-b", "compose"),
+      composeSource: () => {
         compileCalls += 1;
         throw new Error("must not compile");
       },
@@ -82,7 +112,7 @@ test("unchanged source/schema/prompt hash reuses candidate with zero model calls
     { read: () => ({ content: "# Schema", sha256: "schema", updated_at: "" }) } as unknown as LlmWikiSchemaService,
     { resolveModel: () => "provider:model" } as unknown as ModelService,
   );
-  const estimate = service.estimateCompile([sourceId]);
+  const estimate = service.estimateCompile([sourceId], "provider:model");
 
   const result = service.compileSources([sourceId], "provider:model", estimate.plan.hash);
 
@@ -94,16 +124,16 @@ test("unchanged source/schema/prompt hash reuses candidate with zero model calls
   assert.equal(publishedCandidateId, candidate.candidateId);
 });
 
-test("confirmed compile auto-publishes a gate-passed candidate", async () => {
+test("confirmed analyze stops at analysis_ready and does not publish", async () => {
   const sourceId = "c".repeat(32);
-  const candidate = candidateFor(sourceId, "hash-c");
   const reports = new Map<string, any>();
-  let savedCandidateId = "";
+  let analyzed = 0;
+  let savedAnalysis = 0;
   let publishedCandidateId = "";
-  let compileCalls = 0;
   const store = {
     getSource: () => ({ source_id: sourceId, filename: "c.md", status: "raw_uploaded", latest_candidate_id: "", latest_compile_hash: "" }),
     readSource: () => "# C",
+    readAnalysisArtifact: () => null,
     listPageRefs: () => [],
     createIngestJob: (id: string, model: string) => {
       const report = {
@@ -130,12 +160,10 @@ test("confirmed compile auto-publishes a gate-passed candidate", async () => {
     },
     getIngestJob: (jobId: string) => reports.get(jobId),
     prepareIngest: () => ({}),
-    getLatestCompileCandidateForSource: () => null,
     saveSourceMap: () => undefined,
-    saveCompileCandidate: (item: LlmWikiCompileCandidate) => {
-      savedCandidateId = item.candidateId;
-      return item;
-    },
+    saveFactLedger: () => undefined,
+    saveAnalysisArtifact: () => { savedAnalysis += 1; },
+    updateSource: () => ({}),
     publishCandidate: (candidateId: string) => {
       publishedCandidateId = candidateId;
       return { publishedPages: [`summaries/${sourceId}.md`] };
@@ -148,11 +176,10 @@ test("confirmed compile auto-publishes a gate-passed candidate", async () => {
   const service = new LlmWikiIngestService(
     store as unknown as LlmWikiStoreService,
     {
-      estimateCompilePlan: () => plan(sourceId, "hash-c"),
-      sectionSource: () => ({ sourceId, filename: "c.md", sha256: "sha", title: "C", sections: [] }),
-      compileSource: async () => {
-        compileCalls += 1;
-        return candidate;
+      estimateAnalyzePlan: () => plan(sourceId, "hash-c", "analyze"),
+      analyzeSource: async () => {
+        analyzed += 1;
+        return analysisFor(sourceId, "# C");
       },
     } as unknown as LlmWikiCompilerService,
     { invalidate: () => undefined } as unknown as LlmWikiSearchService,
@@ -160,15 +187,15 @@ test("confirmed compile auto-publishes a gate-passed candidate", async () => {
     { resolveModel: () => "provider:model" } as unknown as ModelService,
   );
 
-  const estimate = service.estimateCompile([sourceId]);
+  const estimate = service.estimateCompile([sourceId], "provider:model");
   const result = service.compileSources([sourceId], "provider:model", estimate.plan.hash);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal("jobs" in result ? result.jobs.length : 0, 1);
-  assert.equal(compileCalls, 1);
-  assert.equal(savedCandidateId, candidate.candidateId);
-  assert.equal(publishedCandidateId, candidate.candidateId);
-  assert.equal(reports.get("1".repeat(32))?.stage, "published");
+  assert.equal(analyzed, 1);
+  assert.equal(savedAnalysis, 1);
+  assert.equal(publishedCandidateId, "");
+  assert.equal(reports.get("1".repeat(32))?.stage, "analysis_ready");
 });
 
 test("rebuildAll is manifest-only and does not enqueue LLM compiles", () => {
@@ -246,14 +273,22 @@ test("listIssues returns structural lint issues", () => {
   assert.deepEqual(service.listIssues("open").items, [issue]);
 });
 
-function plan(sourceId: string, hash: string): LlmWikiCompilePlan {
+function plan(sourceId: string, hash: string, phase: "analyze" | "compose" = "analyze"): LlmWikiCompilePlan {
   return {
+    phase,
     planId: hash,
+    planHash: hash,
     sourceIds: [sourceId],
     hash,
     schemaHash: "schema",
     compilerVersion: "source-integration-v1",
     promptVersion: "integration-patch-v1",
+    sourceHash: "source",
+    model: "provider:model",
+    estimatedCalls: 1,
+    estimatedTokens: 150,
+    maxTokens: 300,
+    callPlan: [{ stage: "analyze", expectedCalls: 1, maxCalls: 1 }],
     estimatedInputTokens: 100,
     estimatedOutputTokens: 50,
     estimatedCostUsd: 0.001,
@@ -266,11 +301,31 @@ function plan(sourceId: string, hash: string): LlmWikiCompilePlan {
   };
 }
 
+function analysisFor(sourceId: string, source: string) {
+  return {
+    sourceId,
+    sourceHash: createHash("sha256").update(source).digest("hex"),
+    schemaHash: "schema",
+    model: "provider:model",
+    compilerVersion: llmWikiConfig.compilerVersion,
+    promptVersion: llmWikiConfig.promptVersion,
+    modelHash: createHash("sha256").update("provider:model").digest("hex"),
+    promptHash: compilerPromptHash(),
+    analysisHash: "analysis-hash",
+    planHash: "analysis-plan",
+    sourceMap: { sourceId, filename: "source.md", sha256: "sha", title: "Source", sections: [] },
+    factLedger: { sourceId, schemaHash: "schema", model: "provider:model", generatedAt: "", facts: [] },
+    pagePlan: [],
+    usage: { modelCalls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, retries: 0, calls: [] },
+    createdAt: "2026-07-13T00:00:00.000Z",
+  };
+}
+
 function candidateFor(sourceId: string, hash: string): LlmWikiCompileCandidate {
   return {
     candidateId: "c".repeat(32),
     sourceId,
-    plan: plan(sourceId, hash),
+    plan: plan(sourceId, hash, "compose"),
     status: "candidate_ready",
     model: "provider:model",
     schemaHash: "schema",
@@ -292,7 +347,7 @@ function candidateFor(sourceId: string, hash: string): LlmWikiCompileCandidate {
     claims: [],
     affectedPages: [`summaries/${sourceId}.md`],
     issues: [],
-    modelUsage: { modelCalls: 1, inputTokens: 100, outputTokens: 50, estimatedCostUsd: 0.001 },
+    modelUsage: { modelCalls: 1, inputTokens: 100, outputTokens: 50, estimatedCostUsd: 0.001, retries: 0, calls: [] },
     createdAt: "2026-07-08T00:00:00.000Z",
     updatedAt: "2026-07-08T00:00:00.000Z",
   };

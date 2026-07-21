@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  BUILTIN_COMPILE_EVALUATION_DATASET_ID,
+  COMPILE_EVALUATION_SMOKE_CASE_IDS,
   compileEvaluationApi,
   type CompileEvaluationDataset,
   type CompileEvaluationDatasetSummary,
@@ -22,6 +24,7 @@ export function LlmWikiEvaluation() {
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [judgeModel, setJudgeModel] = useState("");
+  const [concurrency, setConcurrency] = useState(20);
   const [runs, setRuns] = useState<CompileEvaluationRunSummary[]>([]);
   const [activeRun, setActiveRun] = useState<CompileEvaluationRun | null>(null);
   const [loading, setLoading] = useState(true);
@@ -53,7 +56,9 @@ export function LlmWikiEvaluation() {
     setDatasetId((current) =>
       items.some((item) => item.datasetId === current)
         ? current
-        : items[0]?.datasetId || "",
+        : items.find((item) => item.datasetId === BUILTIN_COMPILE_EVALUATION_DATASET_ID)?.datasetId ||
+          items[0]?.datasetId ||
+          "",
     );
   }, []);
 
@@ -149,6 +154,7 @@ export function LlmWikiEvaluation() {
         datasetId: dataset.datasetId,
         caseIds: selectedCaseIds,
         judgeModel,
+        concurrency,
       });
       setActiveRun(run);
       startPolling(run.runId);
@@ -177,6 +183,19 @@ export function LlmWikiEvaluation() {
       toast.success("历史评测已删除");
     } finally {
       setDeletingRunId("");
+    }
+  };
+
+  const handleRetryFailed = async () => {
+    if (!activeRun || activeRun.status === "running") return;
+    setSubmitting(true);
+    try {
+      const run = await compileEvaluationApi.retryFailed(activeRun.runId, { judgeModel });
+      setActiveRun(run);
+      startPolling(run.runId);
+      void refreshRuns(true);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -219,6 +238,7 @@ export function LlmWikiEvaluation() {
           selectedCaseIds={selectedCaseIds}
           models={models}
           judgeModel={judgeModel}
+          concurrency={concurrency}
           loading={loading}
           uploading={uploading}
           submitting={submitting}
@@ -231,14 +251,26 @@ export function LlmWikiEvaluation() {
           onDatasetChange={setDatasetId}
           onDeleteDataset={(id) => void handleDeleteDataset(id)}
           onJudgeModelChange={setJudgeModel}
+          onConcurrencyChange={setConcurrency}
           onToggleAll={toggleAll}
+          onSelectSmokeCases={() => setSelectedCaseIds(
+            dataset?.cases
+              .map((item) => item.id)
+              .filter((caseId) => COMPILE_EVALUATION_SMOKE_CASE_IDS.includes(
+                caseId as (typeof COMPILE_EVALUATION_SMOKE_CASE_IDS)[number],
+              )) || [],
+          )}
           onToggleCase={toggleCase}
           onStart={handleStart}
         />
 
         <main className="grid min-h-0 gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px]">
           <section className="min-h-0 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <EvaluationResult run={activeRun} />
+            <EvaluationResult
+              run={activeRun}
+              retrying={submitting}
+              onRetryFailed={() => void handleRetryFailed()}
+            />
           </section>
           <EvaluationRunHistory
             runs={runs}

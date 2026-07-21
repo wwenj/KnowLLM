@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -42,6 +42,96 @@ test("deleting a source marks affected pages stale without deleting published wi
     assert.equal(store.pageExists(`summaries/${source.source_id}.md`), true);
     assert.equal(result.touched_pages.includes(`summaries/${source.source_id}.md`), true);
     assert.equal(store.listStaleMarkers(source.source_id).some((marker) => marker.reason === "source_deleted"), true);
+  });
+});
+
+test("publish rollback leaves formal wiki and metadata unchanged after a staging write failure", () => {
+  withTempWiki((store) => {
+    const source = store.createSource("source.md", Buffer.from("# Source\n\nM112 triggers emergency stop\n"));
+    const candidate = candidateFor(source.source_id);
+    const pagePath = `summaries/${source.source_id}.md`;
+    store.saveCompileCandidate(candidate);
+    const mutableStore = store as unknown as { updateContribution: () => never };
+    mutableStore.updateContribution = () => {
+      throw new Error("injected contribution failure");
+    };
+
+    assert.throws(() => store.publishCandidate(candidate.candidateId), /injected contribution failure/);
+
+    assert.equal(store.pageExists(pagePath), false);
+    assert.equal(store.readPageClaims(pagePath), null);
+    assert.equal(store.getSource(source.source_id).status, "raw_uploaded");
+    assert.equal(store.readCompileCandidate(candidate.candidateId).status, "candidate_ready");
+  });
+});
+
+test("analysis cache persists page plan and usage as independently inspectable artifacts", () => {
+  withTempWiki((store) => {
+    const source = store.createSource("source.md", Buffer.from("# Source\n\nFact one.\n"));
+    store.saveAnalysisArtifact({
+      sourceId: source.source_id,
+      sourceHash: source.sha256,
+      schemaHash: "schema",
+      model: "provider:model",
+      compilerVersion: "fact-page-v2",
+      promptVersion: "fact-page-v2.0",
+      analysisHash: "analysis-hash",
+      planHash: "plan-hash",
+      sourceMap: { sourceId: source.source_id, filename: source.filename, sha256: source.sha256, title: "Source", sections: [] },
+      factLedger: { sourceId: source.source_id, schemaHash: "schema", model: "provider:model", generatedAt: "", facts: [] },
+      pagePlan: [],
+      usage: { modelCalls: 2, inputTokens: 10, outputTokens: 5, estimatedCostUsd: 0, retries: 0, calls: [] },
+      createdAt: "2026-07-13T00:00:00.000Z",
+    });
+
+    const planFile = path.join(store.root(), "meta", "page-plans", `${source.source_id}.json`);
+    const usageFile = path.join(store.root(), "meta", "analysis-usage", `${source.source_id}.json`);
+    assert.equal(existsSync(planFile), true);
+    assert.equal(existsSync(usageFile), true);
+    assert.equal(JSON.parse(readFileSync(usageFile, "utf8")).usage.modelCalls, 2);
+  });
+});
+
+test("republishing atomically removes obsolete compiler-owned source pages", () => {
+  withTempWiki((store) => {
+    const source = store.createSource("source.md", Buffer.from("# Source\n\nFact one.\n"));
+    const first = candidateFor(source.source_id);
+    store.saveCompileCandidate(first);
+    store.publishCandidate(first.candidateId);
+    const oldPath = first.pages[0].path;
+    const nextPath = `concepts/${source.source_id.slice(0, 8)}-replacement.md`;
+    const second: LlmWikiCompileCandidate = {
+      ...candidateFor(source.source_id),
+      candidateId: "f".repeat(32),
+      pages: [{ ...candidateFor(source.source_id).pages[0], path: nextPath, type: "concept" }],
+      claims: [],
+      pageClaims: [{ path: nextPath, factIds: [], sourceIds: [source.source_id] }],
+      affectedPages: [oldPath, nextPath],
+    };
+    store.saveCompileCandidate(second);
+
+    store.publishCandidate(second.candidateId);
+
+    assert.equal(store.pageExists(oldPath), false);
+    assert.equal(store.pageExists(nextPath), true);
+    assert.deepEqual(store.getSource(source.source_id).touched_pages, [nextPath]);
+  });
+});
+
+test("publishing blocks obsolete manual pages instead of silently deleting them", () => {
+  withTempWiki((store) => {
+    const source = store.createSource("source.md", Buffer.from("# Source\n\nFact one.\n"));
+    const manualPath = "concepts/manual-page.md";
+    store.savePage(
+      manualPath,
+      `---\ntitle: Manual\ntype: concept\ntags: []\nsources:\n  - ${source.source_id}\nschema_hash: schema\n---\n# Manual\n\nHuman content.\n`,
+    );
+    const candidate = candidateFor(source.source_id);
+    store.saveCompileCandidate(candidate);
+
+    assert.throws(() => store.publishCandidate(candidate.candidateId), /不能安全替换/);
+    assert.equal(store.pageExists(manualPath), true);
+    assert.equal(store.pageExists(candidate.pages[0].path), false);
   });
 });
 
@@ -93,7 +183,7 @@ function candidateFor(sourceId: string): LlmWikiCompileCandidate {
     ],
     affectedPages: [`summaries/${sourceId}.md`],
     issues: [],
-    modelUsage: { modelCalls: 1, inputTokens: 100, outputTokens: 50, estimatedCostUsd: 0.001 },
+    modelUsage: { modelCalls: 1, inputTokens: 100, outputTokens: 50, estimatedCostUsd: 0.001, retries: 0, calls: [] },
     createdAt: "2026-07-08T00:00:00.000Z",
     updatedAt: "2026-07-08T00:00:00.000Z",
   };
@@ -101,12 +191,20 @@ function candidateFor(sourceId: string): LlmWikiCompileCandidate {
 
 function planFor(sourceId: string): LlmWikiCompilePlan {
   return {
+    phase: "analyze",
     planId: "plan",
+    planHash: "plan-hash",
     sourceIds: [sourceId],
     hash: "plan-hash",
     schemaHash: "schema",
     compilerVersion: "source-integration-v1",
     promptVersion: "integration-patch-v1",
+    sourceHash: "source-hash",
+    model: "provider:model",
+    estimatedCalls: 1,
+    estimatedTokens: 150,
+    maxTokens: 300,
+    callPlan: [{ stage: "analyze", expectedCalls: 1, maxCalls: 1 }],
     estimatedInputTokens: 100,
     estimatedOutputTokens: 50,
     estimatedCostUsd: 0.001,

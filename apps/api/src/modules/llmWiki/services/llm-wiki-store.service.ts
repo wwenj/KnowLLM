@@ -8,6 +8,8 @@ import matter = require("gray-matter");
 import { llmWikiConfig } from "../llm-wiki.config";
 import { assertWikiMarkdownPath, isWikiMarkdownPath } from "../llm-wiki-page.utils";
 import {
+  LlmWikiAnalysisArtifact,
+  LlmWikiChunkAnalysisCacheEntry,
   LlmWikiClaim,
   LlmWikiCompileCandidate,
   LlmWikiFact,
@@ -32,6 +34,7 @@ import { pageClaimsHash } from "./llm-wiki-fact.utils";
 const VALID_STATUSES = new Set<LlmWikiSourceStatus>([
   "raw_uploaded",
   "compile_planned",
+  "analysis_ready",
   "candidate_ready",
   "published",
   "uploaded",
@@ -126,6 +129,7 @@ export class LlmWikiStoreService implements OnModuleInit {
       total: items.length,
       raw_uploaded: 0,
       compile_planned: 0,
+      analysis_ready: 0,
       candidate_ready: 0,
       published: 0,
       uploaded: 0,
@@ -183,6 +187,20 @@ export class LlmWikiStoreService implements OnModuleInit {
   markIngestFailed(sourceId: string, error: string): LlmWikiSourceMeta {
     return this.updateSource(sourceId, {
       status: "failed",
+      error: (error || "解析失败").slice(0, 1000),
+    });
+  }
+
+  restoreIngestAfterFailure(
+    sourceId: string,
+    previousStatus: LlmWikiSourceStatus,
+    error: string,
+  ): LlmWikiSourceMeta {
+    const preserved = new Set<LlmWikiSourceStatus>(["published", "candidate_ready", "analysis_ready"]);
+    if (!preserved.has(previousStatus)) return this.markIngestFailed(sourceId, error);
+    this.appendLog(`编译 source ${sourceId} 失败，保留原状态 ${previousStatus}`);
+    return this.updateSource(sourceId, {
+      status: previousStatus,
       error: (error || "解析失败").slice(0, 1000),
     });
   }
@@ -259,6 +277,7 @@ export class LlmWikiStoreService implements OnModuleInit {
     const touched = uniqueStrings(staleMarkers.map((marker) => marker.pagePath));
     this.deleteSourceMap(meta.source_id);
     this.deleteFactLedger(meta.source_id);
+    this.deleteAnalysisArtifact(meta.source_id);
     fs.rmSync(this.sourceDir(meta.source_id), { recursive: true, force: true });
     this.appendLog(`删除 source ${meta.source_id}：${meta.filename}`);
     return { touched_pages: touched, needs_reconcile: [], stale_markers: staleMarkers };
@@ -381,71 +400,129 @@ export class LlmWikiStoreService implements OnModuleInit {
     if (candidate.issues.some((issue) => issue.kind === "blocked_publish")) {
       throw new Error("candidate 存在 blocked_publish issue，不能发布");
     }
-    const source = this.getSource(candidate.sourceId);
-    const claimsByPath = groupClaimsByPath(candidate.claims);
-    const touched: string[] = [];
-    const sourceContributions: Record<string, string> = {};
+    const pagePaths = candidate.pages.map((page) => page.path);
+    if (new Set(pagePaths).size !== pagePaths.length) {
+      throw new Error("candidate 包含重复页面路径，不能发布");
+    }
     for (const page of candidate.pages) {
+      validateWikiPath(page.path);
+      if (page.path === "index.md") throw new Error("candidate 不能直接覆盖 index.md");
       if (page.action === "delete") {
         throw new Error(`candidate 包含删除页面动作，v1 不允许自动删除：${page.path}`);
       }
-      const pageClaims = claimsByPath.get(page.path) || [];
-      const pageSources = uniqueStrings([
-        ...page.sourceIds,
-        ...pageClaims.map((claim) => claim.sourceId),
-        candidate.sourceId,
-      ]);
-      this.writePageFromBody(page.path, ensureHeading(page.body, page.title), {
-        title: page.title,
-        type: page.type,
-        tags: page.tags,
-        sources: pageSources,
-        schema_hash: candidate.schemaHash,
-      });
-      this.savePageClaims({
-        path: page.path,
-        factIds: [],
-        sourceIds: pageSources,
-        claims: pageClaims,
-        updatedAt: nowIso(),
-      });
-      const summary = `source-integration compile ${pageClaims.length} claims`;
-      this.updateContribution(page.path, source, candidate.schemaHash, summary);
-      sourceContributions[page.path] = summary;
-      touched.push(page.path);
     }
-    const publishedPages = uniqueStrings(touched);
-    const resolvedStale = this.resolveStaleMarkersForPages(publishedPages);
-    const now = nowIso();
-    const receipt: LlmWikiPublishReceipt = {
-      receiptId: createHash("sha256").update(`${candidate.candidateId}\n${now}`).digest("hex").slice(0, 32),
-      candidateId: candidate.candidateId,
-      sourceId: candidate.sourceId,
-      publishedPages,
-      stalePages: uniqueStrings(resolvedStale.map((marker) => marker.pagePath)),
-      sourceContributions,
-      costLedger: candidate.modelUsage,
-      publishedAt: now,
-    };
-    atomicWriteJson(this.publishReceiptPath(receipt.receiptId), receipt);
-    this.saveCompileCandidate({
-      ...candidate,
-      status: "published",
-      publishedAt: now,
-      updatedAt: now,
+    const source = this.getSource(candidate.sourceId);
+    const obsoletePages = this.listPageRefs().filter(
+      (page) => page.path !== "index.md" && page.sources.includes(candidate.sourceId) && !pagePaths.includes(page.path),
+    );
+    const unsafeObsoletePages = obsoletePages.filter((page) => {
+      if (page.sources.some((sourceId) => sourceId !== candidate.sourceId)) return true;
+      const contribution = this.readContribution(page.path);
+      const contributedSourceIds = contribution ? Object.keys(contribution.sources) : [];
+      const compilerOwned =
+        (contributedSourceIds.length === 1 && contributedSourceIds[0] === candidate.sourceId) ||
+        page.path.includes(candidate.sourceId) ||
+        page.path.includes(candidate.sourceId.slice(0, 8));
+      return !compilerOwned;
     });
-    this.updateSource(candidate.sourceId, {
-      status: "published",
-      schema_hash: candidate.schemaHash,
-      ingested_at: now,
-      error: "",
-      touched_pages: publishedPages,
-      latest_candidate_id: candidate.candidateId,
-      latest_compile_hash: candidate.plan.hash,
-    });
-    this.rebuildIndex();
-    this.appendLog(`发布编译结果 ${candidate.candidateId}，写入 ${publishedPages.length} 个页面`);
-    return receipt;
+    if (unsafeObsoletePages.length) {
+      throw new Error(
+        `存在不能安全替换的旧共享/人工页面，请先人工处理: ${unsafeObsoletePages.map((page) => page.path).join(", ")}`,
+      );
+    }
+    const obsoletePaths = obsoletePages.map((page) => page.path);
+    const affectedPaths = uniqueStrings([...pagePaths, ...obsoletePaths]);
+    const claimsByPath = groupClaimsByPath(candidate.claims);
+    const trackedFiles = uniqueStrings([
+      ...affectedPaths.flatMap((pagePath) => [
+        this.resolveWikiPath(pagePath),
+        this.pageClaimsPath(pagePath),
+        this.contributionPath(pagePath),
+      ]),
+      this.resolveWikiPath("index.md"),
+      this.compileCandidatePath(candidate.candidateId),
+      this.metaPath(candidate.sourceId),
+      ...this.listStaleMarkers()
+        .filter((marker) => affectedPaths.includes(marker.pagePath))
+        .map((marker) => this.staleMarkerPath(marker.markerId)),
+    ]);
+    const snapshots = trackedFiles.map(snapshotFile);
+    let receiptPath = "";
+    try {
+      const touched: string[] = [];
+      const sourceContributions: Record<string, string> = {};
+      for (const page of candidate.pages) {
+        const pageClaims = claimsByPath.get(page.path) || [];
+        const pageSources = uniqueStrings([
+          ...page.sourceIds,
+          ...pageClaims.map((claim) => claim.sourceId),
+          candidate.sourceId,
+        ]);
+        this.writePageFromBody(page.path, ensureHeading(page.body, page.title), {
+          title: page.title,
+          type: page.type,
+          tags: page.tags,
+          sources: pageSources,
+          schema_hash: candidate.schemaHash,
+        });
+        const verifiedClaims = candidate.pageClaims?.find((item) => item.path === page.path);
+        this.savePageClaims({
+          path: page.path,
+          factIds: verifiedClaims?.factIds || [],
+          sourceIds: pageSources,
+          claims: pageClaims,
+          updatedAt: nowIso(),
+        });
+        const summary = `${candidate.compilerVersion} compile ${verifiedClaims?.factIds.length || 0} facts`;
+        this.updateContribution(page.path, source, candidate.schemaHash, summary);
+        sourceContributions[page.path] = summary;
+        touched.push(page.path);
+      }
+      for (const obsoletePath of obsoletePaths) {
+        this.deletePageFile(obsoletePath);
+        fs.rmSync(this.pageClaimsPath(obsoletePath), { force: true });
+        this.deleteContribution(obsoletePath);
+      }
+      const publishedPages = uniqueStrings(touched);
+      const resolvedStale = this.resolveStaleMarkersForPages(affectedPaths);
+      const now = nowIso();
+      const receipt: LlmWikiPublishReceipt = {
+        receiptId: createHash("sha256").update(`${candidate.candidateId}\n${now}`).digest("hex").slice(0, 32),
+        candidateId: candidate.candidateId,
+        sourceId: candidate.sourceId,
+        publishedPages,
+        stalePages: uniqueStrings(resolvedStale.map((marker) => marker.pagePath)),
+        sourceContributions,
+        costLedger: candidate.modelUsage,
+        publishedAt: now,
+      };
+      receiptPath = this.publishReceiptPath(receipt.receiptId);
+      atomicWriteJson(receiptPath, receipt);
+      this.saveCompileCandidate({
+        ...candidate,
+        status: "published",
+        publishedAt: now,
+        updatedAt: now,
+      });
+      this.updateSource(candidate.sourceId, {
+        status: "published",
+        schema_hash: candidate.schemaHash,
+        ingested_at: now,
+        error: "",
+        touched_pages: publishedPages,
+        latest_candidate_id: candidate.candidateId,
+        latest_compile_hash: candidate.plan.hash,
+      });
+      this.rebuildIndex();
+      this.appendLog(
+        `发布编译结果 ${candidate.candidateId}，写入 ${publishedPages.length} 个页面，移除 ${obsoletePaths.length} 个旧页面`,
+      );
+      return receipt;
+    } catch (error) {
+      for (const snapshot of snapshots.reverse()) restoreFile(snapshot);
+      if (receiptPath) fs.rmSync(receiptPath, { force: true });
+      throw error;
+    }
   }
 
   listPublishReceipts(limit = 50): LlmWikiPublishReceipt[] {
@@ -655,6 +732,43 @@ export class LlmWikiStoreService implements OnModuleInit {
     fs.rmSync(this.factLedgerPath(sourceId), { force: true });
   }
 
+  saveAnalysisArtifact(artifact: LlmWikiAnalysisArtifact): void {
+    atomicWriteJson(this.analysisArtifactPath(artifact.sourceId), artifact);
+    const cacheKey = {
+      sourceId: artifact.sourceId,
+      sourceHash: artifact.sourceHash,
+      schemaHash: artifact.schemaHash,
+      model: artifact.model,
+      modelHash: artifact.modelHash || "",
+      promptHash: artifact.promptHash || "",
+      compilerVersion: artifact.compilerVersion,
+      promptVersion: artifact.promptVersion,
+      analysisHash: artifact.analysisHash,
+    };
+    atomicWriteJson(this.pagePlanPath(artifact.sourceId), { ...cacheKey, pagePlan: artifact.pagePlan });
+    atomicWriteJson(this.analysisUsagePath(artifact.sourceId), { ...cacheKey, usage: artifact.usage });
+  }
+
+  readAnalysisArtifact(sourceId: string): LlmWikiAnalysisArtifact | null {
+    return readJson<LlmWikiAnalysisArtifact>(this.analysisArtifactPath(sourceId));
+  }
+
+  deleteAnalysisArtifact(sourceId: string): void {
+    fs.rmSync(this.analysisArtifactPath(sourceId), { force: true });
+    fs.rmSync(this.pagePlanPath(sourceId), { force: true });
+    fs.rmSync(this.analysisUsagePath(sourceId), { force: true });
+  }
+
+  readChunkAnalysisCache(cacheKey: string): LlmWikiChunkAnalysisCacheEntry | null {
+    const key = safeCacheKey(cacheKey);
+    return readJson<LlmWikiChunkAnalysisCacheEntry>(this.chunkAnalysisCachePath(key));
+  }
+
+  saveChunkAnalysisCache(entry: LlmWikiChunkAnalysisCacheEntry): void {
+    const key = safeCacheKey(entry.cacheKey);
+    atomicWriteJson(this.chunkAnalysisCachePath(key), { ...entry, cacheKey: key });
+  }
+
   listFacts(sourceIds?: string[]): LlmWikiFact[] {
     const filter = sourceIds?.length ? new Set(sourceIds.map(safeSourceId)) : null;
     const root = this.factsRoot();
@@ -796,10 +910,37 @@ export class LlmWikiStoreService implements OnModuleInit {
     fs.rmSync(this.pageClaimsRoot(), { recursive: true, force: true });
     fs.rmSync(this.contributionRoot(), { recursive: true, force: true });
     fs.rmSync(this.staleMarkersRoot(), { recursive: true, force: true });
+    fs.rmSync(this.analysesRoot(), { recursive: true, force: true });
+    fs.rmSync(this.pagePlansRoot(), { recursive: true, force: true });
+    fs.rmSync(this.analysisUsageRoot(), { recursive: true, force: true });
+    fs.rmSync(this.compileCandidatesRoot(), { recursive: true, force: true });
+    fs.rmSync(this.publishReceiptsRoot(), { recursive: true, force: true });
+    fs.rmSync(this.chunkAnalysisCacheRoot(), { recursive: true, force: true });
+    fs.rmSync(this.ingestJobsRoot(), { recursive: true, force: true });
     this.ensureSpace();
     for (const source of this.listSources()) {
-      this.updateSource(source.source_id, { status: "raw_uploaded", touched_pages: [], error: "", ingested_at: "" });
+      this.updateSource(source.source_id, {
+        status: "raw_uploaded",
+        touched_pages: [],
+        error: "",
+        ingested_at: "",
+        schema_hash: "",
+        latest_candidate_id: "",
+        latest_compile_hash: "",
+      });
     }
+  }
+
+  backupAndClearCompiledWikiArtifacts(): string {
+    const backupRoot = path.join(llmWikiConfig.root, "backups", `fact-page-v2-${nowIso().replace(/[:.]/g, "-")}`);
+    fs.mkdirSync(backupRoot, { recursive: true });
+    for (const relative of ["wiki", "ingest-jobs", "meta"]) {
+      const source = path.join(llmWikiConfig.root, relative);
+      if (fs.existsSync(source)) fs.cpSync(source, path.join(backupRoot, relative), { recursive: true });
+    }
+    this.clearCompiledWikiArtifacts();
+    this.appendLog(`已备份并清理旧编译产物：${backupRoot}`);
+    return backupRoot;
   }
 
   updateContribution(
@@ -849,6 +990,7 @@ export class LlmWikiStoreService implements OnModuleInit {
       }
     }
     if (this.listPageRefs().some((page) => page.sources.includes(source.source_id))) return "published";
+    if (this.readAnalysisArtifact(source.source_id)) return "analysis_ready";
     return "raw_uploaded";
   }
 
@@ -874,11 +1016,15 @@ export class LlmWikiStoreService implements OnModuleInit {
     fs.mkdirSync(this.contributionRoot(), { recursive: true });
     fs.mkdirSync(this.sourceMapsRoot(), { recursive: true });
     fs.mkdirSync(this.factsRoot(), { recursive: true });
+    fs.mkdirSync(this.analysesRoot(), { recursive: true });
+    fs.mkdirSync(this.pagePlansRoot(), { recursive: true });
+    fs.mkdirSync(this.analysisUsageRoot(), { recursive: true });
     fs.mkdirSync(this.pageClaimsRoot(), { recursive: true });
     fs.mkdirSync(this.ingestJobsRoot(), { recursive: true });
     fs.mkdirSync(this.compileCandidatesRoot(), { recursive: true });
     fs.mkdirSync(this.publishReceiptsRoot(), { recursive: true });
     fs.mkdirSync(this.staleMarkersRoot(), { recursive: true });
+    fs.mkdirSync(this.chunkAnalysisCacheRoot(), { recursive: true });
     if (!fs.existsSync(this.resolveWikiPath("index.md"))) {
       this.rebuildIndex();
     }
@@ -1083,6 +1229,18 @@ export class LlmWikiStoreService implements OnModuleInit {
     return path.join(this.metaRoot(), "facts");
   }
 
+  private analysesRoot(): string {
+    return path.join(this.metaRoot(), "analyses");
+  }
+
+  private pagePlansRoot(): string {
+    return path.join(this.metaRoot(), "page-plans");
+  }
+
+  private analysisUsageRoot(): string {
+    return path.join(this.metaRoot(), "analysis-usage");
+  }
+
   private pageClaimsRoot(): string {
     return path.join(this.metaRoot(), "page-claims");
   }
@@ -1103,6 +1261,10 @@ export class LlmWikiStoreService implements OnModuleInit {
     return path.join(this.metaRoot(), "stale-markers");
   }
 
+  private chunkAnalysisCacheRoot(): string {
+    return path.join(this.metaRoot(), "chunk-analysis-v3");
+  }
+
   private contributionPath(relPath: string): string {
     validateWikiPath(relPath);
     const hash = createHash("sha256").update(relPath).digest("hex").slice(0, 32);
@@ -1115,6 +1277,18 @@ export class LlmWikiStoreService implements OnModuleInit {
 
   private factLedgerPath(sourceId: string): string {
     return path.join(this.factsRoot(), `${safeSourceId(sourceId)}.json`);
+  }
+
+  private analysisArtifactPath(sourceId: string): string {
+    return path.join(this.analysesRoot(), `${safeSourceId(sourceId)}.json`);
+  }
+
+  private pagePlanPath(sourceId: string): string {
+    return path.join(this.pagePlansRoot(), `${safeSourceId(sourceId)}.json`);
+  }
+
+  private analysisUsagePath(sourceId: string): string {
+    return path.join(this.analysisUsageRoot(), `${safeSourceId(sourceId)}.json`);
   }
 
   private pageClaimsPath(relPath: string): string {
@@ -1137,6 +1311,10 @@ export class LlmWikiStoreService implements OnModuleInit {
 
   private staleMarkerPath(markerId: string): string {
     return path.join(this.staleMarkersRoot(), `${safeMarkerId(markerId)}.json`);
+  }
+
+  private chunkAnalysisCachePath(cacheKey: string): string {
+    return path.join(this.chunkAnalysisCacheRoot(), `${safeCacheKey(cacheKey)}.json`);
   }
 
   private ensureWikiDirsOnly(): void {
@@ -1229,6 +1407,12 @@ function safeMarkerId(markerId: string): string {
   return raw;
 }
 
+function safeCacheKey(cacheKey: string): string {
+  const raw = (cacheKey || "").trim();
+  if (!/^[a-f0-9]{64}$/.test(raw)) throw new Error("chunk cache key 非法");
+  return raw;
+}
+
 function canonicalSourceStatus(status: LlmWikiSourceStatus): LlmWikiSourceStatus {
   if (status === "uploaded") return "raw_uploaded";
   if (status === "ingesting") return "compile_planned";
@@ -1263,7 +1447,22 @@ function sanitizeCompileCandidate(candidate: LlmWikiCompileCandidate): LlmWikiCo
         .map((page) => page.path)
         .filter(isWikiMarkdownPath),
     ),
+    modelUsage: sanitizeCompileUsage(rest.modelUsage),
+    pageClaims: Array.isArray(rest.pageClaims) ? rest.pageClaims : [],
     issues,
+  };
+}
+
+function sanitizeCompileUsage(
+  usage: Partial<LlmWikiCompileCandidate["modelUsage"]> | undefined,
+): LlmWikiCompileCandidate["modelUsage"] {
+  return {
+    modelCalls: Number(usage?.modelCalls || 0),
+    inputTokens: Number(usage?.inputTokens || 0),
+    outputTokens: Number(usage?.outputTokens || 0),
+    estimatedCostUsd: Number(usage?.estimatedCostUsd || 0),
+    retries: Number(usage?.retries || 0),
+    calls: Array.isArray(usage?.calls) ? usage.calls : [],
   };
 }
 
@@ -1392,6 +1591,31 @@ function atomicWriteText(file: string, text: string): void {
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, text, "utf-8");
   fs.renameSync(tmp, file);
+}
+
+interface FileSnapshot {
+  file: string;
+  existed: boolean;
+  content: Buffer;
+}
+
+function snapshotFile(file: string): FileSnapshot {
+  return {
+    file,
+    existed: fs.existsSync(file),
+    content: fs.existsSync(file) ? fs.readFileSync(file) : Buffer.alloc(0),
+  };
+}
+
+function restoreFile(snapshot: FileSnapshot): void {
+  if (!snapshot.existed) {
+    fs.rmSync(snapshot.file, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(snapshot.file), { recursive: true });
+  const tmp = `${snapshot.file}.rollback-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, snapshot.content);
+  fs.renameSync(tmp, snapshot.file);
 }
 
 function readJson<T>(file: string): T | null {

@@ -26,6 +26,7 @@ export interface RawChatOptions {
   messages: ChatMessage[];
   temperature?: number;
   response_format?: RawChatResponseFormat;
+  maxTokens?: number;
   signal?: AbortSignal;
 }
 
@@ -66,22 +67,26 @@ interface LocalModelProviderConfig {
   enabled?: unknown;
   priority?: unknown;
   unsupportedParameters?: unknown;
+  outputTokenParameter?: unknown;
 }
 
 interface LocalModelConfig {
   name?: unknown;
   unsupportedParameters?: unknown;
+  outputTokenParameter?: unknown;
 }
 
 interface NormalizedLocalModel {
   name: string;
   unsupportedParameters: string[];
+  outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
 }
 
 interface ResolvedModel extends ModelOption {
   baseUrl: string;
   apiKey: string;
   unsupportedParameters: string[];
+  outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
 }
 
 @Injectable()
@@ -136,6 +141,25 @@ export class ModelService {
     };
     if (!resolved.unsupportedParameters.includes("temperature")) {
       body.temperature = options.temperature ?? 0.2;
+    }
+    if (Number.isInteger(options.maxTokens) && Number(options.maxTokens) > 0) {
+      if (resolved.outputTokenParameter === "max_completion_tokens") {
+        if (resolved.unsupportedParameters.includes("max_completion_tokens")) {
+          throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
+        }
+        body.max_completion_tokens = Number(options.maxTokens);
+      } else if (resolved.outputTokenParameter === "max_tokens") {
+        if (resolved.unsupportedParameters.includes("max_tokens")) {
+          throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
+        }
+        body.max_tokens = Number(options.maxTokens);
+      } else if (!resolved.unsupportedParameters.includes("max_tokens")) {
+        body.max_tokens = Number(options.maxTokens);
+      } else if (!resolved.unsupportedParameters.includes("max_completion_tokens")) {
+        body.max_completion_tokens = Number(options.maxTokens);
+      } else {
+        throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
+      }
     }
     applyResponseFormat(body, resolved, options.response_format);
 
@@ -223,6 +247,7 @@ export class ModelService {
         priority: 100 + index,
         index,
         unsupportedParameters: [],
+        outputTokenParameter: "",
       }),
     );
   }
@@ -247,6 +272,7 @@ export class ModelService {
     const providerUnsupportedParameters = normalizeUnsupportedParameters(
       raw.unsupportedParameters,
     );
+    const providerOutputTokenParameter = normalizeOutputTokenParameter(raw.outputTokenParameter);
     return models.map((model, modelIndex) =>
       this.toResolvedModel({
         providerName,
@@ -260,6 +286,7 @@ export class ModelService {
           ...providerUnsupportedParameters,
           ...model.unsupportedParameters,
         ]),
+        outputTokenParameter: model.outputTokenParameter || providerOutputTokenParameter,
       }),
     );
   }
@@ -273,6 +300,7 @@ export class ModelService {
     priority: number;
     index: number;
     unsupportedParameters: string[];
+    outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
   }): ResolvedModel {
     const providerSlug = slug(args.providerName || args.provider);
     return {
@@ -292,6 +320,7 @@ export class ModelService {
       baseUrl: args.baseUrl,
       apiKey: args.apiKey,
       unsupportedParameters: args.unsupportedParameters,
+      outputTokenParameter: args.outputTokenParameter,
     };
   }
 
@@ -496,6 +525,7 @@ function publicModel({
   baseUrl: _baseUrl,
   apiKey: _apiKey,
   unsupportedParameters: _unsupportedParameters,
+  outputTokenParameter: _outputTokenParameter,
   ...model
 }: ResolvedModel): ModelOption {
   return model;
@@ -506,7 +536,7 @@ function normalizeLocalModels(value: unknown): NormalizedLocalModel[] {
   const models = value.flatMap((item): NormalizedLocalModel[] => {
     if (typeof item === "string") {
       const name = item.trim();
-      return name ? [{ name, unsupportedParameters: [] }] : [];
+      return name ? [{ name, unsupportedParameters: [], outputTokenParameter: "" }] : [];
     }
     const raw =
       item && typeof item === "object" ? (item as LocalModelConfig) : {};
@@ -518,10 +548,16 @@ function normalizeLocalModels(value: unknown): NormalizedLocalModel[] {
         unsupportedParameters: normalizeUnsupportedParameters(
           raw.unsupportedParameters,
         ),
+        outputTokenParameter: normalizeOutputTokenParameter(raw.outputTokenParameter),
       },
     ];
   });
   return [...new Map(models.map((model) => [model.name, model])).values()];
+}
+
+function normalizeOutputTokenParameter(value: unknown): "max_tokens" | "max_completion_tokens" | "" {
+  const parameter = stringField(value);
+  return parameter === "max_tokens" || parameter === "max_completion_tokens" ? parameter : "";
 }
 
 function normalizeUnsupportedParameters(value: unknown): string[] {

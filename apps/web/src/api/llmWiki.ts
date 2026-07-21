@@ -3,6 +3,7 @@ import { http } from "./http";
 export type LlmWikiSourceStatus =
   | "raw_uploaded"
   | "compile_planned"
+  | "analysis_ready"
   | "candidate_ready"
   | "published"
   | "failed"
@@ -61,6 +62,10 @@ export interface LlmWikiIngestJobReport {
   planHash?: string;
   estimatedCostUsd?: number;
   modelCalls?: number;
+  actualTokens?: number;
+  maxModelCalls?: number;
+  maxTokens?: number;
+  usage?: LlmWikiCompileUsage;
   events?: LlmWikiIngestJobEvent[];
 }
 
@@ -101,6 +106,7 @@ export interface LlmWikiStats {
   total: number;
   raw_uploaded: number;
   compile_planned: number;
+  analysis_ready: number;
   candidate_ready: number;
   published: number;
   uploaded: number;
@@ -168,6 +174,17 @@ export interface LlmWikiManifest {
 
 export interface LlmWikiSourceArtifacts {
   source: LlmWikiSource;
+  analysis: {
+    analysisHash: string;
+    planHash: string;
+    model: string;
+    compilerVersion: string;
+    promptVersion: string;
+    pageCount: number;
+    factCount: number;
+    usage: LlmWikiCompileUsage;
+    createdAt: string;
+  } | null;
   sourceMap: {
     title: string;
     sha256: string;
@@ -200,17 +217,58 @@ export interface LlmWikiSourceArtifacts {
   staleMarkers?: LlmWikiStaleMarker[];
 }
 
+export interface LlmWikiCompileUsage {
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  retries: number;
+  calls: Array<{
+    stage: string;
+    attempt: number;
+    inputTokens: number;
+    outputTokens: number;
+    status?: "running" | "success" | "failed";
+    error?: string;
+  }>;
+}
+
 export interface LlmWikiCompilePlan {
+  phase: "analyze" | "compose";
   planId: string;
+  planHash: string;
   sourceIds: string[];
   hash: string;
   schemaHash: string;
   compilerVersion: string;
   promptVersion: string;
+  sourceHash: string;
+  model: string;
+  modelHash?: string;
+  promptHash?: string;
+  wikiStateHash?: string;
+  analysisHash?: string;
+  estimatedCalls: number;
+  estimatedTokens: number;
+  maxTokens: number;
+  callPlan: Array<{
+    stage: string;
+    item?: string;
+    expectedCalls: number;
+    maxCalls: number;
+    expectedInputTokens?: number;
+    hardInputTokens?: number;
+    expectedOutputTokens?: number;
+    hardOutputTokens?: number;
+    expectedTokens?: number;
+    hardTokens?: number;
+    cacheHits?: number;
+  }>;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
   estimatedCostUsd: number;
   maxModelCalls: number;
+  hardTokens?: number;
   affectedPageCandidates: string[];
   requiresDigest: boolean;
   blocked: boolean;
@@ -234,6 +292,8 @@ export interface LlmWikiCompileCandidate {
   schemaHash: string;
   compilerVersion: string;
   promptVersion: string;
+  modelHash?: string;
+  promptHash?: string;
   sourceHash: string;
   sourceTitle: string;
   pages: Array<{
@@ -248,12 +308,8 @@ export interface LlmWikiCompileCandidate {
   claims: LlmWikiClaim[];
   affectedPages: string[];
   issues: LlmWikiPublishGateIssue[];
-  modelUsage: {
-    modelCalls: number;
-    inputTokens: number;
-    outputTokens: number;
-    estimatedCostUsd: number;
-  };
+  modelUsage: LlmWikiCompileUsage;
+  phaseUsage?: { analysis: LlmWikiCompileUsage; compose: LlmWikiCompileUsage };
   createdAt: string;
   updatedAt: string;
   publishedAt?: string;
@@ -296,6 +352,8 @@ export interface LlmWikiIssue {
   updated_at: string;
 }
 
+export type LlmWikiIssueStatus = "open" | "resolved" | "all";
+
 export const llmWikiApi = {
   overview: (silent = false) =>
     http.get<{
@@ -328,14 +386,20 @@ export const llmWikiApi = {
   schema: () => http.get<LlmWikiSchema>("/api/llm-wiki/manage/schema"),
   saveSchema: (content: string) =>
     http.post<LlmWikiSchema>("/api/llm-wiki/manage/schema/save", { content }),
-  estimateCompile: (sourceIds: string[]) =>
-    http.post<LlmWikiCompileEstimate>("/api/llm-wiki/manage/compile/estimate", { sourceIds }),
-  compileSources: (sourceIds: string[], model: string, confirmHash: string) =>
-    http.post<LlmWikiCompileSubmit>("/api/llm-wiki/manage/compile", { sourceIds, model, confirmHash }),
-  ingestSource: (sourceId: string, model: string, confirmHash = "") =>
+  estimateCompile: (sourceIds: string[], model: string, phase?: "analyze" | "compose", forceAnalyze = false) =>
+    http.post<LlmWikiCompileEstimate>("/api/llm-wiki/manage/compile/estimate", { sourceIds, model, phase, forceAnalyze }),
+  compileSources: (
+    sourceIds: string[],
+    model: string,
+    confirmHash: string,
+    phase?: "analyze" | "compose",
+    forceAnalyze = false,
+  ) =>
+    http.post<LlmWikiCompileSubmit>("/api/llm-wiki/manage/compile", { sourceIds, model, confirmHash, phase, forceAnalyze }),
+  ingestSource: (sourceId: string, model: string, confirmHash = "", phase?: "analyze" | "compose", forceAnalyze = false) =>
     http.post<LlmWikiCompileSubmit>(
       `/api/llm-wiki/manage/sources/${encodeURIComponent(sourceId)}/ingest`,
-      { model, confirmHash },
+      { model, confirmHash, phase, forceAnalyze },
     ),
   stopIngest: (sourceId: string) =>
     http.post<{ ok: boolean; sourceId: string; status: LlmWikiSourceStatus; stopped: boolean }>(
@@ -392,8 +456,10 @@ export const llmWikiApi = {
     ),
   lint: (mode: LlmWikiLintMode = "all") =>
     http.post<{ issues: LlmWikiIssue[]; total: number }>("/api/llm-wiki/manage/lint", { mode }),
-  issues: (status: "open" | "resolved" | "all" = "open") =>
+  issues: (status: LlmWikiIssueStatus = "open") =>
     http.get<{ items: LlmWikiIssue[] }>("/api/llm-wiki/manage/issues", { status }),
+  clearIssues: (status: LlmWikiIssueStatus) =>
+    http.post<{ cleared: number; status: LlmWikiIssueStatus }>("/api/llm-wiki/manage/issues/clear", { status }),
   resolveIssue: (issueId: string) =>
     http.post<LlmWikiIssue>(`/api/llm-wiki/manage/issues/${encodeURIComponent(issueId)}/resolve`),
 };

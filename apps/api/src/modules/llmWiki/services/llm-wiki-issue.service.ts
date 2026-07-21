@@ -33,6 +33,16 @@ export class LlmWikiIssueService implements OnModuleInit {
     return { items };
   }
 
+  clear(status: "open" | "resolved" | "all" = "open"): { cleared: number; status: "open" | "resolved" | "all" } {
+    this.ensureDirs();
+    const roots = [
+      ...(status === "resolved" ? [] : [this.openRoot()]),
+      ...(status === "open" ? [] : [this.resolvedRoot()]),
+    ];
+    const cleared = roots.reduce((total, root) => total + clearIssueDir(root), 0);
+    return { cleared, status };
+  }
+
   upsertMany(inputs: LlmWikiIssueInput[]): LlmWikiIssue[] {
     const issues = inputs.map((input) => this.normalizeInput(input));
     return issues.map((issue) => this.upsert(issue));
@@ -166,6 +176,17 @@ function readJson<T>(file: string): T | null {
   } catch {
     return null;
   }
+}
+
+function clearIssueDir(root: string): number {
+  if (!fs.existsSync(root)) return 0;
+  let cleared = 0;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    fs.rmSync(path.join(root, entry.name), { force: true });
+    cleared += 1;
+  }
+  return cleared;
 }
 
 function atomicWriteJson(file: string, payload: unknown): void {

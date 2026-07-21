@@ -8,6 +8,7 @@ import type {
   CompileEvaluationDatasetSummary,
   CompileEvaluationRun,
   CompileEvaluationRunSummary,
+  CompileEvaluationWikiSnapshot,
 } from "../evaluation.types";
 
 @Injectable()
@@ -17,10 +18,12 @@ export class CompileEvaluationStoreService implements OnModuleInit {
   onModuleInit(): void {
     ensureDir(this.datasetsRoot());
     ensureDir(this.runsRoot());
+    ensureDir(this.snapshotsRoot());
     this.markInterruptedRunsFailed();
   }
 
   saveDataset(dataset: CompileEvaluationDataset): CompileEvaluationDataset {
+    ensureDir(this.datasetsRoot());
     writeJson(this.datasetPath(dataset.datasetId), dataset);
     return dataset;
   }
@@ -53,13 +56,29 @@ export class CompileEvaluationStoreService implements OnModuleInit {
     dataset: CompileEvaluationDataset;
     caseIds: string[];
     judgeModel: string;
+    datasetHash?: string;
+    snapshot?: CompileEvaluationWikiSnapshot;
+    workerCount?: number;
+    retryOfRunId?: string;
   }): CompileEvaluationRun {
+    ensureDir(this.runsRoot());
+    const runId = randomId();
+    const snapshot = args.snapshot || emptySnapshot();
     const run: CompileEvaluationRun = {
-      runId: randomId(),
+      runId,
       datasetId: args.dataset.datasetId,
       datasetName: args.dataset.name,
       caseIds: args.caseIds,
       judgeModel: args.judgeModel,
+      judgeProvider: providerFromModel(args.judgeModel),
+      datasetHash: args.datasetHash || "",
+      wikiSnapshotHash: snapshot.snapshotHash,
+      compilerVersions: uniqueStrings(snapshot.sources.map((item) => item.compilerVersion)),
+      promptVersions: uniqueStrings(snapshot.sources.map((item) => item.promptVersion)),
+      compileModels: uniqueStrings(snapshot.sources.map((item) => item.compileModel)),
+      workerCount: Math.max(1, Number(args.workerCount) || 1),
+      retryOfRunId: args.retryOfRunId || "",
+      usage: emptyUsage(),
       status: "running",
       startedAt: nowIso(),
       endedAt: "",
@@ -68,11 +87,25 @@ export class CompileEvaluationStoreService implements OnModuleInit {
       summary: emptySummary(),
       errors: [],
     };
+    this.saveSnapshot(runId, snapshot);
     writeJson(this.runPath(run.runId), run);
     return run;
   }
 
+  saveSnapshot(runId: string, snapshot: CompileEvaluationWikiSnapshot): CompileEvaluationWikiSnapshot {
+    ensureDir(this.snapshotsRoot());
+    writeJson(this.snapshotPath(runId), snapshot);
+    return snapshot;
+  }
+
+  getSnapshot(runId: string): CompileEvaluationWikiSnapshot {
+    const snapshot = readJson<CompileEvaluationWikiSnapshot | null>(this.snapshotPath(runId), null);
+    if (!snapshot) throw new Error("评测 Wiki 快照不存在");
+    return snapshot;
+  }
+
   saveRun(run: CompileEvaluationRun): CompileEvaluationRun {
+    ensureDir(this.runsRoot());
     writeJson(this.runPath(run.runId), run);
     return run;
   }
@@ -80,13 +113,14 @@ export class CompileEvaluationStoreService implements OnModuleInit {
   getRun(runId: string): CompileEvaluationRun {
     const run = readJson<CompileEvaluationRun | null>(this.runPath(runId), null);
     if (!run) throw new Error("评测运行记录不存在");
-    return run;
+    return normalizeRun(run);
   }
 
   deleteRun(runId: string): { deleted: true } {
     const run = this.getRun(runId);
     if (run.status === "running") throw new Error("运行中的评测不能删除");
     fs.unlinkSync(this.runPath(runId));
+    fs.rmSync(this.snapshotPath(runId), { force: true });
     return { deleted: true };
   }
 
@@ -97,6 +131,7 @@ export class CompileEvaluationStoreService implements OnModuleInit {
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
       .map((entry) => readJson<CompileEvaluationRun | null>(path.join(this.runsRoot(), entry.name), null))
       .filter((item): item is CompileEvaluationRun => Boolean(item))
+      .map(normalizeRun)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 200))
       .map(toRunSummary);
@@ -123,12 +158,20 @@ export class CompileEvaluationStoreService implements OnModuleInit {
     return path.join(this.root, "runs");
   }
 
+  private snapshotsRoot(): string {
+    return path.join(this.root, "snapshots");
+  }
+
   private datasetPath(datasetId: string): string {
     return path.join(this.datasetsRoot(), `${safeId(datasetId)}.json`);
   }
 
   private runPath(runId: string): string {
     return path.join(this.runsRoot(), `${safeId(runId)}.json`);
+  }
+
+  private snapshotPath(runId: string): string {
+    return path.join(this.snapshotsRoot(), `${safeId(runId)}.json`);
   }
 }
 
@@ -174,12 +217,60 @@ function toRunSummary(run: CompileEvaluationRun): CompileEvaluationRunSummary {
     datasetId: run.datasetId,
     datasetName: run.datasetName,
     judgeModel: run.judgeModel,
+    judgeProvider: run.judgeProvider,
+    datasetHash: run.datasetHash,
+    wikiSnapshotHash: run.wikiSnapshotHash,
+    compilerVersions: run.compilerVersions,
+    promptVersions: run.promptVersions,
+    compileModels: run.compileModels,
+    workerCount: run.workerCount,
+    retryOfRunId: run.retryOfRunId,
+    usage: run.usage || emptyUsage(),
     status: run.status,
     startedAt: run.startedAt,
     endedAt: run.endedAt,
     progress: run.progress,
     summary: run.summary,
   };
+}
+
+function normalizeRun(run: CompileEvaluationRun): CompileEvaluationRun {
+  return {
+    ...run,
+    judgeProvider: run.judgeProvider || providerFromModel(run.judgeModel),
+    datasetHash: run.datasetHash || "",
+    wikiSnapshotHash: run.wikiSnapshotHash || "",
+    compilerVersions: uniqueStrings(run.compilerVersions || []),
+    promptVersions: uniqueStrings(run.promptVersions || []),
+    compileModels: uniqueStrings(run.compileModels || []),
+    workerCount: Math.max(1, Number(run.workerCount) || 1),
+    retryOfRunId: run.retryOfRunId || "",
+    usage: run.usage || emptyUsage(),
+  };
+}
+
+function emptySnapshot(): CompileEvaluationWikiSnapshot {
+  return {
+    snapshotHash: "",
+    createdAt: "",
+    sources: [],
+    pages: [],
+    pageClaims: [],
+    facts: [],
+  };
+}
+
+function providerFromModel(model: string): string {
+  const value = String(model || "");
+  return value.includes(":") ? value.slice(0, value.indexOf(":")) : "default";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function emptyUsage() {
+  return { modelCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 }
 
 function safeId(value: string): string {

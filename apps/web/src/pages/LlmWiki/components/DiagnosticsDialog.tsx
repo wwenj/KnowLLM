@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Loader2,
   RefreshCw,
+  Trash2,
   Wrench,
 } from "lucide-react";
 import type { LlmWikiIssue } from "@/api/llmWiki";
@@ -31,10 +32,12 @@ interface DiagnosticsDialogProps {
   issueStatus: "open" | "resolved" | "all";
   issueTotals: { open: number; resolved: number; all: number };
   issuesLoading: boolean;
+  issuesClearing: boolean;
   lintLoading: boolean;
   onRunLint: () => void;
   onRefresh: () => void;
   onIssueStatusChange: (status: "open" | "resolved" | "all") => void;
+  onClearIssues: () => void;
   onResolve: (issue: LlmWikiIssue) => void;
   onOpenTarget: (issue: LlmWikiIssue) => void;
   onCopyTarget: (issue: LlmWikiIssue) => void;
@@ -47,10 +50,12 @@ export function DiagnosticsDialog({
   issueStatus,
   issueTotals,
   issuesLoading,
+  issuesClearing,
   lintLoading,
   onRunLint,
   onRefresh,
   onIssueStatusChange,
+  onClearIssues,
   onResolve,
   onOpenTarget,
   onCopyTarget,
@@ -94,7 +99,7 @@ export function DiagnosticsDialog({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
-              disabled={issuesLoading || lintLoading}
+              disabled={issuesLoading || lintLoading || issuesClearing}
               onClick={onRefresh}
             >
               {issuesLoading ? (
@@ -104,7 +109,19 @@ export function DiagnosticsDialog({
               )}
               刷新
             </Button>
-            <Button disabled={lintLoading} onClick={onRunLint}>
+            <Button
+              variant="outline"
+              disabled={issuesLoading || lintLoading || issuesClearing || !issues.length}
+              onClick={onClearIssues}
+            >
+              {issuesClearing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              清空
+            </Button>
+            <Button disabled={lintLoading || issuesClearing} onClick={onRunLint}>
               {lintLoading ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (

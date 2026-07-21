@@ -1,9 +1,18 @@
 import { Injectable } from "@nestjs/common";
 import { createHash } from "crypto";
 import { ModelService } from "../../model/model.service";
-import type { LlmWikiCompilePlan, LlmWikiIngestJobReport } from "../contracts/llm-wiki.types";
+import type {
+  LlmWikiCompilePlan,
+  LlmWikiCompileUsage,
+  LlmWikiIngestJobReport,
+  LlmWikiSourceStatus,
+} from "../contracts/llm-wiki.types";
 import { llmWikiConfig } from "../llm-wiki.config";
-import { LLM_WIKI_INGEST_STOPPED, LlmWikiCompilerService } from "./llm-wiki-compiler.service";
+import {
+  compilerPromptHash,
+  LLM_WIKI_INGEST_STOPPED,
+  LlmWikiCompilerService,
+} from "./llm-wiki-compiler.service";
 import { LlmWikiSchemaService } from "./llm-wiki-schema.service";
 import { LlmWikiSearchService } from "./llm-wiki-search.service";
 import { LlmWikiStoreService } from "./llm-wiki-store.service";
@@ -15,6 +24,8 @@ export class LlmWikiIngestService {
     jobId: string;
     model: string;
     planHash: string;
+    plan: LlmWikiCompilePlan;
+    previousStatus: LlmWikiSourceStatus;
     started: boolean;
     promise?: Promise<void>;
   }>();
@@ -30,21 +41,29 @@ export class LlmWikiIngestService {
     private readonly model: ModelService,
   ) {}
 
-  estimateCompile(sourceIds: string[]) {
+  estimateCompile(sourceIds: string[], requestedModel = "", requestedPhase = "", forceAnalyze = false) {
     const ids = uniqueSourceIds(sourceIds);
     if (!ids.length) throw new Error("sourceIds 不能为空");
+    if (requestedPhase && requestedPhase !== "analyze" && requestedPhase !== "compose") {
+      throw new Error(`compile phase 非法: ${requestedPhase}`);
+    }
+    const model = this.resolveIngestModel(requestedModel);
     const schema = this.schema.read();
     const existingPages = this.store.listPageRefs();
-    const sourcePlans = ids.map((sourceId) => {
+    const analyses = ids.map((sourceId) => forceAnalyze ? null : this.validAnalysis(sourceId, model, schema.sha256));
+    const sourcePlans = ids.map((sourceId, index) => {
       const meta = this.store.getSource(sourceId);
       const source = this.store.readSource(meta.source_id);
-      return this.compiler.estimateCompilePlan({
-        sourceId: meta.source_id,
-        filename: meta.filename,
-        source,
-        existingPages,
-        schema,
-      });
+      const analysis = requestedPhase === "analyze" ? null : analyses[index];
+      if (requestedPhase === "compose" && !analysis) {
+        throw new Error(`source 缺少有效 analysis，不能执行 compose: ${sourceId}`);
+      }
+      const cachedChunkKeys = !analysis
+        ? this.cachedChunkKeys({ sourceId: meta.source_id, filename: meta.filename, source, schema, model })
+        : undefined;
+      return analysis
+        ? this.compiler.estimateComposePlan({ sourceId: meta.source_id, filename: meta.filename, source, existingPages, schema, model, analysis })
+        : this.compiler.estimateAnalyzePlan({ sourceId: meta.source_id, filename: meta.filename, source, existingPages, schema, model, cachedChunkKeys });
     });
     const plan = aggregateCompilePlans(sourcePlans);
     return {
@@ -54,18 +73,18 @@ export class LlmWikiIngestService {
     };
   }
 
-  compileSources(sourceIds: string[], requestedModel = "", confirmHash = "") {
-    const estimate = this.estimateCompile(sourceIds);
+  compileSources(sourceIds: string[], requestedModel = "", confirmHash = "", requestedPhase = "", forceAnalyze = false) {
+    const estimate = this.estimateCompile(sourceIds, requestedModel, requestedPhase, forceAnalyze);
     if (!confirmHash || confirmHash !== estimate.plan.hash) {
       return estimate;
     }
     if (estimate.plan.blocked) throw new Error(estimate.plan.reason || "compile plan 被阻止");
-    const model = this.resolveIngestModel(requestedModel);
+    const model = estimate.plan.model;
     const jobs: Array<{ jobId: string; sourceId: string; status: string }> = [];
     const skipped: Array<{ sourceId: string; candidateId: string; status: string }> = [];
     for (const plan of estimate.sourcePlans) {
       const current = this.store.getSource(plan.sourceIds[0]);
-      const reusable = this.findReusableCandidate(current.source_id, plan.hash);
+      const reusable = plan.phase === "compose" ? this.findReusableCandidate(current.source_id, plan.hash) : null;
       if (reusable) {
         if (reusable.status === "candidate_ready") {
           this.store.publishCandidate(reusable.candidateId);
@@ -89,8 +108,8 @@ export class LlmWikiIngestService {
     };
   }
 
-  ingestSource(sourceId: string, requestedModel = "", confirmHash = "") {
-    return this.compileSources([sourceId], requestedModel, confirmHash);
+  ingestSource(sourceId: string, requestedModel = "", confirmHash = "", requestedPhase = "", forceAnalyze = false) {
+    return this.compileSources([sourceId], requestedModel, confirmHash, requestedPhase, forceAnalyze);
   }
 
   private enqueueCompileSource(sourceId: string, model: string, plan: LlmWikiCompilePlan) {
@@ -104,6 +123,9 @@ export class LlmWikiIngestService {
       planHash: plan.hash,
       estimatedCostUsd: plan.estimatedCostUsd,
       modelCalls: 0,
+      actualTokens: 0,
+      maxModelCalls: plan.maxModelCalls,
+      maxTokens: plan.maxTokens,
     });
     this.store.prepareIngest(current.source_id);
     const controller = new AbortController();
@@ -112,6 +134,8 @@ export class LlmWikiIngestService {
       jobId: report.jobId,
       model,
       planHash: plan.hash,
+      plan,
+      previousStatus: current.status,
       started: false,
     });
     this.queue.push(current.source_id);
@@ -152,7 +176,7 @@ export class LlmWikiIngestService {
       if (!job || job.controller.signal.aborted) continue;
       job.started = true;
       this.activeCount += 1;
-      const promise = this.runIngest(sourceId, job.model, job.jobId, job.controller.signal).finally(() => {
+      const promise = this.runIngest(sourceId, job.model, job.jobId, job.plan, job.previousStatus, job.controller.signal).finally(() => {
         this.activeCount = Math.max(0, this.activeCount - 1);
         this.jobs.delete(sourceId);
         this.schedule();
@@ -166,24 +190,101 @@ export class LlmWikiIngestService {
     if (index >= 0) this.queue.splice(index, 1);
   }
 
-  private async runIngest(sourceId: string, model: string, jobId: string, signal: AbortSignal): Promise<void> {
+  private async runIngest(
+    sourceId: string,
+    model: string,
+    jobId: string,
+    confirmedPlan: LlmWikiCompilePlan,
+    previousStatus: LlmWikiSourceStatus,
+    signal: AbortSignal,
+  ): Promise<void> {
     let report = this.store.getIngestJob(jobId);
+    let liveUsage: LlmWikiCompileUsage | undefined;
+    const trackUsage = (usage: LlmWikiCompileUsage) => {
+      liveUsage = usage;
+      report = this.store.saveIngestJob({
+        ...report,
+        modelCalls: usage.modelCalls,
+        actualTokens: usage.inputTokens + usage.outputTokens,
+        maxModelCalls: confirmedPlan.maxModelCalls,
+        maxTokens: confirmedPlan.maxTokens,
+        usage,
+      });
+    };
     try {
       assertNotStopped(signal);
       report = this.saveJobEvent(report, {
-        stage: "compiling",
-        message: "开始编译：生成有界 Wiki patch，通过本地检查后直接发布",
+        stage: confirmedPlan.phase,
+        message: confirmedPlan.phase === "analyze"
+          ? "开始 analyze：Token 分块提取、遗漏审计与确定性页面规划"
+          : "开始 compose：逐页生成、逐页覆盖验证与一次集中修复",
       });
       const meta = this.store.getSource(sourceId);
       const source = this.store.readSource(sourceId);
       const schema = this.schema.read();
-      const plan = this.compiler.estimateCompilePlan({
-        sourceId,
-        filename: meta.filename,
-        source,
-        existingPages: this.store.listPageRefs(),
-        schema,
-      });
+      const existingPages = this.store.listPageRefs();
+      const analysis = confirmedPlan.phase === "compose" ? this.validAnalysis(sourceId, model, schema.sha256) : null;
+      const cachedChunkKeys = !analysis
+        ? this.cachedChunkKeys({ sourceId, filename: meta.filename, source, schema, model })
+        : undefined;
+      const plan = analysis
+        ? this.compiler.estimateComposePlan({ sourceId, filename: meta.filename, source, existingPages, schema, model, analysis })
+        : this.compiler.estimateAnalyzePlan({ sourceId, filename: meta.filename, source, existingPages, schema, model, cachedChunkKeys });
+      if (plan.hash !== confirmedPlan.hash) throw new Error("compile plan 已过期，请重新预估并确认");
+
+      if (plan.phase === "analyze") {
+        const artifact = await this.compiler.analyzeSource({
+          sourceId,
+          filename: meta.filename,
+          source,
+          existingPages,
+          schema,
+          model,
+          plan,
+          signal,
+          onUsage: trackUsage,
+          chunkCache: {
+            read: (cacheKey) => this.store.readChunkAnalysisCache(cacheKey),
+            write: (entry) => this.store.saveChunkAnalysisCache(entry),
+          },
+        });
+        assertNotStopped(signal);
+        this.store.saveSourceMap(artifact.sourceMap);
+        this.store.saveFactLedger(artifact.factLedger);
+        this.store.saveAnalysisArtifact(artifact);
+        this.store.updateSource(sourceId, {
+          status: "analysis_ready",
+          schema_hash: schema.sha256,
+          latest_compile_hash: artifact.analysisHash,
+          error: "",
+        });
+        this.saveJobEvent(
+          {
+            ...report,
+            status: "success",
+            stage: "analysis_ready",
+            endedAt: new Date().toISOString(),
+            factCount: artifact.factLedger.facts.length,
+            planHash: plan.hash,
+            estimatedCostUsd: plan.estimatedCostUsd,
+            modelCalls: artifact.usage.modelCalls,
+            actualTokens: artifact.usage.inputTokens + artifact.usage.outputTokens,
+            maxModelCalls: plan.maxModelCalls,
+            maxTokens: plan.maxTokens,
+            usage: artifact.usage,
+            error: "",
+          },
+          {
+            stage: "analysis_ready",
+            status: "success",
+            message: `analyze 完成：${artifact.factLedger.facts.length} facts，${artifact.pagePlan.length} pages plan，模型调用 ${artifact.usage.modelCalls} 次；请确认 compose 计划`,
+          },
+        );
+        this.search.invalidate();
+        return;
+      }
+
+      if (!analysis) throw new Error("compose 缺少有效 analysis artifact");
       const reusable = this.findReusableCandidate(sourceId, plan.hash);
       if (reusable) {
         if (reusable.status === "candidate_ready") {
@@ -213,6 +314,9 @@ export class LlmWikiIngestService {
             planHash: plan.hash,
             estimatedCostUsd: plan.estimatedCostUsd,
             modelCalls: 0,
+            actualTokens: 0,
+            maxModelCalls: plan.maxModelCalls,
+            maxTokens: plan.maxTokens,
             error: "",
           },
           {
@@ -224,28 +328,27 @@ export class LlmWikiIngestService {
         this.search.invalidate();
         return;
       }
-      this.store.saveSourceMap(this.compiler.sectionSource({
+      const candidate = await this.compiler.composeSource({
         sourceId,
         filename: meta.filename,
         source,
-      }));
-      const candidate = await this.compiler.compileSource({
-        sourceId,
-        filename: meta.filename,
-        source,
-        existingPages: this.store.listPageRefs(),
+        existingPages,
         schema,
         model,
+        analysis,
+        plan,
         signal,
+        onUsage: trackUsage,
       });
       assertNotStopped(signal);
       const savedCandidate = this.store.saveCompileCandidate(candidate);
+      const composeUsage = savedCandidate.phaseUsage?.compose || liveUsage;
       report = this.saveJobEvent(
         {
           ...report,
           pages: savedCandidate.pages.map((page) => page.path),
-          factCount: savedCandidate.claims.length,
-          coverage: {
+          factCount: analysis.factLedger.facts.length,
+          coverage: savedCandidate.coverageReport || {
             mustTotal: 0,
             mustCovered: 0,
             mustCoverage: 0,
@@ -255,11 +358,15 @@ export class LlmWikiIngestService {
           candidateId: savedCandidate.candidateId,
           planHash: savedCandidate.plan.hash,
           estimatedCostUsd: savedCandidate.plan.estimatedCostUsd,
-          modelCalls: savedCandidate.modelUsage.modelCalls,
+          modelCalls: composeUsage?.modelCalls || 0,
+          actualTokens: (composeUsage?.inputTokens || 0) + (composeUsage?.outputTokens || 0),
+          maxModelCalls: plan.maxModelCalls,
+          maxTokens: plan.maxTokens,
+          usage: composeUsage,
         },
         {
           stage: savedCandidate.status,
-          message: `编译结果已生成：${savedCandidate.claims.length} key claims，${savedCandidate.pages.length} pages，模型调用 ${savedCandidate.modelUsage.modelCalls} 次`,
+          message: `compose 结果已生成：${savedCandidate.pages.length} pages，must coverage ${Math.round((savedCandidate.coverageReport?.mustCoverage || 0) * 100)}%，本阶段模型调用 ${composeUsage?.modelCalls || 0} 次`,
         },
       );
       if (savedCandidate.status !== "candidate_ready") {
@@ -317,12 +424,19 @@ export class LlmWikiIngestService {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
-      this.store.markIngestFailed(sourceId, message);
+      this.store.restoreIngestAfterFailure(sourceId, previousStatus, message);
       this.saveJobEvent(
         {
           ...report,
           status: "failed",
           endedAt: new Date().toISOString(),
+          modelCalls: liveUsage?.modelCalls || report.modelCalls || 0,
+          actualTokens: liveUsage
+            ? liveUsage.inputTokens + liveUsage.outputTokens
+            : report.actualTokens || 0,
+          maxModelCalls: confirmedPlan.maxModelCalls,
+          maxTokens: confirmedPlan.maxTokens,
+          usage: liveUsage || report.usage,
           error: message,
         },
         {
@@ -401,6 +515,31 @@ export class LlmWikiIngestService {
     });
   }
 
+  private validAnalysis(sourceId: string, model: string, schemaHash: string) {
+    const analysis = this.store.readAnalysisArtifact(sourceId);
+    if (!analysis) return null;
+    const source = this.store.readSource(sourceId);
+    if (analysis.sourceHash !== createHash("sha256").update(source).digest("hex")) return null;
+    if (analysis.schemaHash !== schemaHash || analysis.model !== model) return null;
+    if (analysis.modelHash !== createHash("sha256").update(model).digest("hex")) return null;
+    if (analysis.promptHash !== compilerPromptHash()) return null;
+    if (
+      analysis.compilerVersion !== llmWikiConfig.compilerVersion ||
+      analysis.promptVersion !== llmWikiConfig.promptVersion
+    ) return null;
+    return analysis;
+  }
+
+  private cachedChunkKeys(args: { sourceId: string; filename: string; source: string; schema: ReturnType<LlmWikiSchemaService["read"]>; model: string }): Set<string> {
+    const compiler = this.compiler as LlmWikiCompilerService & { chunkCacheKeys?: (input: typeof args) => string[] };
+    const readCache = (this.store as LlmWikiStoreService & { readChunkAnalysisCache?: (cacheKey: string) => unknown }).readChunkAnalysisCache;
+    if (!compiler.chunkCacheKeys || !readCache) return new Set<string>();
+    return new Set(compiler.chunkCacheKeys(args).filter((cacheKey) => {
+      const cached = readCache.call(this.store, cacheKey) as { auditComplete?: boolean } | null;
+      return cached?.auditComplete === true;
+    }));
+  }
+
   private resolveIngestModel(requestedModel: string): string {
     const requested = String(requestedModel || "").trim();
     const configured = requested || llmWikiConfig.model;
@@ -440,23 +579,71 @@ function aggregateCompilePlans(sourcePlans: LlmWikiCompilePlan[]): LlmWikiCompil
     .update(JSON.stringify(sourcePlans.map((plan) => plan.hash)))
     .digest("hex");
   const blockedPlans = sourcePlans.filter((plan) => plan.blocked);
+  const phases = new Set(sourcePlans.map((plan) => plan.phase));
+  const mixedPhase = phases.size > 1;
   return {
+    phase: sourcePlans[0]?.phase || "analyze",
     planId: hash.slice(0, 32),
+    planHash: hash,
     sourceIds,
     hash,
     schemaHash: sourcePlans[0]?.schemaHash || "",
     compilerVersion: sourcePlans[0]?.compilerVersion || llmWikiConfig.compilerVersion,
     promptVersion: sourcePlans[0]?.promptVersion || llmWikiConfig.promptVersion,
+    sourceHash: createHash("sha256").update(JSON.stringify(sourcePlans.map((plan) => plan.sourceHash))).digest("hex"),
+    model: sourcePlans[0]?.model || "",
+    modelHash: sourcePlans[0]?.modelHash,
+    promptHash: sourcePlans[0]?.promptHash,
+    wikiStateHash: createHash("sha256")
+      .update(JSON.stringify(sourcePlans.map((plan) => plan.wikiStateHash || "")))
+      .digest("hex"),
+    analysisHash: sourcePlans[0]?.analysisHash,
+    estimatedCalls: sum(sourcePlans.map((plan) => plan.estimatedCalls)),
+    estimatedTokens: sum(sourcePlans.map((plan) => plan.estimatedTokens)),
+    maxTokens: sum(sourcePlans.map((plan) => plan.maxTokens)),
+    callPlan: aggregateCallPlan(sourcePlans),
     estimatedInputTokens: sum(sourcePlans.map((plan) => plan.estimatedInputTokens)),
     estimatedOutputTokens: sum(sourcePlans.map((plan) => plan.estimatedOutputTokens)),
     estimatedCostUsd: Number(sum(sourcePlans.map((plan) => plan.estimatedCostUsd)).toFixed(6)),
     maxModelCalls: sum(sourcePlans.map((plan) => plan.maxModelCalls)),
     affectedPageCandidates: uniqueStrings(sourcePlans.flatMap((plan) => plan.affectedPageCandidates)),
     requiresDigest: sourcePlans.some((plan) => plan.requiresDigest),
-    blocked: blockedPlans.length > 0,
-    reason: blockedPlans.map((plan) => plan.reason).filter(Boolean).join("; "),
+    blocked: blockedPlans.length > 0 || mixedPhase,
+    reason: [
+      ...blockedPlans.map((plan) => plan.reason).filter(Boolean),
+      ...(mixedPhase ? ["选中的 sources 同时包含 analyze 与 compose 阶段，请按阶段分批执行"] : []),
+    ].join("; "),
     createdAt: new Date().toISOString(),
   };
+}
+
+function aggregateCallPlan(sourcePlans: LlmWikiCompilePlan[]): LlmWikiCompilePlan["callPlan"] {
+  const stages = new Map<string, LlmWikiCompilePlan["callPlan"][number]>();
+  for (const item of sourcePlans.flatMap((plan) => plan.callPlan)) {
+    const current = stages.get(item.stage) || {
+      stage: item.stage,
+      expectedCalls: 0,
+      maxCalls: 0,
+      expectedInputTokens: 0,
+      hardInputTokens: 0,
+      expectedOutputTokens: 0,
+      hardOutputTokens: 0,
+      expectedTokens: 0,
+      hardTokens: 0,
+      cacheHits: 0,
+    };
+    current.expectedCalls += item.expectedCalls;
+    current.maxCalls += item.maxCalls;
+    current.expectedInputTokens = (current.expectedInputTokens || 0) + (item.expectedInputTokens || 0);
+    current.hardInputTokens = (current.hardInputTokens || 0) + (item.hardInputTokens || 0);
+    current.expectedOutputTokens = (current.expectedOutputTokens || 0) + (item.expectedOutputTokens || 0);
+    current.hardOutputTokens = (current.hardOutputTokens || 0) + (item.hardOutputTokens || 0);
+    current.expectedTokens = (current.expectedTokens || 0) + (item.expectedTokens || 0);
+    current.hardTokens = (current.hardTokens || 0) + (item.hardTokens || 0);
+    current.cacheHits = (current.cacheHits || 0) + (item.cacheHits || 0);
+    stages.set(item.stage, current);
+  }
+  return [...stages.values()];
 }
 
 function sum(values: number[]): number {

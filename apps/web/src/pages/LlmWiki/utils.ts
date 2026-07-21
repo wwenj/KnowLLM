@@ -34,6 +34,7 @@ export function wikiStatusClass(status: LlmWikiSource["status"]): string {
   const statusClasses: Record<LlmWikiSource["status"], string> = {
     raw_uploaded: "border-amber-200 bg-amber-50 text-amber-700",
     compile_planned: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    analysis_ready: "border-violet-200 bg-violet-50 text-violet-700",
     candidate_ready: "border-sky-200 bg-sky-50 text-sky-700",
     published: "border-emerald-200 bg-emerald-50 text-emerald-700",
     uploaded: "border-amber-200 bg-amber-50 text-amber-700",
