@@ -445,6 +445,7 @@ issue 生命周期：
 - resolved 只是历史归档，不代表一定人工修复。
 - 如果 resolved issue 下次又被检测到，会重新打开为 open。
 - 前端默认看 Open；Resolved/All 只用于审计历史。
+- 前端可按当前 tab 清空 Open、Resolved 或 All 记录；清空只删除 issue 记录，不修改 Wiki 内容。
 
 因此，当前“重新检测为空”的含义是：
 
@@ -471,6 +472,7 @@ POST /api/llm-wiki/manage/stale/repair
 POST /api/llm-wiki/manage/rebuild
 POST /api/llm-wiki/manage/lint
 GET  /api/llm-wiki/manage/issues?status=open|resolved|all
+POST /api/llm-wiki/manage/issues/clear
 POST /api/llm-wiki/manage/issues/:issueId/resolve
 ```
 
@@ -557,7 +559,515 @@ meta/facts/
 
 这些仍可能被旧数据、旧测试或 legacy evaluation 使用，但不是当前 source-integration 编译主路径。
 
-## 16. 当前取舍
+## 16. 代码阅读入口
+
+如果要从头盘当前编译逻辑，建议按下面文件顺序看。主线是：
+
+```text
+前端触发
+  -> manage controller
+  -> management service
+  -> ingest service
+  -> compiler service
+  -> store publish
+  -> retrieval/search 只读消费
+```
+
+一条正常“单个 source 编译”的执行链大概是：
+
+```text
+用户在前端点编译
+  -> 前端先请求 estimate
+  -> 后端返回 plan.hash / cost / blocked / affected pages
+  -> 前端再带 confirmHash 请求 compile
+  -> ingest service 创建 job 并入队
+  -> compiler service 调模型生成 candidate
+  -> store 保存 candidate
+  -> candidate 通过本地 gate 后自动 publish
+  -> source 状态变成 published
+  -> wiki 页面、page claims、publish receipt、index.md 写入磁盘
+  -> 前端轮询 source/job 状态并展示结果
+```
+
+这里最重要的边界是：前端只负责触发和展示，controller 只负责 HTTP 参数，management 只负责编排，ingest 负责执行流程，compiler 负责模型编译，store 负责落盘和发布。
+
+### 16.1 前端触发编译
+
+```text
+apps/web/src/api/llmWiki.ts
+```
+
+这个文件是前端访问 llmWiki 后端的 API 封装。它不保存状态，也不判断编译逻辑，只把页面动作转换成 REST 请求。
+
+编译相关看点：
+
+- `estimateCompile(...)` 调 `POST /api/llm-wiki/manage/compile/estimate`。
+- `compileSources(...)` 调 `POST /api/llm-wiki/manage/compile`。
+- `ingestSource(...)` 调 `POST /api/llm-wiki/manage/sources/:sourceId/ingest`。
+- 前端传入的是 `sourceIds`、`model`、`confirmHash`，不会直接调用 compiler。
+
+怎么执行：
+
+```text
+llmWikiApi.estimateCompile([sourceId])
+  -> 后端只估算，不调用模型
+  -> 返回 plan.hash
+
+llmWikiApi.compileSources([sourceId], model, plan.hash)
+  -> 后端校验 confirmHash
+  -> hash 正确才创建编译 job
+```
+
+所以你看这个文件时，重点确认“前端传了什么参数”，不要在这里找真正的编译逻辑。
+
+```text
+apps/web/src/pages/LlmWiki/index.tsx
+apps/web/src/pages/LlmWiki/components/SourceCompilePanel.tsx
+```
+
+`index.tsx` 是 llmWiki 管理页面的状态中心，负责 source 列表、模型选择、上传、单条编译、批量编译、轮询和各种弹窗状态。
+
+编译触发重点看：
+
+- `handleIngest(source)`：单个 source 编译入口。
+- `handleBulkIngest()`：批量 source 编译入口。
+- `handleModelChange(model)`：切换解析模型并写入 localStorage。
+- `refresh(true)`：静默刷新 source 状态。
+
+- `knowllm.llmWiki.ingestModel` 是解析模型的本地持久化 key。
+- source 列表轮询 `compile_planned` / `ingesting` 状态。
+- 详情面板展示 latest job、latest candidate、source map、pages、claims。
+- UI 只展示编译状态和工件，不实现编译逻辑。
+
+`SourceCompilePanel.tsx` 是右侧详情面板。它辅助理解编译结果，因为它把后端工件按用户能读懂的方式展示出来：
+
+- Compile 区展示 job model、stage、started、ended。
+- Pages 区展示本次 source 关联到哪些 Wiki 页面。
+- 编译结果区展示 latest candidate id、status、model calls、cost。
+- Source Map 区展示 source map 当前只有 `s0001` full-source section。
+
+所以读前端时可以按这个顺序：
+
+```text
+index.tsx 找触发动作
+  -> api/llmWiki.ts 看请求路径和参数
+  -> SourceCompilePanel.tsx 看后端返回的工件如何展示
+```
+
+### 16.2 后端管理入口
+
+```text
+apps/api/src/modules/llmWiki/controllers/llm-wiki-management.controller.ts
+```
+
+这个文件是写操作 HTTP 入口。它的职责是把 REST 请求映射到 `LlmWikiManagementService`，并把普通 Error 包成 `BadRequestException`。
+
+重点路由：
+
+- `POST /sources/upload` -> `wiki.uploadSource(...)`
+- `POST /compile/estimate` -> `wiki.estimateCompile(sourceIds)`
+- `POST /compile` -> `wiki.compileSources(sourceIds, model, confirmHash)`
+- `POST /sources/:sourceId/ingest` -> `wiki.ingestSource(sourceId, model, confirmHash)`
+- `GET /ingest-jobs/:jobId` -> `wiki.getIngestJob(jobId)`
+- `GET /candidates` -> `wiki.listCandidates(...)`
+- `POST /candidates/:candidateId/publish` -> `wiki.publishCandidate(candidateId)`
+
+这个文件只做 HTTP 参数接入和错误包装，不做业务判断。
+
+怎么执行：
+
+```text
+前端 POST /api/llm-wiki/manage/compile/estimate
+  -> controller.estimateCompile(...)
+  -> management.estimateCompile(...)
+
+前端 POST /api/llm-wiki/manage/compile
+  -> controller.compileSources(...)
+  -> management.compileSources(...)
+```
+
+这里可以确认 API 合同，但不要在 controller 里找队列、hash、模型调用。
+
+```text
+apps/api/src/modules/llmWiki/services/llm-wiki-management.service.ts
+```
+
+这个文件是管理编排层。它把 controller 的请求分发给 store、ingest、lint、issue、schema、search 等 service。它自己通常不做重逻辑，也不直接调用模型。
+
+重点方法：
+
+- `uploadSource(...)`：转给 store 创建 source。
+- `estimateCompile(...)`：转给 ingest 做确定性估算。
+- `compileSources(...)` / `ingestSource(...)`：转给 ingest 进入正式编译。
+- `sourceArtifacts(...)`：把 source map、旧 fact ledger、candidate、page claims、pages、job 聚合给前端。
+- `publishCandidate(...)`：手动发布 candidate，正常编译路径会自动发布。
+- `onModuleInit()`：启动时标记 compiler/prompt version drift stale。
+
+这个 service 是管理编排层，不直接调用模型。
+
+怎么执行：
+
+```text
+management.compileSources(...)
+  -> ingest.compileSources(...)
+
+management.sourceArtifacts(...)
+  -> store.getSource(...)
+  -> store.readSourceMap(...)
+  -> store.getLatestCompileCandidateForSource(...)
+  -> store.listPageClaims(...)
+  -> store.listPageRefs(...)
+```
+
+这里适合看“前端详情页的数据从哪里聚合”，不适合看模型 prompt。
+
+### 16.3 编译确认、队列和 job
+
+```text
+apps/api/src/modules/llmWiki/services/llm-wiki-ingest.service.ts
+```
+
+这个文件是当前编译执行流程的核心调度器。它不写 prompt，但决定什么时候能烧模型、是否复用 candidate、job 怎么入队、失败怎么处理。
+
+主线方法：
+
+- `estimateCompile(sourceIds)`
+  - 读取 schema、source、existing pages。
+  - 对每个 source 调 `compiler.estimateCompilePlan(...)`。
+  - 聚合成总 plan，返回 `requiresConfirmation: true`。
+
+- `compileSources(sourceIds, requestedModel, confirmHash)`
+  - 先重新 estimate。
+  - `confirmHash` 为空或不匹配时直接返回 estimate，不烧模型。
+  - plan 被 blocked 时抛错。
+  - `resolveIngestModel(...)` 校验模型。
+  - 如果找到相同 `plan.hash` 的 reusable candidate，直接 0 模型调用复用并发布。
+  - 否则 `enqueueCompileSource(...)` 创建 job，进入队列。
+
+- `enqueueCompileSource(sourceId, model, plan)`
+  - 创建 ingest job。
+  - `store.prepareIngest(...)` 把 source 改为 `compile_planned`。
+  - 放入 FIFO queue。
+  - `schedule()` 按 `llmWikiConfig.ingestConcurrency` 执行；默认并发是 1。
+
+- `runIngest(sourceId, model, jobId, signal)`
+  - job stage 改为 `compiling`。
+  - 重新计算 plan 和 reusable candidate。
+  - `store.saveSourceMap(compiler.sectionSource(...))`。
+  - `compiler.compileSource(...)` 真正调模型生成 candidate。
+  - `store.saveCompileCandidate(...)` 保存 candidate。
+  - candidate 通过 gate 后 `store.publishCandidate(...)` 自动发布。
+  - provider quota/rate-limit 类错误会停止后续队列。
+
+这一层负责成本确认、幂等复用、队列、停止、job report 和错误处理。
+
+最关键的执行语义：
+
+```text
+第一次请求 compile/estimate
+  -> 只返回估算
+  -> 不调用模型
+
+第二次请求 compile，且 confirmHash == estimate.plan.hash
+  -> 才会进入模型编译
+```
+
+`confirmHash` 的作用是锁定“用户确认的是哪一次估算”。如果 source、schema、prompt version、compiler version 或 affected page candidates 变了，hash 会变，后端不会继续烧模型。
+
+批量编译也走同一个逻辑：
+
+```text
+compileSources([sourceA, sourceB, sourceC], model, confirmHash)
+  -> aggregateCompilePlans(...)
+  -> 每个 source 独立生成 sourcePlan
+  -> 每个 source 独立查 reusable candidate
+  -> 未命中的 source 入队
+```
+
+注意：批量提交不等于默认并发执行。实际并发由 `llmWikiConfig.ingestConcurrency` 控制，默认是 1。
+
+### 16.4 模型编译器
+
+```text
+apps/api/src/modules/llmWiki/services/llm-wiki-compiler.service.ts
+```
+
+这个文件是真正的 “Source Integration Compiler”。它负责估算、构造 prompt、调用模型、解析模型 JSON、归一化 candidate，并做本地结构 gate。
+
+主线方法：
+
+- `estimateCompilePlan(...)`
+  - 计算 source hash。
+  - 判断是否需要 digest。
+  - 构造 `affectedPageCandidates`。
+  - 估算 input/output tokens 和 cost。
+  - 生成 compile `hash`。
+  - 超过 `maxDigestSourceChars` 时 blocked。
+
+- `sectionSource(...)`
+  - 当前只生成一个 full-source section：`s0001`。
+  - 这是兼容 source map，不是旧的多 section 编译计划。
+
+- `compileSource(...)`
+  - 重新生成 plan。
+  - 超长但未 blocked 的 source 先 `callDigest(...)`。
+  - 再 `callIntegrationPatch(...)` 生成 Wiki patch。
+  - `normalizeCandidatePages(...)` 归一化页面、路径、标题、tags、sourceIds。
+  - `normalizeClaims(...)` 只保留 `{path,text,sourceId}` 轻量 claim。
+  - `validateCandidate(...)` 做本地结构 gate。
+  - 返回 `LlmWikiCompileCandidate`。
+
+模型调用集中在：
+
+```text
+callDigest(...)
+callIntegrationPatch(...)
+```
+
+prompt 集中在：
+
+```text
+digestInstructions()
+integrationPatchInstructions()
+```
+
+当前关键约束在 `integrationPatchInstructions()`：
+
+- 页面必须是可读 Markdown 知识单元。
+- 不允许 fact dump、chunk dump、evidence dump。
+- 不输出 `citations`、`evidence`、`quote`、`sourceSpan`。
+- summary 固定落到 `summaries/{sourceId}.md`。
+- 默认不超过 `compilePlan.maxAffectedPages`。
+
+本地 gate 主要看：
+
+- 页面数量是否超过 `maxAffectedPages`。
+- path 是否合法。
+- path 与 type 是否匹配。
+- body 是否有一级标题。
+- 是否包含 `delete` 动作。
+
+怎么执行：
+
+```text
+compileSource(...)
+  -> estimateCompilePlan(...)
+  -> source 太长则 callDigest(...)
+  -> callIntegrationPatch(...)
+  -> parseJsonObject(...)
+  -> normalizeCandidatePages(...)
+  -> normalizeClaims(...)
+  -> validateCandidate(...)
+  -> return candidate
+```
+
+如果你要调编译质量，优先看这几个地方：
+
+- `integrationPatchInstructions()`：决定模型应该怎么写 Wiki 页面。
+- `INTEGRATION_PATCH_RESPONSE_FORMAT`：决定模型 JSON 输出结构。
+- `candidateAffectedPages(...)`：决定 estimate hash 里预期影响哪些页面。
+- `normalizeCandidatePages(...)`：决定模型输出页面如何被本地修正。
+- `validateCandidate(...)`：决定哪些问题会阻断发布。
+
+当前版本刻意不让模型输出精确证据坐标，原因是这类坐标稳定性差。现在只要求模型产出可读 Wiki 页面和可选 key claims。
+
+### 16.5 持久化与发布
+
+```text
+apps/api/src/modules/llmWiki/services/llm-wiki-store.service.ts
+```
+
+这个文件是文件系统数据库。source、meta、wiki 页面、candidate、page claims、publish receipt、job report、stale marker 都由它读写。
+
+source 写入：
+
+- `createSource(...)`
+  - 校验文件名、扩展、大小、二进制内容和空内容。
+  - 写入 `sources/<sourceId>/source.md|txt`。
+  - 写入 `sources/<sourceId>/meta.json`。
+  - 初始状态是 `raw_uploaded`。
+
+编译状态：
+
+- `prepareIngest(...)` -> `compile_planned`
+- `markIngestFailed(...)` -> `failed`
+- `resetIngestToUploaded(...)` -> 停止编译后恢复到可回退状态
+- `markStaleIngestingFailed(...)` -> 服务重启后把遗留 running job 收尾为 failed
+
+candidate：
+
+- `saveCompileCandidate(...)`
+  - 写入 `meta/compile-candidates/<candidateId>.json`。
+
+- `readCompileCandidate(...)`
+  - 读取并 sanitize candidate。
+
+- `listCompileCandidates(...)`
+  - 给管理端展示历史 candidate。
+
+发布：
+
+- `publishCandidate(candidateId)`
+  - 只允许 `candidate_ready` 发布。
+  - 有 `blocked_publish` issue 时拒绝发布。
+  - 遍历 candidate pages。
+  - `writePageFromBody(...)` 写正式 Wiki Markdown + frontmatter。
+  - `savePageClaims(...)` 写轻量 page claims。
+  - `updateContribution(...)` 写 page contribution。
+  - `resolveStaleMarkersForPages(...)` 解除相关 stale marker。
+  - 写 `meta/publish-receipts/<receiptId>.json`。
+  - candidate 状态改为 `published`。
+  - source 状态改为 `published`，记录 `touched_pages`、`latest_candidate_id`、`latest_compile_hash`。
+  - `rebuildIndex()` 重建 `index.md`。
+
+发布执行链：
+
+```text
+store.publishCandidate(candidateId)
+  -> readCompileCandidate(candidateId)
+  -> 检查 candidate_ready 和 blocked_publish
+  -> 遍历 candidate.pages
+  -> writePageFromBody(...)
+  -> savePageClaims(...)
+  -> updateContribution(...)
+  -> 写 publish receipt
+  -> saveCompileCandidate(status=published)
+  -> updateSource(status=published)
+  -> rebuildIndex()
+```
+
+你看这个文件时，重点看“结果最终写到哪里”：
+
+```text
+sources/<sourceId>/meta.json
+sources/<sourceId>/source.md|txt
+wiki/**/*.md
+meta/source-maps/<sourceId>.json
+meta/page-claims/*.json
+meta/page-contributions/*.json
+meta/compile-candidates/<candidateId>.json
+meta/publish-receipts/<receiptId>.json
+ingest-jobs/<jobId>/report.json
+```
+
+这里也能看出一个重要事实：发布不是调用模型后的临时内存状态，而是把 candidate 正式写成 Markdown Wiki 页面。
+
+### 16.6 类型、配置和边界文件
+
+```text
+apps/api/src/modules/llmWiki/contracts/llm-wiki.types.ts
+```
+
+这个文件定义后端内部主要数据结构。读主链路时优先看 compile candidate 相关类型，不要被旧 fact/fusion 类型带偏。
+
+优先看这些类型：
+
+- `LlmWikiSourceStatus`
+- `LlmWikiSourceMeta`
+- `LlmWikiCompilePlan`
+- `LlmWikiCompileCandidate`
+- `LlmWikiCompileCandidatePage`
+- `LlmWikiClaim`
+- `LlmWikiPublishReceipt`
+- `LlmWikiIngestJobReport`
+- `LlmWikiPublishGateIssue`
+
+文件里仍保留 `LlmWikiFact*`、`LlmWikiCompileResult`、`LlmWikiFusionResult` 等旧链路类型。看当前主链路时先不要从这些类型进入。
+
+几个类型之间的关系：
+
+```text
+LlmWikiSourceMeta
+  记录 source 当前状态和 latest candidate/hash
+
+LlmWikiCompilePlan
+  记录本次编译估算、hash、预算和 blocked 原因
+
+LlmWikiCompileCandidate
+  记录模型生成的候选 pages/claims/issues/modelUsage
+
+LlmWikiPublishReceipt
+  记录 candidate 发布后实际写入了哪些页面和成本账本
+
+LlmWikiIngestJobReport
+  记录执行过程，供前端轮询展示 stage/events/error
+```
+
+```text
+apps/api/src/modules/llmWiki/llm-wiki.config.ts
+```
+
+这个文件是当前编译行为的运行时开关，尤其影响成本、并发和编译边界。
+
+关键配置：
+
+- `root`：默认数据根 `<dataRoot>/llm-wiki/default`。
+- `ingestConcurrency`：默认 1。
+- `compilerVersion`：`source-integration-v1`。
+- `promptVersion`：`integration-patch-v1`。
+- `maxCompileSourceChars`：普通 source 编译上限。
+- `maxDigestSourceChars`：digest 允许的最大 source 长度。
+- `maxAffectedPages`：默认 6。
+- `defaultMaxModelCalls`：默认 1。
+- `digestMaxModelCalls`：默认 2。
+
+这些配置会进入 plan 或执行路径。特别是 `compilerVersion`、`promptVersion`、`maxAffectedPages`、`defaultMaxModelCalls` 会影响 compile hash 或模型调用边界。
+
+```text
+apps/api/src/modules/llmWiki/llm-wiki.module.ts
+```
+
+看模块边界：
+
+- controller 暴露 manage/retrieval 两套 API。
+- provider 注册 store、compiler、ingest、management、retrieval、search、lint 等 service。
+- 只导出 `LlmWikiRetrievalService`，给 Agent 只读使用。
+
+这个模块文件体现了读写边界：
+
+```text
+manage controller
+  给前端管理页使用，可以上传、编译、删除、lint、publish。
+
+retrieval controller
+  给 Agent 和只读页面使用，只能 manifest/search/page/source。
+
+exports: [LlmWikiRetrievalService]
+  其他模块默认只能拿只读能力，不能绕过管理入口直接编译。
+```
+
+### 16.7 编译后的只读消费
+
+```text
+apps/api/src/modules/llmWiki/controllers/llm-wiki-retrieval.controller.ts
+apps/api/src/modules/llmWiki/services/llm-wiki-retrieval.service.ts
+apps/api/src/modules/llmWiki/services/llm-wiki-search.service.ts
+```
+
+看点：
+
+- retrieval API 只读，不触发编译。
+- `getManifest()` 读取 sources、pages、pageClaims、facts 计数和 `index.md`。
+- `search(...)` 走 `LlmWikiSearchService`。
+- `readPage(...)` 返回 page 和 links。
+- `readSource(...)` 按 sourceId 回读 raw source。
+- search 主要索引已发布页面正文、标题、tags、path；旧 fact/page claims 只是附加检索文本。
+
+Agent 链路应从 retrieval 进入，不应该依赖 management/store/compiler。
+
+怎么执行：
+
+```text
+Agent 或前端读 Wiki
+  -> GET /api/llm-wiki/retrieval/manifest
+  -> GET /api/llm-wiki/retrieval/search?q=...
+  -> GET /api/llm-wiki/retrieval/page?path=...
+  -> 必要时 GET /api/llm-wiki/retrieval/source/:sourceId
+```
+
+这里是编译后的消费链路，不是编译链路。它只读已发布页面，最多按 sourceId 回读 raw source，不会创建 candidate，也不会修改 Wiki。
+
+## 17. 当前取舍
 
 保留：
 

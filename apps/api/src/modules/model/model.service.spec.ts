@@ -142,7 +142,7 @@ test("model service omits parameters unsupported by a selected model", async () 
         apiKey: "secret-a",
         models: [
           "regular-model",
-          { name: "restricted-model", unsupportedParameters: ["temperature"] },
+          { name: "restricted-model", unsupportedParameters: ["temperature", "max_tokens"] },
         ],
       }),
     ],
@@ -169,11 +169,13 @@ test("model service omits parameters unsupported by a selected model", async () 
         await service.chat({
           model: "provider-a:regular-model",
           temperature: 0,
+          maxTokens: 321,
           messages: [{ role: "user", content: "hello" }],
         });
         await service.chat({
           model: "provider-a:restricted-model",
           temperature: 0,
+          maxTokens: 321,
           messages: [{ role: "user", content: "hello" }],
         });
       } finally {
@@ -181,7 +183,42 @@ test("model service omits parameters unsupported by a selected model", async () 
       }
 
       assert.equal(bodies[0].temperature, 0);
+      assert.equal(bodies[0].max_tokens, 321);
       assert.equal("temperature" in bodies[1], false);
+      assert.equal("max_tokens" in bodies[1], false);
+      assert.equal(bodies[1].max_completion_tokens, 321);
+    },
+  );
+});
+
+test("model service honors an explicit max_completion_tokens provider contract", async () => {
+  await withTempModelConfig(
+    [
+      providerConfig({
+        name: "Provider A",
+        baseUrl: "https://a.test/v1",
+        apiKey: "secret-a",
+        models: [{ name: "gpt-5.5", outputTokenParameter: "max_completion_tokens" }],
+      }),
+    ],
+    async () => {
+      let body: Record<string, unknown> = {};
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }], usage: { prompt_tokens: 3, completion_tokens: 2 } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      try {
+        const service = new ModelService();
+        await service.chat({ model: "provider-a:gpt-5.5", maxTokens: 321, messages: [{ role: "user", content: "probe" }] });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      assert.equal(body.max_completion_tokens, 321);
+      assert.equal("max_tokens" in body, false);
     },
   );
 });

@@ -1,6 +1,7 @@
 export type LlmWikiSourceStatus =
   | "raw_uploaded"
   | "compile_planned"
+  | "analysis_ready"
   | "candidate_ready"
   | "published"
   | "failed"
@@ -105,6 +106,14 @@ export interface LlmWikiFact {
   };
   entities: string[];
   retention: LlmWikiFactRetention;
+  /** v3 treats every extracted fact as a release gate; importance is legacy metadata only. */
+  required?: boolean;
+  origin?: "extract" | "audit";
+  evidenceValidation?: {
+    valid: boolean;
+    method: "exact_substring";
+    checkedAt: string;
+  };
 }
 
 export interface LlmWikiFactLedger {
@@ -134,6 +143,7 @@ export interface LlmWikiStats {
   total: number;
   raw_uploaded: number;
   compile_planned: number;
+  analysis_ready: number;
   candidate_ready: number;
   published: number;
   uploaded: number;
@@ -259,21 +269,108 @@ export interface LlmWikiCompiledOutput {
 }
 
 export interface LlmWikiCompilePlan {
+  phase: "analyze" | "compose";
   planId: string;
+  planHash: string;
   sourceIds: string[];
   hash: string;
   schemaHash: string;
   compilerVersion: string;
   promptVersion: string;
+  sourceHash: string;
+  model: string;
+  modelHash?: string;
+  promptHash?: string;
+  wikiStateHash?: string;
+  analysisHash?: string;
+  estimatedCalls: number;
+  estimatedTokens: number;
+  maxTokens: number;
+  callPlan: Array<{
+    stage: string;
+    item?: string;
+    expectedCalls: number;
+    maxCalls: number;
+    expectedInputTokens?: number;
+    hardInputTokens?: number;
+    expectedOutputTokens?: number;
+    hardOutputTokens?: number;
+    expectedTokens?: number;
+    hardTokens?: number;
+    cacheHits?: number;
+  }>;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
   estimatedCostUsd: number;
   maxModelCalls: number;
+  hardTokens?: number;
   affectedPageCandidates: string[];
   requiresDigest: boolean;
   blocked: boolean;
   reason: string;
   createdAt: string;
+}
+
+export interface LlmWikiCompileUsage {
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  retries: number;
+  calls: Array<{
+    stage: string;
+    attempt: number;
+    inputTokens: number;
+    outputTokens: number;
+    maxInputTokens?: number;
+    maxOutputTokens?: number;
+    status?: "running" | "success" | "failed";
+    error?: string;
+  }>;
+}
+
+export interface LlmWikiAnalysisArtifact {
+  sourceId: string;
+  sourceHash: string;
+  schemaHash: string;
+  model: string;
+  compilerVersion: string;
+  promptVersion: string;
+  modelHash?: string;
+  promptHash?: string;
+  analysisHash: string;
+  planHash: string;
+  sourceMap: LlmWikiSourceMap;
+  factLedger: LlmWikiFactLedger;
+  pagePlan: LlmWikiSemanticPagePlan[];
+  usage: LlmWikiCompileUsage;
+  createdAt: string;
+}
+
+export interface LlmWikiChunkAnalysisCacheEntry {
+  cacheKey: string;
+  sourceId: string;
+  sourceHash: string;
+  chunkId: string;
+  chunkStart: number;
+  chunkEnd: number;
+  schemaHash: string;
+  model: string;
+  modelHash: string;
+  promptHash: string;
+  compilerVersion: string;
+  extractedFacts?: LlmWikiFact[];
+  auditComplete?: boolean;
+  facts: LlmWikiFact[];
+  createdAt: string;
+}
+
+export interface LlmWikiFactCoverageResult {
+  factId: string;
+  status: "correct" | "missing" | "incorrect";
+  evidencePath: string;
+  wikiEvidence: string;
+  reason: string;
 }
 
 export type LlmWikiCompileCandidateStatus =
@@ -290,6 +387,7 @@ export interface LlmWikiCompileCandidatePage {
   body: string;
   sourceIds: string[];
   action: "create" | "update" | "delete" | "unchanged";
+  claimedFactIds?: string[];
 }
 
 export interface LlmWikiCompileCandidate {
@@ -301,17 +399,21 @@ export interface LlmWikiCompileCandidate {
   schemaHash: string;
   compilerVersion: string;
   promptVersion: string;
+  modelHash?: string;
+  promptHash?: string;
   sourceHash: string;
   sourceTitle: string;
+  analysisHash?: string;
   pages: LlmWikiCompileCandidatePage[];
   claims: LlmWikiClaim[];
+  pageClaims?: LlmWikiPageClaims[];
+  coverageReport?: LlmWikiCoverageReport;
   affectedPages: string[];
   issues: LlmWikiPublishGateIssue[];
-  modelUsage: {
-    modelCalls: number;
-    inputTokens: number;
-    outputTokens: number;
-    estimatedCostUsd: number;
+  modelUsage: LlmWikiCompileUsage;
+  phaseUsage?: {
+    analysis: LlmWikiCompileUsage;
+    compose: LlmWikiCompileUsage;
   };
   createdAt: string;
   updatedAt: string;
@@ -407,6 +509,16 @@ export interface LlmWikiCoverageReport {
   mustCovered: number;
   mustCoverage: number;
   missingMustFactIds: string[];
+  requiredTotal?: number;
+  requiredCovered?: number;
+  requiredCoverage?: number;
+  missingRequiredFactIds?: string[];
+  totalFacts?: number;
+  correct?: number;
+  missing?: number;
+  incorrect?: number;
+  repairPasses?: number;
+  facts?: LlmWikiFactCoverageResult[];
 }
 
 export interface LlmWikiIngestJobReport {
@@ -426,11 +538,26 @@ export interface LlmWikiIngestJobReport {
   planHash?: string;
   estimatedCostUsd?: number;
   modelCalls?: number;
+  actualTokens?: number;
+  maxModelCalls?: number;
+  maxTokens?: number;
+  usage?: LlmWikiCompileUsage;
   events?: LlmWikiIngestJobEvent[];
 }
 
 export interface LlmWikiSourceArtifacts {
   source: LlmWikiSourceWithCompile;
+  analysis: {
+    analysisHash: string;
+    planHash: string;
+    model: string;
+    compilerVersion: string;
+    promptVersion: string;
+    pageCount: number;
+    factCount: number;
+    usage: LlmWikiCompileUsage;
+    createdAt: string;
+  } | null;
   sourceMap: {
     title: string;
     sha256: string;

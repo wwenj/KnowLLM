@@ -46,14 +46,27 @@ export class LlmWikiRetrievalService {
         sourceId: source.source_id,
         count: this.store.readFactLedger(source.source_id)?.facts.length || 0,
       })),
-      sources: sources.map(({ source_id, filename, status, touched_pages, sha256, ingested_at }) => ({
-        source_id,
-        filename,
-        status,
-        touched_pages,
-        sha256,
-        ingested_at,
-      })),
+      sources: sources.map(({ source_id, filename, status, touched_pages, sha256, ingested_at, latest_candidate_id }) => {
+        let candidate: ReturnType<LlmWikiStoreService["readCompileCandidate"]> | null = null;
+        if (latest_candidate_id) {
+          try {
+            candidate = this.store.readCompileCandidate(latest_candidate_id);
+          } catch {
+            candidate = null;
+          }
+        }
+        return {
+          source_id,
+          filename,
+          status,
+          touched_pages,
+          sha256,
+          ingested_at,
+          compiler_version: candidate?.compilerVersion || "",
+          prompt_version: candidate?.promptVersion || "",
+          compile_model: candidate?.model || "",
+        };
+      }),
     };
   }
 

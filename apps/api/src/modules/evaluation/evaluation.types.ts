@@ -1,6 +1,12 @@
 export type CompileEvaluationFactStatus = "correct" | "missing" | "incorrect";
-export type CompileEvaluationCaseStatus = "pending" | "running" | "success" | "source_missing" | "failed";
-export type CompileEvaluationRunStatus = "running" | "success" | "failed";
+export type CompileEvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "source_missing"
+  | "evaluation_failed"
+  | "failed";
+export type CompileEvaluationRunStatus = "running" | "success" | "partial" | "failed";
 export type CompileEvaluationFactImportance = "must" | "should" | "nice";
 export type CompileEvaluationPassLevel = "excellent" | "pass" | "needs_improvement" | "failed";
 
@@ -52,6 +58,13 @@ export interface CompileEvaluationMatchedSource {
   ingestedAt: string;
 }
 
+export interface CompileEvaluationUsage {
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface CompileEvaluationFactResult extends CompileEvaluationExpectedFact {
   status: CompileEvaluationFactStatus;
   evidencePath: string;
@@ -72,7 +85,42 @@ export interface CompileEvaluationCaseResult {
   matchedSources: CompileEvaluationMatchedSource[];
   pagePaths: string[];
   facts: CompileEvaluationFactResult[];
+  usage?: CompileEvaluationUsage;
   error: string;
+}
+
+export interface CompileEvaluationWikiSnapshot {
+  snapshotHash: string;
+  createdAt: string;
+  sources: Array<{
+    sourceId: string;
+    filename: string;
+    status: string;
+    sha256: string;
+    ingestedAt: string;
+    compilerVersion: string;
+    promptVersion: string;
+    compileModel: string;
+  }>;
+  pages: Array<{
+    path: string;
+    title: string;
+    content: string;
+    sourceIds: string[];
+  }>;
+  pageClaims: Array<{
+    path: string;
+    factIds: string[];
+    sourceIds: string[];
+  }>;
+  facts: Array<{
+    factId: string;
+    sourceId: string;
+    fact: string;
+    evidence: string;
+    entities: string[];
+    type: string;
+  }>;
 }
 
 export interface CompileEvaluationSummary {
@@ -104,6 +152,15 @@ export interface CompileEvaluationRun {
   datasetName: string;
   caseIds: string[];
   judgeModel: string;
+  judgeProvider: string;
+  datasetHash: string;
+  wikiSnapshotHash: string;
+  compilerVersions: string[];
+  promptVersions: string[];
+  compileModels: string[];
+  workerCount: number;
+  retryOfRunId: string;
+  usage?: CompileEvaluationUsage;
   status: CompileEvaluationRunStatus;
   startedAt: string;
   endedAt: string;
@@ -122,6 +179,15 @@ export interface CompileEvaluationRunSummary {
   datasetId: string;
   datasetName: string;
   judgeModel: string;
+  judgeProvider: string;
+  datasetHash: string;
+  wikiSnapshotHash: string;
+  compilerVersions: string[];
+  promptVersions: string[];
+  compileModels: string[];
+  workerCount: number;
+  retryOfRunId: string;
+  usage?: CompileEvaluationUsage;
   status: CompileEvaluationRunStatus;
   startedAt: string;
   endedAt: string;

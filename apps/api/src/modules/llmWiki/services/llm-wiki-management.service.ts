@@ -47,6 +47,7 @@ export class LlmWikiManagementService implements OnModuleInit {
 
   sourceArtifacts(sourceId: string): LlmWikiSourceArtifacts {
     const source = this.enrichSource(this.store.getSource(sourceId));
+    const analysis = this.store.readAnalysisArtifact(source.source_id);
     const sourceMap = this.store.readSourceMap(source.source_id);
     const factLedger = this.store.readFactLedger(source.source_id);
     const latestCandidate = source.latest_candidate_id
@@ -63,6 +64,19 @@ export class LlmWikiManagementService implements OnModuleInit {
     const latestJob = this.store.getLatestIngestJobForSource(source.source_id);
     return {
       source,
+      analysis: analysis
+        ? {
+            analysisHash: analysis.analysisHash,
+            planHash: analysis.planHash,
+            model: analysis.model,
+            compilerVersion: analysis.compilerVersion,
+            promptVersion: analysis.promptVersion,
+            pageCount: analysis.pagePlan.length,
+            factCount: analysis.factLedger.facts.length,
+            usage: analysis.usage,
+            createdAt: analysis.createdAt,
+          }
+        : null,
       sourceMap: sourceMap
         ? {
             title: sourceMap.title,
@@ -104,16 +118,16 @@ export class LlmWikiManagementService implements OnModuleInit {
     return this.store.createSource(filename, data);
   }
 
-  estimateCompile(sourceIds: string[]) {
-    return this.ingest.estimateCompile(sourceIds);
+  estimateCompile(sourceIds: string[], model = "", phase = "", forceAnalyze = false) {
+    return this.ingest.estimateCompile(sourceIds, model, phase, forceAnalyze);
   }
 
-  compileSources(sourceIds: string[], model = "", confirmHash = "") {
-    return this.ingest.compileSources(sourceIds, model, confirmHash);
+  compileSources(sourceIds: string[], model = "", confirmHash = "", phase = "", forceAnalyze = false) {
+    return this.ingest.compileSources(sourceIds, model, confirmHash, phase, forceAnalyze);
   }
 
-  ingestSource(sourceId: string, model = "", confirmHash = "") {
-    return this.ingest.ingestSource(sourceId, model, confirmHash);
+  ingestSource(sourceId: string, model = "", confirmHash = "", phase = "", forceAnalyze = false) {
+    return this.ingest.ingestSource(sourceId, model, confirmHash, phase, forceAnalyze);
   }
 
   stopIngest(sourceId: string) {
@@ -140,6 +154,12 @@ export class LlmWikiManagementService implements OnModuleInit {
     const jobs = this.ingest.rebuildAll(model);
     this.search.invalidate();
     return { ok: true, jobs, mode: "manifest_only" };
+  }
+
+  resetCompilerV3Artifacts() {
+    const backupPath = this.store.backupAndClearCompiledWikiArtifacts();
+    this.search.invalidate();
+    return { ok: true, backupPath };
   }
 
   getSchema() {
@@ -176,6 +196,10 @@ export class LlmWikiManagementService implements OnModuleInit {
 
   listIssues(status?: "open" | "resolved" | "all") {
     return this.issues.list(status || "open");
+  }
+
+  clearIssues(status?: "open" | "resolved" | "all") {
+    return this.issues.clear(status || "open");
   }
 
   resolveIssue(issueId: string) {

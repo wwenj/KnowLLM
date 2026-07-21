@@ -1,8 +1,17 @@
 import { http } from "./http";
 
+export const BUILTIN_COMPILE_EVALUATION_DATASET_ID = "zh_klipper3d_manual_mini";
+export const COMPILE_EVALUATION_SMOKE_CASE_IDS = ["C001", "C003", "C017", "C024", "C049"] as const;
+
 export type CompileEvaluationFactStatus = "correct" | "missing" | "incorrect";
-export type CompileEvaluationCaseStatus = "pending" | "running" | "success" | "source_missing" | "failed";
-export type CompileEvaluationRunStatus = "running" | "success" | "failed";
+export type CompileEvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "source_missing"
+  | "evaluation_failed"
+  | "failed";
+export type CompileEvaluationRunStatus = "running" | "success" | "partial" | "failed";
 export type CompileEvaluationFactImportance = "must" | "should" | "nice";
 export type CompileEvaluationPassLevel = "excellent" | "pass" | "needs_improvement" | "failed";
 
@@ -64,6 +73,7 @@ export interface CompileEvaluationCaseResult {
   }>;
   pagePaths: string[];
   facts: CompileEvaluationFactResult[];
+  usage?: CompileEvaluationUsage;
   error: string;
 }
 
@@ -87,11 +97,27 @@ export interface CompileEvaluationSummary {
   failedCases: number;
 }
 
+export interface CompileEvaluationUsage {
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface CompileEvaluationRunSummary {
   runId: string;
   datasetId: string;
   datasetName: string;
   judgeModel: string;
+  judgeProvider: string;
+  datasetHash: string;
+  wikiSnapshotHash: string;
+  compilerVersions: string[];
+  promptVersions: string[];
+  compileModels: string[];
+  workerCount: number;
+  retryOfRunId: string;
+  usage?: CompileEvaluationUsage;
   status: CompileEvaluationRunStatus;
   startedAt: string;
   endedAt: string;
@@ -130,8 +156,13 @@ export const compileEvaluationApi = {
     http.delete<{ deleted: true }>(
       `/api/evaluations/llm-wiki-compile/datasets/${encodeURIComponent(datasetId)}`,
     ),
-  createRun: (body: { datasetId: string; caseIds?: string[]; judgeModel?: string }) =>
+  createRun: (body: { datasetId: string; caseIds?: string[]; judgeModel?: string; concurrency?: number }) =>
     http.post<CompileEvaluationRun>("/api/evaluations/llm-wiki-compile/runs", body),
+  retryFailed: (runId: string, body?: { judgeModel?: string; concurrency?: number }) =>
+    http.post<CompileEvaluationRun>(
+      `/api/evaluations/llm-wiki-compile/runs/${encodeURIComponent(runId)}/retry-failed`,
+      body || {},
+    ),
   listRuns: (limit = 50, silent = false) =>
     http.get<{ items: CompileEvaluationRunSummary[] }>(
       "/api/evaluations/llm-wiki-compile/runs",

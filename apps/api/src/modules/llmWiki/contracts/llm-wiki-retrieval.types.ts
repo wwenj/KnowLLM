@@ -30,7 +30,11 @@ export interface LlmWikiRetrievalManifest {
     Pick<
       LlmWikiSourceMeta,
       "source_id" | "filename" | "status" | "touched_pages" | "sha256" | "ingested_at"
-    >
+    > & {
+      compiler_version?: string;
+      prompt_version?: string;
+      compile_model?: string;
+    }
   >;
 }
 

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { sha256 } from "../../../common/fs-json";
-import type { CompileEvaluationDataset } from "../evaluation.types";
+import type { CompileEvaluationDataset, CompileEvaluationWikiSnapshot } from "../evaluation.types";
 import { CompileEvaluationStoreService } from "./compile-evaluation-store.service";
 
 test("compile evaluation store deletes uploaded datasets and finished runs", () => {
@@ -22,11 +22,32 @@ test("compile evaluation store deletes uploaded datasets and finished runs", () 
     assert.throws(() => store.getDataset(dataset.datasetId), /评测数据集不存在/);
 
     store.saveDataset(dataset);
-    const run = store.createRun({ dataset, caseIds: ["case-a"], judgeModel: "judge" });
+    const snapshot: CompileEvaluationWikiSnapshot = {
+      snapshotHash: "snapshot-hash",
+      createdAt: "2026-07-02T00:00:00.000Z",
+      sources: [],
+      pages: [],
+      pageClaims: [],
+      facts: [],
+    };
+    const run = store.createRun({
+      dataset,
+      caseIds: ["case-a"],
+      judgeModel: "provider:judge",
+      datasetHash: "dataset-hash",
+      snapshot,
+      workerCount: 3,
+    });
+    assert.equal(store.getSnapshot(run.runId).snapshotHash, "snapshot-hash");
+    assert.equal(run.datasetHash, "dataset-hash");
+    assert.equal(run.wikiSnapshotHash, "snapshot-hash");
+    assert.equal(run.judgeProvider, "provider");
+    assert.equal(run.workerCount, 3);
     assert.throws(() => store.deleteRun(run.runId), /运行中的评测不能删除/);
     store.saveRun({ ...run, status: "success", endedAt: "2026-07-02T00:00:00.000Z" });
     assert.deepEqual(store.deleteRun(run.runId), { deleted: true });
     assert.throws(() => store.getRun(run.runId), /评测运行记录不存在/);
+    assert.throws(() => store.getSnapshot(run.runId), /评测 Wiki 快照不存在/);
   } finally {
     if (previousRoot === undefined) {
       delete process.env.KNOWLLM_DATA_ROOT;

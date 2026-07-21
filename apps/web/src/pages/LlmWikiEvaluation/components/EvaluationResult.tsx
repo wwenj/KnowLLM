@@ -3,6 +3,7 @@ import {
   CircleAlert,
   FileCheck2,
   Loader2,
+  RotateCcw,
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -13,6 +14,7 @@ import type {
   CompileEvaluationRun,
 } from "@/api/evaluation";
 import { StatusTag } from "@/components/StatusTag";
+import { Button } from "@/components/ui/button";
 import { formatDate } from "../utils";
 
 const factStatusConfig: Record<
@@ -59,7 +61,15 @@ interface FactRow {
   fact: CompileEvaluationFactResult;
 }
 
-export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) {
+export function EvaluationResult({
+  run,
+  retrying = false,
+  onRetryFailed,
+}: {
+  run: CompileEvaluationRun | null;
+  retrying?: boolean;
+  onRetryFailed?: () => void;
+}) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("issues");
   const [importanceFilter, setImportanceFilter] = useState<ImportanceFilter>("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -102,6 +112,7 @@ export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) 
   const weightedScore = summary.weightedScore ?? summary.accuracy * 100;
   const mustAccuracy = summary.mustAccuracy ?? 0;
   const passLevel = summary.passLevel || "failed";
+  const scoreAvailable = summary.totalFacts > 0;
 
   return (
     <div className="space-y-3">
@@ -110,14 +121,16 @@ export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) 
           <div className="flex min-w-[160px] items-start gap-3">
             <div>
               <div className="text-4xl font-semibold leading-none tabular-nums text-slate-950">
-                {formatScore(weightedScore)}
+                {scoreAvailable ? formatScore(weightedScore) : "—"}
               </div>
               <div className="mt-1 text-xs text-slate-500">加权分</div>
             </div>
             <div className="flex flex-col gap-1 pt-1">
-              <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-xs ${passLevelClass(passLevel)}`}>
-                {passLevelText[passLevel]}
-              </span>
+              {scoreAvailable && (
+                <span className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-xs ${passLevelClass(passLevel)}`}>
+                  {passLevelText[passLevel]}
+                </span>
+              )}
               <StatusTag status={run.status} />
             </div>
           </div>
@@ -129,7 +142,14 @@ export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) 
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
               <span>{run.judgeModel}</span>
               <span>{run.progress.completed}/{run.progress.total} cases</span>
+              <span>workers {run.workerCount}</span>
+              <span>{run.usage?.modelCalls || 0} calls / {run.usage?.totalTokens || 0} tokens</span>
               <span>{formatDate(run.startedAt)}</span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
+              <span title={run.datasetHash}>dataset {shortHash(run.datasetHash)}</span>
+              <span title={run.wikiSnapshotHash}>wiki {shortHash(run.wikiSnapshotHash)}</span>
+              <span>{run.compilerVersions.join(", ") || "legacy compiler"}</span>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
               <div
@@ -154,6 +174,24 @@ export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) 
           {run.progress.currentCaseId}
         </div>
       )}
+      {!!run.summary.failedCases && run.status !== "running" && (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          <span>{run.summary.failedCases} 个 case 因 Judge/API 失败，未进入质量分母。</span>
+          {onRetryFailed && (
+            <Button size="sm" variant="outline" disabled={retrying} onClick={onRetryFailed}>
+              {retrying ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+              重跑失败项
+            </Button>
+          )}
+        </div>
+      )}
+      {run.cases
+        .filter((item) => item.status === "evaluation_failed" || item.status === "failed")
+        .map((item) => (
+          <div key={item.caseId} className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            <span className="font-medium">{item.caseId}</span>：{item.error || "评测执行失败"}
+          </div>
+        ))}
       {run.errors.map((error) => (
         <div
           key={error}
@@ -218,6 +256,10 @@ export function EvaluationResult({ run }: { run: CompileEvaluationRun | null }) 
       </section>
     </div>
   );
+}
+
+function shortHash(value: string): string {
+  return value ? value.slice(0, 10) : "legacy";
 }
 
 function flattenFacts(run: CompileEvaluationRun | null): FactRow[] {

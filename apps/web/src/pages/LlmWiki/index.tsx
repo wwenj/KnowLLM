@@ -6,6 +6,7 @@ import {
   llmWikiApi,
   type LlmWikiCompilePlan,
   type LlmWikiIssue,
+  type LlmWikiIssueStatus,
   type LlmWikiPage,
   type LlmWikiSearchHit,
   type LlmWikiSchema,
@@ -27,7 +28,6 @@ import type { BulkAction, RawSource, StatusFilter } from "./types";
 import { isWikiPageTarget } from "./utils";
 
 const INGEST_MODEL_STORAGE_KEY = "knowllm.llmWiki.ingestModel";
-type IssueStatusFilter = "open" | "resolved" | "all";
 
 export function LlmWiki() {
   const [sources, setSources] = useState<LlmWikiSource[]>([]);
@@ -73,9 +73,10 @@ export function LlmWiki() {
   const [schemaSaving, setSchemaSaving] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [issues, setIssues] = useState<LlmWikiIssue[]>([]);
-  const [issueStatus, setIssueStatus] = useState<IssueStatusFilter>("open");
+  const [issueStatus, setIssueStatus] = useState<LlmWikiIssueStatus>("open");
   const [issueTotals, setIssueTotals] = useState({ open: 0, resolved: 0, all: 0 });
   const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesClearing, setIssuesClearing] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async (silent = false) => {
@@ -241,18 +242,24 @@ export function LlmWiki() {
     }
   };
 
-  const handleIngest = async (source: LlmWikiSource) => {
+  const handleIngest = async (source: LlmWikiSource, forceAnalyze = false) => {
     if (!ingestModel) {
       toast.error("请先选择编译模型");
       return;
     }
-    const estimate = await llmWikiApi.estimateCompile([source.source_id]);
+    const estimate = await llmWikiApi.estimateCompile([source.source_id], ingestModel, undefined, forceAnalyze);
     if (estimate.plan.blocked) {
       toast.error(estimate.plan.reason || "当前 source 不能自动编译");
       return;
     }
     if (!window.confirm(compileConfirmText(estimate.plan))) return;
-    const result = await llmWikiApi.compileSources([source.source_id], ingestModel, estimate.plan.hash);
+    const result = await llmWikiApi.compileSources(
+      [source.source_id],
+      ingestModel,
+      estimate.plan.hash,
+      estimate.plan.phase,
+      forceAnalyze,
+    );
     setActiveSourceId(source.source_id);
     toast.success(compileResultText(result.jobs?.length || 0, result.skipped?.length || 0));
     await refresh(true);
@@ -322,13 +329,18 @@ export function LlmWiki() {
     setBulkAction("ingest");
     try {
       const sourceIds = targets.map((source) => source.source_id);
-      const estimate = await llmWikiApi.estimateCompile(sourceIds);
+      const estimate = await llmWikiApi.estimateCompile(sourceIds, ingestModel);
       if (estimate.plan.blocked) {
         toast.error(estimate.plan.reason || "当前批量文档不能自动编译");
         return;
       }
       if (!window.confirm(compileConfirmText(estimate.plan))) return;
-      const result = await llmWikiApi.compileSources(sourceIds, ingestModel, estimate.plan.hash);
+      const result = await llmWikiApi.compileSources(
+        sourceIds,
+        ingestModel,
+        estimate.plan.hash,
+        estimate.plan.phase,
+      );
       toast.success(compileResultText(result.jobs?.length || 0, result.skipped?.length || 0));
       clearSelection();
       await refresh(true);
@@ -518,7 +530,7 @@ export function LlmWiki() {
     await loadIssues("open");
   };
 
-  const changeIssueStatus = async (status: IssueStatusFilter) => {
+  const changeIssueStatus = async (status: LlmWikiIssueStatus) => {
     setIssueStatus(status);
     await loadIssues(status);
   };
@@ -544,6 +556,17 @@ export function LlmWiki() {
     await llmWikiApi.resolveIssue(issue.id);
     await loadIssues(issueStatus, true);
     toast.success("Issue 已解决");
+  };
+
+  const clearIssues = async () => {
+    setIssuesClearing(true);
+    try {
+      const result = await llmWikiApi.clearIssues(issueStatus);
+      await loadIssues(issueStatus, true);
+      toast.success(`已清空 ${result.cleared} 条 ${issueStatus} issue`);
+    } finally {
+      setIssuesClearing(false);
+    }
   };
 
   const openIssueTarget = async (issue: LlmWikiIssue) => {
@@ -655,6 +678,7 @@ export function LlmWiki() {
             artifacts={sourceArtifacts}
             loading={sourceArtifactsLoading}
             onIngest={(source) => void handleIngest(source)}
+            onReanalyze={(source) => void handleIngest(source, true)}
             onStopIngest={(source) => void handleStopIngest(source)}
             onOpenRaw={(source) => void openRaw(source)}
             onOpenPage={(path) => void openWiki(path)}
@@ -721,10 +745,12 @@ export function LlmWiki() {
         issueStatus={issueStatus}
         issueTotals={issueTotals}
         issuesLoading={issuesLoading}
+        issuesClearing={issuesClearing}
         lintLoading={lintLoading}
         onRunLint={() => void runLint()}
         onRefresh={() => void loadIssues(issueStatus)}
         onIssueStatusChange={(status) => void changeIssueStatus(status)}
+        onClearIssues={() => void clearIssues()}
         onResolve={(issue) => void resolveIssue(issue)}
         onOpenTarget={(issue) => void openIssueTarget(issue)}
         onCopyTarget={(issue) => void copyIssueTarget(issue)}
@@ -748,8 +774,16 @@ function compileConfirmText(plan: LlmWikiCompilePlan): string {
     : "未知";
   return [
     `将编译 ${plan.sourceIds.length} 个 source。`,
-    `最多 ${plan.maxModelCalls} 次模型调用，预计 ${plan.estimatedInputTokens + plan.estimatedOutputTokens} tokens，约 ${cost}。`,
-    "确认后才会提交编译任务。",
+    `阶段：${plan.phase === "analyze" ? "Analyze（事实提取、遗漏审计、确定性页面规划）" : "Compose（逐页生成、逐页验证、一次修复）"}。`,
+    `预计 ${plan.estimatedCalls} 次、最多 ${plan.maxModelCalls} 次模型调用。`,
+    `预计 ${plan.estimatedTokens} tokens、硬上限 ${plan.maxTokens} tokens，约 ${cost}。`,
+    ...plan.callPlan.map((item) =>
+      `${item.stage}：预计 ${item.expectedCalls} / 最多 ${item.maxCalls} 次，硬上限 ${item.hardTokens || 0} tokens${item.cacheHits ? `，缓存命中 ${item.cacheHits} 块` : ""}`,
+    ),
+    `plan ${plan.planHash.slice(0, 12)} · source ${plan.sourceHash.slice(0, 12)} · schema ${plan.schemaHash.slice(0, 12)} · model ${(plan.modelHash || plan.model).slice(0, 12)} · prompt ${(plan.promptHash || plan.promptVersion).slice(0, 12)}`,
+    plan.phase === "analyze"
+      ? "确认后只保存分析产物，不发布页面。"
+      : "只有全部 required facts 覆盖且无错误才会发布页面。",
   ].join("\n");
 }
 

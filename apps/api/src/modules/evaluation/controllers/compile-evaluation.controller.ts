@@ -66,6 +66,11 @@ export class CompileEvaluationController {
     return this.run(() => this.evaluations.getRun(runId));
   }
 
+  @Post("runs/:runId/retry-failed")
+  retryFailed(@Param("runId") runId: string, @Body() body: unknown) {
+    return this.run(() => this.evaluations.retryFailed(runId, body));
+  }
+
   @Delete("runs/:runId")
   deleteRun(@Param("runId") runId: string) {
     return this.run(() => this.evaluations.deleteRun(runId));

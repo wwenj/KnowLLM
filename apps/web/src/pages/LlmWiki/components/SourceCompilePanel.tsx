@@ -25,19 +25,21 @@ interface SourceCompilePanelProps {
   artifacts: LlmWikiSourceArtifacts | null;
   loading: boolean;
   onIngest: (source: LlmWikiSource) => void;
+  onReanalyze: (source: LlmWikiSource) => void;
   onStopIngest: (source: LlmWikiSource) => void;
   onOpenRaw: (source: LlmWikiSource) => void;
   onOpenPage: (path: string) => void;
   onRefresh: () => void;
 }
 
-const pipelineStages = ["queued", "compiling", "candidate_ready", "published"];
+const pipelineStages = ["queued", "analyze", "analysis_ready", "compose", "published"];
 
 export function SourceCompilePanel({
   source,
   artifacts,
   loading,
   onIngest,
+  onReanalyze,
   onStopIngest,
   onOpenRaw,
   onOpenPage,
@@ -126,6 +128,21 @@ export function SourceCompilePanel({
           <Metric label="linked pages" value={compile?.pageClaimCount ?? effectiveArtifacts?.pageClaims.length ?? 0} />
           <Metric label="must" value={formatPercent(compile?.mustCoverage)} />
         </section>
+
+        {effectiveArtifacts?.analysis && (
+          <section className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Analysis</div>
+            <div className="space-y-2 text-xs text-slate-600">
+              <InfoRow label="hash" value={effectiveArtifacts.analysis.analysisHash} mono />
+              <InfoRow label="facts/pages" value={`${effectiveArtifacts.analysis.factCount} / ${effectiveArtifacts.analysis.pageCount}`} />
+              <InfoRow label="calls" value={`${effectiveArtifacts.analysis.usage.modelCalls}（retry ${effectiveArtifacts.analysis.usage.retries}）`} />
+              <InfoRow
+                label="tokens"
+                value={String(effectiveArtifacts.analysis.usage.inputTokens + effectiveArtifacts.analysis.usage.outputTokens)}
+              />
+            </div>
+          </section>
+        )}
 
         {!!issueCount && (
           <section className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -245,8 +262,20 @@ export function SourceCompilePanel({
           onClick={() => (compiling ? onStopIngest(current) : onIngest(current))}
         >
           {compiling ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-          {compiling ? "停止编译" : current.status === "published" || current.status === "ready" ? "重编译" : "编译"}
+          {compiling
+            ? "停止编译"
+            : current.status === "analysis_ready"
+              ? "生成页面"
+              : current.status === "published" || current.status === "ready"
+                ? "重编译"
+                : "编译"}
         </Button>
+        {!compiling && current.status !== "raw_uploaded" && (
+          <Button variant="outline" onClick={() => onReanalyze(current)}>
+            <RefreshCw className="size-4" />
+            重新分析
+          </Button>
+        )}
         <Button variant="outline" onClick={() => onOpenRaw(current)}>
           源文
         </Button>
@@ -278,6 +307,8 @@ function JobDetails({ job }: { job: LlmWikiIngestJobReport }) {
           <InfoRow label="stage" value={ingestStageLabels[job.stage] || job.stage || "-"} />
           <InfoRow label="started" value={formatTime(job.startedAt) || "-"} />
           <InfoRow label="ended" value={formatTime(job.endedAt) || "-"} />
+          <InfoRow label="calls" value={`${job.modelCalls || 0} / ${job.maxModelCalls || "-"}`} />
+          <InfoRow label="tokens" value={`${job.actualTokens || 0} / ${job.maxTokens || "-"}`} />
         </div>
       </div>
 
@@ -289,6 +320,20 @@ function JobDetails({ job }: { job: LlmWikiIngestJobReport }) {
       </div>
 
       <JobTimeline job={job} />
+
+      {!!job.usage?.calls.length && (
+        <div>
+          <div className="mb-1 text-[11px] font-medium uppercase text-slate-400">Model calls</div>
+          <div className="max-h-36 space-y-1 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] text-slate-600">
+            {job.usage.calls.map((call, index) => (
+              <div key={`${call.stage}-${call.attempt}-${index}`} className="break-words">
+                {index + 1}. {call.stage}#{call.attempt} · {call.status || "success"} · {call.inputTokens + call.outputTokens} tokens
+                {call.error ? ` · ${call.error}` : ""}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {job.error && (
         <div className="rounded-md border border-rose-200 bg-rose-50 p-2 text-rose-800">
@@ -411,8 +456,13 @@ function groupPages(pages: LlmWikiPageRef[]): Partial<Record<LlmWikiPageRef["typ
 }
 
 function stageReached(current = "", stage: string, status?: string): boolean {
-  if (status === "success") return true;
-  const currentIndex = pipelineStages.indexOf(current);
+  if (status === "success" && current === "published") return true;
+  const normalizedCurrent = current === "candidate_ready" || current === "needs_review"
+    ? "compose"
+    : current === "compiling"
+      ? "analyze"
+      : current;
+  const currentIndex = pipelineStages.indexOf(normalizedCurrent);
   const stageIndex = pipelineStages.indexOf(stage);
   return currentIndex >= 0 && stageIndex >= 0 && stageIndex <= currentIndex;
 }

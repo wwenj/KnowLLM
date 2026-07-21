@@ -53,8 +53,10 @@ export class LlmWikiManagementController {
     @Param("sourceId") sourceId: string,
     @Body("model") model = "",
     @Body("confirmHash") confirmHash = "",
+    @Body("phase") phase = "",
+    @Body("forceAnalyze") forceAnalyze = false,
   ) {
-    return this.run(() => this.wiki.ingestSource(sourceId, model, confirmHash));
+    return this.run(() => this.wiki.ingestSource(sourceId, model, confirmHash, phase, forceAnalyze));
   }
 
   @Post("sources/:sourceId/ingest/stop")
@@ -82,9 +84,19 @@ export class LlmWikiManagementController {
     return this.run(() => this.wiki.rebuild(model));
   }
 
+  @Post("compiler-v3/reset")
+  resetCompilerV3Artifacts() {
+    return this.run(() => this.wiki.resetCompilerV3Artifacts());
+  }
+
   @Post("compile/estimate")
-  estimateCompile(@Body("sourceIds") sourceIds: string[] = []) {
-    return this.run(() => this.wiki.estimateCompile(sourceIds));
+  estimateCompile(
+    @Body("sourceIds") sourceIds: string[] = [],
+    @Body("model") model = "",
+    @Body("phase") phase = "",
+    @Body("forceAnalyze") forceAnalyze = false,
+  ) {
+    return this.run(() => this.wiki.estimateCompile(sourceIds, model, phase, forceAnalyze));
   }
 
   @Post("compile")
@@ -92,8 +104,10 @@ export class LlmWikiManagementController {
     @Body("sourceIds") sourceIds: string[] = [],
     @Body("model") model = "",
     @Body("confirmHash") confirmHash = "",
+    @Body("phase") phase = "",
+    @Body("forceAnalyze") forceAnalyze = false,
   ) {
-    return this.run(() => this.wiki.compileSources(sourceIds, model, confirmHash));
+    return this.run(() => this.wiki.compileSources(sourceIds, model, confirmHash, phase, forceAnalyze));
   }
 
   @Get("candidates")
@@ -148,6 +162,11 @@ export class LlmWikiManagementController {
   @Get("issues")
   issues(@Query("status") status?: "open" | "resolved" | "all") {
     return this.run(() => this.wiki.listIssues(status));
+  }
+
+  @Post("issues/clear")
+  clearIssues(@Body("status") status?: "open" | "resolved" | "all") {
+    return this.run(() => this.wiki.clearIssues(status));
   }
 
   @Post("issues/:issueId/resolve")

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import test from "node:test";
-import { normalizeDataset } from "./compile-evaluation-dataset.service";
+import { BUILTIN_COMPILE_DATASET_ID, loadBuiltInCompileDataset, normalizeDataset } from "./compile-evaluation-dataset.service";
 
 test("compile evaluation dataset validates sources, cases and expected facts", () => {
   const sourceContent = "fact a\n";
@@ -46,4 +46,14 @@ test("compile evaluation dataset accepts directory compile_cases json", () => {
   assert.equal(dataset.cases.length, 51);
   assert.equal(dataset.cases[0].sourceIds[0], "S001");
   assert.equal(dataset.cases[0].expectedFacts[0].sourceFile, "01-安装.md");
+});
+
+test("compile evaluation dataset loads built-in Klipper dataset", () => {
+  const dataset = loadBuiltInCompileDataset("2026-07-09T00:00:00.000Z");
+
+  assert.equal(dataset.datasetId, BUILTIN_COMPILE_DATASET_ID);
+  assert.equal(dataset.uploadedAt, "2026-07-09T00:00:00.000Z");
+  assert.equal(dataset.sources.length, 51);
+  assert.equal(dataset.cases.length, 51);
+  assert.equal(dataset.cases.reduce((sum, item) => sum + item.expectedFacts.length, 0), 306);
 });
