@@ -1,13 +1,21 @@
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from "@nestjs/common";
 import { createHash, randomBytes } from "node:crypto";
 import { ModelService } from "../model/model.service";
 import { LlmWikiNextStore } from "./llm-wiki-next.store";
 import {
   CompileEstimate,
-  CompileJob,
+  CompileExecutionOptions,
+  CompilePool,
+  CompilePoolCancelResult,
+  CompilePoolItem,
   CompileRequest,
-  CompileSourceState,
   CompileUnit,
+  DeleteSourcesResult,
   KeyFact,
   ManifestPage,
   MultiPageWriterOutput,
@@ -17,7 +25,6 @@ import {
   SourceOverlayPage,
   SourceRecord,
   SourceSnapshot,
-  StagingState,
   StagingSummary,
   WikiPagePlan,
   WikiPagePlanItem,
@@ -26,26 +33,32 @@ import {
 
 const PROMPT_VERSION = "llm-wiki-next-v2";
 const PAGE_LIMIT_POLICY_VERSION = "adaptive-pages-v1";
-const PAGE_CHAR_THRESHOLDS = [4_000, 10_000, 19_000, 31_000, 46_000, 64_000] as const;
+const PAGE_CHAR_THRESHOLDS = [
+  4_000, 10_000, 19_000, 31_000, 46_000, 64_000,
+] as const;
 const MODEL_TIMEOUT_MS = 5 * 60_000;
 const MAX_FACTS_PER_PLAN = 5;
-const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
-
 @Injectable()
-export class LlmWikiNextService {
+export class LlmWikiNextService implements OnModuleInit {
   private readonly logger = new Logger(LlmWikiNextService.name);
   private readonly stateMutex = new AsyncMutex();
   private pageMutex = new KeyedMutex();
   private readonly controllers = new Map<string, AbortController>();
   private readonly activeTokens = new Map<string, string>();
+  private schedulerQueued = false;
 
   constructor(
     private readonly store: LlmWikiNextStore,
     private readonly model: ModelService,
   ) {}
 
+  onModuleInit(): void {
+    this.store.clearInterruptedCompileState();
+  }
+
   uploadSource(filename: string, buffer: Buffer): SourceRecord {
-    if (buffer.length > 10 * 1024 * 1024) throw new Error("Source 文件不能超过 10MB");
+    if (buffer.length > 10 * 1024 * 1024)
+      throw new Error("Source 文件不能超过 10MB");
     return this.store.saveSource(filename, buffer);
   }
 
@@ -57,9 +70,57 @@ export class LlmWikiNextService {
     return this.store.getSource(sourceId);
   }
 
+  async deleteSources(sourceIds: string[]): Promise<DeleteSourcesResult> {
+    const ids = [...new Set(sourceIds)];
+    if (!ids.length) throw new Error("请选择至少一个 Source");
+    const result = await this.stateMutex.runExclusive(async () => {
+      // 先验证全部 Source 存在，保证批量删除不会出现部分成功。
+      for (const sourceId of ids) this.store.getSource(sourceId);
+
+      const conflicts = ids
+        .map((sourceId) => ({
+          sourceId,
+          locations: this.store.sourceCompileArtifactLocations(sourceId),
+        }))
+        .filter((item) => item.locations.length > 0);
+      if (conflicts.length) {
+        const details = conflicts
+          .map(({ sourceId, locations }) => {
+            const labels = locations.map((location) =>
+              location === "staging" ? "待发布" : "正式发布",
+            );
+            return `${sourceId}（${labels.join("、")}）`;
+          })
+          .join(", ");
+        throw new ConflictException({
+          message: `以下 Source 仍有关联编译产物，不能删除，请先清除编译产物: ${details}`,
+          error: "SOURCE_HAS_COMPILE_ARTIFACTS",
+        });
+      }
+
+      // 编译状态本身不阻止删除；删除前使对应任务失去写权限，防止晚到响应写回。
+      this.removeSourcesFromCompilePoolLocked(new Set(ids));
+      const staging = this.store.readStagingState();
+      if (staging) {
+        const completedSourceIds = staging.completedSourceIds.filter(
+          (sourceId) => !ids.includes(sourceId),
+        );
+        if (completedSourceIds.length !== staging.completedSourceIds.length) {
+          this.store.updateStagingState({ ...staging, completedSourceIds });
+        }
+      }
+      this.store.deleteSources(ids);
+      return { deletedSourceIds: ids };
+    });
+    this.schedulePool();
+    return result;
+  }
+
   estimateCompile(request: CompileRequest): CompileEstimate {
     const options = this.normalizeOptions(request);
-    const sources = options.sourceIds.map((sourceId) => this.store.getSource(sourceId));
+    const sources = options.sourceIds.map((sourceId) =>
+      this.store.getSource(sourceId),
+    );
     const units = sources.flatMap((source) =>
       splitSource(source, options.chunkChars).map((unit) => ({
         sourceId: source.sourceId,
@@ -72,7 +133,7 @@ export class LlmWikiNextService {
     const maxPlannedPages = units.reduce((sum, unit) => sum + unit.maxPages, 0);
     const maxPlannerCalls = compileUnitCount;
     const maxWriterCalls = compileUnitCount;
-    const stagingGeneration = this.store.stagingMarker();
+    const workspaceMarker = this.store.workspaceMarker();
     const estimateBase = {
       sourceIds: options.sourceIds,
       sourceHashes: sources.map((source) => ({
@@ -82,7 +143,7 @@ export class LlmWikiNextService {
       compileUnitCount,
       units,
       options,
-      stagingGeneration,
+      workspaceMarker,
       promptVersion: PROMPT_VERSION,
       pageLimitPolicyVersion: PAGE_LIMIT_POLICY_VERSION,
     };
@@ -98,80 +159,85 @@ export class LlmWikiNextService {
       maxOutputTokens:
         maxPlannerCalls * options.plannerMaxOutputTokens +
         maxWriterCalls * options.writerMaxOutputTokens,
-      stagingGeneration,
+      workspaceMarker,
       options,
       confirmHash: sha256(stableJson(estimateBase)),
     };
   }
 
-  async compile(request: CompileRequest): Promise<CompileJob> {
-    return this.stateMutex.runExclusive(async () => {
-      const estimate = this.estimateCompile(request);
-      if (!request.confirmHash || request.confirmHash !== estimate.confirmHash) {
+  async compile(request: CompileRequest): Promise<CompilePool> {
+    const estimate = this.estimateCompile(request);
+    if (!request.confirmHash || request.confirmHash !== estimate.confirmHash) {
+      throw new Error("编译确认已失效，请重新执行 estimate");
+    }
+
+    const pool = await this.stateMutex.runExclusive(async () => {
+      if (this.store.workspaceMarker() !== estimate.workspaceMarker) {
         throw new Error("编译确认已失效，请重新执行 estimate");
       }
-      const active = this.findActiveJob();
-      if (active) throw new Error(`已有编译任务正在执行: ${active.jobId}`);
       const currentStaging = this.store.readStagingState();
-      if (currentStaging?.status === "publishing") throw new Error("Staging 正在发布");
+      if (currentStaging?.status === "publishing")
+        throw new Error("Staging 正在发布");
       const staging = this.store.ensureStaging();
-      const duplicated = estimate.sourceIds.filter((id) => staging.completedSourceIds.includes(id));
+      const completed = new Set(staging.completedSourceIds);
+      const existing = this.store.readCompilePool();
+      const activeIds = new Set(
+        (existing?.items || [])
+          .filter((item) =>
+            ["queued", "planning", "writing"].includes(item.status),
+          )
+          .map((item) => item.sourceId),
+      );
+      const duplicated = estimate.sourceIds.filter(
+        (id) => completed.has(id) || activeIds.has(id),
+      );
       if (duplicated.length) {
-        throw new Error(`Source 已合并到当前 Staging: ${duplicated.join(", ")}`);
+        throw new Error(
+          `Source 已在当前 Staging 中排队或合并: ${duplicated.join(", ")}`,
+        );
       }
 
       const now = new Date().toISOString();
-      const jobId = createBase62Id(16);
-      const writeToken = createBase62Id(24);
-      const job: CompileJob = {
-        jobId,
-        status: "queued",
-        options: estimate.options,
-        estimate,
-        sources: estimate.sourceIds.map((sourceId) => emptySourceState(sourceId)),
-        modelCalls: 0,
-        writeToken,
-        error: "",
-        createdAt: now,
-        startedAt: "",
-        finishedAt: "",
-      };
-      this.store.saveJob(job);
-      const controller = new AbortController();
-      this.controllers.set(jobId, controller);
-      this.activeTokens.set(jobId, writeToken);
-      void this.runJob(jobId, writeToken, controller).catch((error) => {
-        this.logger.error(`llmWikiNext 编译任务异常: ${jobId}: ${formatError(error)}`);
-      });
-      return job;
+      const pool: CompilePool = existing
+        ? {
+            ...existing,
+            options: executionOptions(estimate.options),
+            configVersion: existing.configVersion + 1,
+            items: [...existing.items],
+            updatedAt: now,
+          }
+        : {
+            poolId: createBase62Id(16),
+            workspaceId: staging.workspaceId,
+            configVersion: 1,
+            options: executionOptions(estimate.options),
+            items: [],
+            createdAt: now,
+            updatedAt: now,
+          };
+      for (const sourceId of estimate.sourceIds) {
+        const source = this.store.getSource(sourceId);
+        const previous = pool.items.findIndex(
+          (item) => item.sourceId === sourceId,
+        );
+        if (previous >= 0) pool.items.splice(previous, 1);
+        pool.items.push(createPoolItem(source, estimate, now));
+      }
+      this.store.saveCompilePool(pool);
+      return pool;
     });
+    this.schedulePool();
+    return pool;
   }
 
-  getJob(jobId: string): CompileJob {
-    return this.store.getJob(jobId);
+  getCompilePool(): CompilePool | null {
+    return this.store.readCompilePool();
   }
 
-  async cancelJob(jobId: string): Promise<CompileJob> {
-    return this.stateMutex.runExclusive(async () => {
-      const job = this.store.getJob(jobId);
-      if (!ACTIVE_JOB_STATUSES.has(job.status)) throw new Error("任务当前不可取消");
-      this.activeTokens.delete(jobId);
-      this.controllers.get(jobId)?.abort();
-      this.controllers.delete(jobId);
-      const now = new Date().toISOString();
-      const next: CompileJob = {
-        ...job,
-        status: "cancelled",
-        error: "任务已取消",
-        finishedAt: now,
-        sources: job.sources.map((source) =>
-          source.status === "completed" || source.status === "failed"
-            ? source
-            : { ...source, status: "cancelled", error: "任务已取消", finishedAt: now },
-        ),
-      };
-      return this.store.saveJob(next);
-    });
+  async cancelCompilePool(): Promise<CompilePoolCancelResult> {
+    return this.stateMutex.runExclusive(async () =>
+      this.clearCompilePoolLocked(),
+    );
   }
 
   getStaging(): StagingSummary | null {
@@ -183,7 +249,7 @@ export class LlmWikiNextService {
       pageCount: snapshot.manifest.pages.length,
       factCount: countFacts(snapshot),
       pages: snapshot.manifest.pages,
-      activeJob: this.findActiveJob(),
+      compilePool: this.store.readCompilePool(),
     };
   }
 
@@ -194,45 +260,35 @@ export class LlmWikiNextService {
 
   async publishStaging(): Promise<PublishResult> {
     return this.stateMutex.runExclusive(async () => {
-      const active = this.findActiveJob();
-      if (active) throw new Error(`编译任务尚未结束: ${active.jobId}`);
       const state = this.store.readStagingState();
       if (!state) throw new Error("当前没有可发布的 Staging");
       if (state.status !== "open") throw new Error("Staging 当前不可发布");
-      this.store.updateStagingState({ ...state, status: "publishing" });
+      if (!state.completedSourceIds.length)
+        throw new Error("需要至少一个已合并 Source 才能发布");
+      const cancelled = this.clearCompilePoolLocked();
+      const current = this.store.readStagingState();
+      if (!current) throw new Error("当前没有可发布的 Staging");
+      this.store.updateStagingState({ ...current, status: "publishing" });
       try {
         const result = this.store.publishStaging();
         this.pageMutex = new KeyedMutex();
-        return result;
+        return {
+          ...result,
+          cancelledQueuedCount: cancelled.queuedCount,
+          cancelledRunningCount: cancelled.runningCount,
+        };
       } catch (error) {
         const current = this.store.readStagingState();
-        if (current) this.store.updateStagingState({ ...current, status: "open" });
+        if (current)
+          this.store.updateStagingState({ ...current, status: "open" });
         throw error;
       }
     });
   }
 
   async discardStaging(): Promise<{ discarded: true }> {
-    for (const [jobId, controller] of this.controllers) {
-      this.activeTokens.delete(jobId);
-      controller.abort();
-    }
-    this.controllers.clear();
     return this.stateMutex.runExclusive(async () => {
-      const now = new Date().toISOString();
-      for (const job of this.store.listJobs().filter((item) => ACTIVE_JOB_STATUSES.has(item.status))) {
-        this.store.saveJob({
-          ...job,
-          status: "cancelled",
-          error: "Staging 已撤销",
-          finishedAt: now,
-          sources: job.sources.map((source) =>
-            source.status === "completed" || source.status === "failed"
-              ? source
-              : { ...source, status: "cancelled", error: "Staging 已撤销", finishedAt: now },
-          ),
-        });
-      }
+      this.clearCompilePoolLocked();
       this.store.discardStaging();
       this.pageMutex = new KeyedMutex();
       return { discarded: true };
@@ -248,31 +304,55 @@ export class LlmWikiNextService {
   }
 
   searchPublished(query: string, limit = 20) {
-    const normalizedQuery = String(query || "").trim().toLocaleLowerCase();
+    const normalizedQuery = String(query || "")
+      .trim()
+      .toLocaleLowerCase();
     if (!normalizedQuery) return { query: "", items: [] };
     const safeLimit = Math.max(1, Math.min(50, Math.floor(limit) || 20));
     const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
     const documents = this.store.readPublishedSnapshot().searchIndex.documents;
     const items = documents
-      .map((document) => ({ document, score: searchScore(document, normalizedQuery, tokens) }))
+      .map((document) => ({
+        document,
+        score: searchScore(document, normalizedQuery, tokens),
+      }))
       .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.document.title.localeCompare(b.document.title))
+      .sort(
+        (a, b) =>
+          b.score - a.score || a.document.title.localeCompare(b.document.title),
+      )
       .slice(0, safeLimit)
       .map(({ document, score }) => ({ ...document, score }));
     return { query: String(query || "").trim(), items };
   }
 
   private normalizeOptions(request: CompileRequest): NormalizedCompileOptions {
-    const sourceIds = uniqueStrings((request.sourceIds || []).map((id) => String(id || "").trim()));
+    const sourceIds = uniqueStrings(
+      (request.sourceIds || []).map((id) => String(id || "").trim()),
+    );
     if (!sourceIds.length) throw new Error("sourceIds 不能为空");
-    if (sourceIds.length !== (request.sourceIds || []).length) throw new Error("sourceIds 包含空值或重复值");
+    if (sourceIds.length !== (request.sourceIds || []).length)
+      throw new Error("sourceIds 包含空值或重复值");
     const model = String(request.model || "").trim();
-    if (!model || !this.model.findModel(model)) throw new Error(`解析模型不存在或不可用: ${model || "未指定"}`);
+    if (!model || !this.model.findModel(model))
+      throw new Error(`解析模型不存在或不可用: ${model || "未指定"}`);
     return {
       sourceIds,
       model,
-      sourceConcurrency: boundedInt(request.sourceConcurrency, 1, 1, 16, "sourceConcurrency"),
-      chunkChars: boundedInt(request.chunkChars, 12_000, 1_000, 60_000, "chunkChars"),
+      sourceConcurrency: boundedInt(
+        request.sourceConcurrency,
+        1,
+        1,
+        16,
+        "sourceConcurrency",
+      ),
+      chunkChars: boundedInt(
+        request.chunkChars,
+        12_000,
+        1_000,
+        60_000,
+        "chunkChars",
+      ),
       plannerMaxOutputTokens: boundedInt(
         request.plannerMaxOutputTokens,
         2_000,
@@ -290,63 +370,28 @@ export class LlmWikiNextService {
     };
   }
 
-  private async runJob(jobId: string, token: string, controller: AbortController): Promise<void> {
-    try {
-      await this.patchJob(jobId, (job) => ({
-        ...job,
-        status: "running",
-        startedAt: new Date().toISOString(),
-      }));
-      const job = this.store.getJob(jobId);
-      await runWorkers(job.options.sourceIds, job.options.sourceConcurrency, async (sourceId) => {
-        await this.processSource(jobId, token, sourceId, controller.signal);
-      });
-      if (!this.isWritable(jobId, token)) return;
-      await this.patchJob(jobId, (current) => {
-        if (isTerminalJob(current.status)) return current;
-        const hasErrors = current.sources.some((source) => source.status === "failed");
-        return {
-          ...current,
-          status: hasErrors ? "completed_with_errors" : "completed",
-          finishedAt: new Date().toISOString(),
-        };
-      });
-    } catch (error) {
-      if (this.isWritable(jobId, token)) {
-        await this.patchJob(jobId, (job) => ({
-          ...job,
-          status: controller.signal.aborted ? "cancelled" : "failed",
-          error: formatError(error),
-          finishedAt: new Date().toISOString(),
-        }));
-      }
-    } finally {
-      if (this.activeTokens.get(jobId) === token) this.activeTokens.delete(jobId);
-      this.controllers.delete(jobId);
-    }
-  }
-
   private async processSource(
-    jobId: string,
-    token: string,
     sourceId: string,
-    jobSignal: AbortSignal,
+    token: string,
+    signal: AbortSignal,
+    options: CompileExecutionOptions,
   ): Promise<void> {
     const sourceController = new AbortController();
-    const signal = AbortSignal.any([jobSignal, sourceController.signal]);
+    const sourceSignal = AbortSignal.any([signal, sourceController.signal]);
     const allocatedPageKeys: string[] = [];
     let releasePages: (() => void) | null = null;
     try {
-      this.assertWritable(jobId, token);
-      await this.patchSource(jobId, sourceId, {
+      this.assertWritable(sourceId, token);
+      const source = this.store.getSource(sourceId);
+      if (source.contentHash !== this.getPoolItem(sourceId)?.contentHash) {
+        throw new Error("Source 内容已变化，请重新加入待编译池");
+      }
+      const units = splitSource(source, options.chunkChars);
+      await this.patchPoolItem(sourceId, token, {
         status: "planning",
-        startedAt: new Date().toISOString(),
+        compileUnitCount: units.length,
         error: "",
       });
-      const source = this.store.getSource(sourceId);
-      const job = this.store.getJob(jobId);
-      const units = splitSource(source, job.options.chunkChars);
-      await this.patchSource(jobId, sourceId, { compileUnitCount: units.length });
       const catalog = this.store.readStagingSnapshot().manifest.pages;
 
       const planResults = await Promise.allSettled(
@@ -356,19 +401,24 @@ export class LlmWikiNextService {
             const availablePageKeys = await this.reservePageKeys(maxPages);
             allocatedPageKeys.push(...availablePageKeys);
             const plan = await this.runPlanner(
-              jobId,
+              sourceId,
               token,
+              options,
               source,
               unit,
               catalog,
               availablePageKeys,
               maxPages,
-              signal,
+              sourceSignal,
             );
             const usedCreateIds = new Set(
-              plan.pages.filter((page) => page.operation === "create").map((page) => page.pageKey),
+              plan.pages
+                .filter((page) => page.operation === "create")
+                .map((page) => page.pageKey),
             );
-            await this.releasePageKeys(availablePageKeys.filter((id) => !usedCreateIds.has(id)));
+            await this.releasePageKeys(
+              availablePageKeys.filter((id) => !usedCreateIds.has(id)),
+            );
             return { unit, plan };
           } catch (error) {
             sourceController.abort();
@@ -376,31 +426,42 @@ export class LlmWikiNextService {
           }
         }),
       );
-      const rejectedPlan = planResults.find((result) => result.status === "rejected");
+      const rejectedPlan = planResults.find(
+        (result) => result.status === "rejected",
+      );
       if (rejectedPlan?.status === "rejected") throw rejectedPlan.reason;
       const plans = planResults.map((result) => {
         if (result.status !== "fulfilled") throw result.reason;
         return result.value;
       });
-      this.assertWritable(jobId, token);
-      await this.patchSource(jobId, sourceId, {
+      this.assertWritable(sourceId, token);
+      await this.patchPoolItem(sourceId, token, {
         status: "writing",
         plannerCalls: units.length,
       });
 
-      const pageKeys = uniqueStrings(plans.flatMap(({ plan }) => plan.pages.map((page) => page.pageKey))).sort();
+      const pageKeys = uniqueStrings(
+        plans.flatMap(({ plan }) => plan.pages.map((page) => page.pageKey)),
+      ).sort();
       releasePages = await this.pageMutex.acquireMany(pageKeys);
-      this.assertWritable(jobId, token);
-      const overlay = await this.runWriters(jobId, token, source, plans, signal);
-      this.assertWritable(jobId, token);
+      this.assertWritable(sourceId, token);
+      const overlay = await this.runWriters(
+        sourceId,
+        token,
+        options,
+        source,
+        plans,
+        sourceSignal,
+      );
+      this.assertWritable(sourceId, token);
 
       // Source 只有在全部 Writer 成功后才进入这个提交点，失败不会留下半成品。
       await this.stateMutex.runExclusive(async () => {
-        this.assertWritable(jobId, token);
+        this.assertWritable(sourceId, token);
         this.store.commitSourceOverlay(overlay);
       });
       await this.releasePageKeys(allocatedPageKeys);
-      await this.patchSource(jobId, sourceId, {
+      await this.patchPoolItem(sourceId, token, {
         status: "completed",
         writerCalls: plans.length,
         pageKeys,
@@ -409,20 +470,26 @@ export class LlmWikiNextService {
     } catch (error) {
       sourceController.abort();
       await this.releasePageKeys(allocatedPageKeys).catch(() => undefined);
-      const cancelled = jobSignal.aborted || !this.isWritable(jobId, token);
-      await this.patchSource(jobId, sourceId, {
-        status: cancelled ? "cancelled" : "failed",
-        error: cancelled ? "任务已取消" : formatError(error),
-        finishedAt: new Date().toISOString(),
-      }).catch(() => undefined);
+      if (this.isWritable(sourceId, token)) {
+        await this.patchPoolItem(sourceId, token, {
+          status: "failed",
+          error: formatError(error),
+          finishedAt: new Date().toISOString(),
+        }).catch(() => undefined);
+      }
     } finally {
       releasePages?.();
+      if (this.activeTokens.get(sourceId) === token)
+        this.activeTokens.delete(sourceId);
+      this.controllers.delete(sourceId);
+      this.schedulePool();
     }
   }
 
   private async runPlanner(
-    jobId: string,
+    sourceId: string,
     token: string,
+    options: CompileExecutionOptions,
     source: SourceSnapshot,
     unit: CompileUnit,
     existingPages: ManifestPage[],
@@ -430,10 +497,10 @@ export class LlmWikiNextService {
     maxPages: number,
     signal: AbortSignal,
   ): Promise<WikiPagePlan> {
-    const job = await this.beforeModelCall(jobId, token);
+    await this.beforeModelCall(sourceId, token);
     const value = await this.callJson({
-      model: job.options.model,
-      maxTokens: job.options.plannerMaxOutputTokens,
+      model: options.model,
+      maxTokens: options.plannerMaxOutputTokens,
       signal,
       system: plannerPrompt(),
       payload: {
@@ -445,28 +512,45 @@ export class LlmWikiNextService {
         maxPages,
       },
     });
-    this.assertWritable(jobId, token);
-    return validatePlan(value, source.sourceId, unit.unitId, existingPages, availablePageKeys, maxPages);
+    this.assertWritable(sourceId, token);
+    return validatePlan(
+      value,
+      source.sourceId,
+      unit.unitId,
+      existingPages,
+      availablePageKeys,
+      maxPages,
+    );
   }
 
   private async runWriters(
-    jobId: string,
+    sourceId: string,
     token: string,
+    options: CompileExecutionOptions,
     source: SourceSnapshot,
     plans: Array<{ unit: CompileUnit; plan: WikiPagePlan }>,
     signal: AbortSignal,
   ): Promise<SourceOverlay> {
     const snapshot = this.store.readStagingSnapshot();
-    const manifest = new Map(snapshot.manifest.pages.map((page) => [page.pageKey, page]));
+    const manifest = new Map(
+      snapshot.manifest.pages.map((page) => [page.pageKey, page]),
+    );
     const workingPages = new Map<string, SourceOverlayPage>();
 
-    for (const { unit, plan } of [...plans].sort((a, b) => a.unit.startOffset - b.unit.startOffset)) {
-      const existingPages: Record<string, { title: string; goal: string; bodyMarkdown: string }> = {};
+    for (const { unit, plan } of [...plans].sort(
+      (a, b) => a.unit.startOffset - b.unit.startOffset,
+    )) {
+      const existingPages: Record<
+        string,
+        { title: string; goal: string; bodyMarkdown: string }
+      > = {};
       for (const page of plan.pages) {
         const working = workingPages.get(page.pageKey);
         const exists = Boolean(working) || page.pageKey in snapshot.pages;
-        if (page.operation === "create" && exists) throw new Error(`create 页面已经存在: ${page.pageKey}`);
-        if (page.operation === "update" && !exists) throw new Error(`update 页面不存在: ${page.pageKey}`);
+        if (page.operation === "create" && exists)
+          throw new Error(`create 页面已经存在: ${page.pageKey}`);
+        if (page.operation === "update" && !exists)
+          throw new Error(`update 页面不存在: ${page.pageKey}`);
         if (page.operation === "update") {
           const published = manifest.get(page.pageKey);
           existingPages[page.pageKey] = {
@@ -477,10 +561,10 @@ export class LlmWikiNextService {
         }
       }
 
-      const job = await this.beforeModelCall(jobId, token);
+      await this.beforeModelCall(sourceId, token);
       const raw = await this.callJson({
-        model: job.options.model,
-        maxTokens: job.options.writerMaxOutputTokens,
+        model: options.model,
+        maxTokens: options.writerMaxOutputTokens,
         signal,
         system: writerPrompt(),
         payload: {
@@ -490,7 +574,7 @@ export class LlmWikiNextService {
           existingPages,
         },
       });
-      this.assertWritable(jobId, token);
+      this.assertWritable(sourceId, token);
       const output = validateWriterOutput(raw, source, unit, plan);
       const planByKey = new Map(plan.pages.map((page) => [page.pageKey, page]));
 
@@ -542,10 +626,13 @@ export class LlmWikiNextService {
   private async reservePageKeys(count: number): Promise<string[]> {
     return this.stateMutex.runExclusive(async () => {
       const state = this.store.readStagingState();
-      if (!state || state.status !== "open") throw new Error("Staging 当前不可预留页面 ID");
+      if (!state || state.status !== "open")
+        throw new Error("Staging 当前不可预留页面 ID");
       const occupied = new Set([
         ...state.reservedPageKeys,
-        ...this.store.readStagingSnapshot().manifest.pages.map((page) => page.pageKey),
+        ...this.store
+          .readStagingSnapshot()
+          .manifest.pages.map((page) => page.pageKey),
       ]);
       const ids: string[] = [];
       while (ids.length < count) {
@@ -570,66 +657,219 @@ export class LlmWikiNextService {
       const released = new Set(pageKeys);
       this.store.updateStagingState({
         ...state,
-        reservedPageKeys: state.reservedPageKeys.filter((id) => !released.has(id)),
+        reservedPageKeys: state.reservedPageKeys.filter(
+          (id) => !released.has(id),
+        ),
       });
     });
   }
 
-  private async beforeModelCall(jobId: string, token: string): Promise<CompileJob> {
-    return this.stateMutex.runExclusive(async () => {
-      this.assertWritable(jobId, token);
-      const job = this.store.getJob(jobId);
-      if (job.modelCalls >= job.estimate.maxModelCalls) throw new Error("模型调用数超过确认上限");
-      const next = { ...job, modelCalls: job.modelCalls + 1 };
-      this.store.saveJob(next);
-      return next;
+  private schedulePool(): void {
+    if (this.schedulerQueued) return;
+    this.schedulerQueued = true;
+    queueMicrotask(() => {
+      this.schedulerQueued = false;
+      void this.dispatchPool().catch((error) => {
+        this.logger.error(`llmWikiNext 编译池调度异常: ${formatError(error)}`);
+      });
     });
   }
 
-  private async patchJob(jobId: string, patch: (job: CompileJob) => CompileJob): Promise<CompileJob> {
-    return this.stateMutex.runExclusive(async () => {
-      const current = this.store.getJob(jobId);
-      if (isTerminalJob(current.status)) return current;
-      return this.store.saveJob(patch(current));
+  private async dispatchPool(): Promise<void> {
+    const dispatched = await this.stateMutex.runExclusive(async () => {
+      const state = this.store.readStagingState();
+      const pool = this.store.readCompilePool();
+      if (
+        !state ||
+        state.status !== "open" ||
+        !pool ||
+        pool.workspaceId !== state.workspaceId
+      )
+        return [];
+      const running = pool.items.filter(
+        (item) => item.status === "planning" || item.status === "writing",
+      ).length;
+      const capacity = Math.max(0, pool.options.sourceConcurrency - running);
+      if (!capacity) return [];
+      const now = new Date().toISOString();
+      const sourceIds = pool.items
+        .filter((item) => item.status === "queued")
+        .slice(0, capacity)
+        .map((item) => item.sourceId);
+      if (!sourceIds.length) return [];
+      const selected = new Set(sourceIds);
+      const next: CompilePool = {
+        ...pool,
+        items: pool.items.map((item) =>
+          selected.has(item.sourceId)
+            ? {
+                ...item,
+                status: "planning",
+                startedAt: now,
+                error: "",
+                startedOptions: { ...pool.options },
+              }
+            : item,
+        ),
+      };
+      this.store.saveCompilePool(next);
+      return sourceIds.map((sourceId) => {
+        const token = createBase62Id(24);
+        const controller = new AbortController();
+        this.activeTokens.set(sourceId, token);
+        this.controllers.set(sourceId, controller);
+        return { sourceId, token, controller, options: { ...pool.options } };
+      });
     });
+    for (const item of dispatched) {
+      void this.processSource(
+        item.sourceId,
+        item.token,
+        item.controller.signal,
+        item.options,
+      ).catch((error) => {
+        this.logger.error(
+          `llmWikiNext Source 编译异常: ${item.sourceId}: ${formatError(error)}`,
+        );
+      });
+    }
   }
 
-  private async patchSource(
-    jobId: string,
+  private async beforeModelCall(
     sourceId: string,
-    patch: Partial<CompileSourceState>,
+    token: string,
   ): Promise<void> {
     await this.stateMutex.runExclusive(async () => {
-      const job = this.store.getJob(jobId);
-      const sources = job.sources.map((source) =>
-        source.sourceId === sourceId ? { ...source, ...patch } : source,
-      );
-      this.store.saveJob({ ...job, sources });
+      this.assertWritable(sourceId, token);
+      const pool = this.requireCompilePool();
+      const item = this.requirePoolItem(pool, sourceId);
+      if (item.modelCalls >= item.maxModelCalls)
+        throw new Error("模型调用数超过确认上限");
+      this.store.saveCompilePool({
+        ...pool,
+        items: pool.items.map((current) =>
+          current.sourceId === sourceId
+            ? { ...current, modelCalls: current.modelCalls + 1 }
+            : current,
+        ),
+      });
     });
   }
 
-  private findActiveJob(): CompileJob | null {
-    return this.store.listJobs().find((job) => ACTIVE_JOB_STATUSES.has(job.status)) || null;
+  private async patchPoolItem(
+    sourceId: string,
+    token: string,
+    patch: Partial<CompilePoolItem>,
+  ): Promise<void> {
+    await this.stateMutex.runExclusive(async () => {
+      this.assertWritable(sourceId, token);
+      const pool = this.requireCompilePool();
+      this.requirePoolItem(pool, sourceId);
+      this.store.saveCompilePool({
+        ...pool,
+        items: pool.items.map((item) =>
+          item.sourceId === sourceId ? { ...item, ...patch } : item,
+        ),
+      });
+    });
   }
 
-  private isWritable(jobId: string, token: string): boolean {
-    return this.activeTokens.get(jobId) === token && !this.controllers.get(jobId)?.signal.aborted;
+  private getPoolItem(sourceId: string): CompilePoolItem | null {
+    return (
+      this.store
+        .readCompilePool()
+        ?.items.find((item) => item.sourceId === sourceId) || null
+    );
   }
 
-  private assertWritable(jobId: string, token: string): void {
-    if (!this.isWritable(jobId, token)) throw new Error("任务写权限已失效");
+  private requireCompilePool(): CompilePool {
+    const pool = this.store.readCompilePool();
+    if (!pool) throw new Error("当前没有待编译池");
+    return pool;
+  }
+
+  private requirePoolItem(
+    pool: CompilePool,
+    sourceId: string,
+  ): CompilePoolItem {
+    const item = pool.items.find((current) => current.sourceId === sourceId);
+    if (!item) throw new Error("Source 不在待编译池中");
+    return item;
+  }
+
+  private clearCompilePoolLocked(): CompilePoolCancelResult {
+    const pool = this.store.readCompilePool();
+    const queuedCount =
+      pool?.items.filter((item) => item.status === "queued").length || 0;
+    const runningItems =
+      pool?.items.filter(
+        (item) => item.status === "planning" || item.status === "writing",
+      ) || [];
+    for (const item of runningItems) {
+      this.activeTokens.delete(item.sourceId);
+      this.controllers.get(item.sourceId)?.abort();
+      this.controllers.delete(item.sourceId);
+    }
+    this.store.deleteCompilePool();
+    const state = this.store.readStagingState();
+    if (state?.reservedPageKeys.length)
+      this.store.updateStagingState({ ...state, reservedPageKeys: [] });
+    this.pageMutex = new KeyedMutex();
+    return { cancelled: true, queuedCount, runningCount: runningItems.length };
+  }
+
+  private removeSourcesFromCompilePoolLocked(sourceIds: Set<string>): void {
+    const pool = this.store.readCompilePool();
+    if (!pool) return;
+    const removedItems = pool.items.filter((item) =>
+      sourceIds.has(item.sourceId),
+    );
+    if (!removedItems.length) return;
+
+    for (const item of removedItems) {
+      this.activeTokens.delete(item.sourceId);
+      this.controllers.get(item.sourceId)?.abort();
+      this.controllers.delete(item.sourceId);
+    }
+
+    const items = pool.items.filter((item) => !sourceIds.has(item.sourceId));
+    if (!items.length) {
+      this.store.deleteCompilePool();
+      return;
+    }
+    this.store.saveCompilePool({ ...pool, items });
+  }
+
+  private isWritable(sourceId: string, token: string): boolean {
+    return (
+      this.activeTokens.get(sourceId) === token &&
+      !this.controllers.get(sourceId)?.signal.aborted
+    );
+  }
+
+  private assertWritable(sourceId: string, token: string): void {
+    if (!this.isWritable(sourceId, token)) throw new Error("任务写权限已失效");
   }
 }
 
 export function calculateMaxPages(charCount: number): number {
-  const thresholdIndex = PAGE_CHAR_THRESHOLDS.findIndex((threshold) => charCount <= threshold);
+  const thresholdIndex = PAGE_CHAR_THRESHOLDS.findIndex(
+    (threshold) => charCount <= threshold,
+  );
   return thresholdIndex === -1 ? 8 : thresholdIndex + 2;
 }
 
-export function splitSource(source: SourceSnapshot, chunkChars: number): CompileUnit[] {
+export function splitSource(
+  source: SourceSnapshot,
+  chunkChars: number,
+): CompileUnit[] {
   const units: CompileUnit[] = [];
   let startLine = 1;
-  for (let startOffset = 0; startOffset < source.content.length; startOffset += chunkChars) {
+  for (
+    let startOffset = 0;
+    startOffset < source.content.length;
+    startOffset += chunkChars
+  ) {
     const endOffset = Math.min(source.content.length, startOffset + chunkChars);
     const content = source.content.slice(startOffset, endOffset);
     units.push({
@@ -658,26 +898,36 @@ function validatePlan(
   if (!Array.isArray(record.pages) || !record.pages.length) {
     throw new Error("Planner pages 必须是非空数组");
   }
-  if (record.pages.length > maxPages) throw new Error("Planner 页面数超过确认上限");
+  if (record.pages.length > maxPages)
+    throw new Error("Planner 页面数超过确认上限");
   const existing = new Set(existingPages.map((page) => page.pageKey));
   const available = new Set(availablePageKeys);
   const pages = record.pages.map((raw): WikiPagePlanItem => {
     const page = objectValue(raw, "Planner page 必须是对象");
     const pageKey = stringValue(page.pageKey, "Planner pageKey 不能为空");
     const operation = page.operation;
-    if (operation !== "create" && operation !== "update") throw new Error("Planner operation 非法");
-    if (operation === "create" && !available.has(pageKey)) throw new Error(`create pageKey 未预留: ${pageKey}`);
-    if (operation === "update" && !existing.has(pageKey)) throw new Error(`update pageKey 不存在: ${pageKey}`);
+    if (operation !== "create" && operation !== "update")
+      throw new Error("Planner operation 非法");
+    if (operation === "create" && !available.has(pageKey))
+      throw new Error(`create pageKey 未预留: ${pageKey}`);
+    if (operation === "update" && !existing.has(pageKey))
+      throw new Error(`update pageKey 不存在: ${pageKey}`);
     return {
       pageKey,
       operation,
       title: stringValue(page.title, "Planner title 不能为空"),
       goal: stringValue(page.goal, "Planner goal 不能为空"),
       scope: stringValue(page.scope, "Planner scope 不能为空"),
-      outline: nonEmptyArray(page.outline, "Planner outline 必须是非空数组").map((rawOutline) => {
+      outline: nonEmptyArray(
+        page.outline,
+        "Planner outline 必须是非空数组",
+      ).map((rawOutline) => {
         const outline = objectValue(rawOutline, "Planner outline 项必须是对象");
         return {
-          heading: stringValue(outline.heading, "Planner outline heading 不能为空"),
+          heading: stringValue(
+            outline.heading,
+            "Planner outline heading 不能为空",
+          ),
           writingPoints: nonEmptyStringArray(
             outline.writingPoints,
             "Planner writingPoints 必须是非空字符串数组",
@@ -688,16 +938,24 @@ function validatePlan(
           ),
         };
       }),
-      relatedPageKeys: stringArray(page.relatedPageKeys, "Planner relatedPageKeys 必须是字符串数组"),
+      relatedPageKeys: stringArray(
+        page.relatedPageKeys,
+        "Planner relatedPageKeys 必须是字符串数组",
+      ),
     };
   });
   if (new Set(pages.map((page) => page.pageKey)).size !== pages.length) {
     throw new Error("同一 Plan 中 pageKey 不得重复");
   }
-  const samePlanCreates = new Set(pages.filter((page) => page.operation === "create").map((page) => page.pageKey));
+  const samePlanCreates = new Set(
+    pages
+      .filter((page) => page.operation === "create")
+      .map((page) => page.pageKey),
+  );
   for (const page of pages) {
     for (const related of page.relatedPageKeys) {
-      if (related === page.pageKey) throw new Error(`页面不得关联自身: ${page.pageKey}`);
+      if (related === page.pageKey)
+        throw new Error(`页面不得关联自身: ${page.pageKey}`);
       if (!existing.has(related) && !samePlanCreates.has(related)) {
         throw new Error(`关联页面不存在: ${related}`);
       }
@@ -706,7 +964,10 @@ function validatePlan(
   return {
     sourceId,
     unitId,
-    partitionIntent: stringValue(record.partitionIntent, "Planner partitionIntent 不能为空"),
+    partitionIntent: stringValue(
+      record.partitionIntent,
+      "Planner partitionIntent 不能为空",
+    ),
     pages,
   };
 }
@@ -723,28 +984,42 @@ function validateWriterOutput(
   const pages = record.pages.map((raw) => {
     const page = objectValue(raw, "Writer page 必须是对象");
     const pageKey = stringValue(page.pageKey, "Writer pageKey 不能为空");
-    const bodyMarkdown = stringValue(page.bodyMarkdown, "Writer bodyMarkdown 不能为空");
-    if (!Array.isArray(page.keyFacts)) throw new Error("Writer keyFacts 必须是数组");
-    const keyFacts = uniqueFacts(page.keyFacts.map((rawFact): KeyFact => {
-      const fact = objectValue(rawFact, "Writer Fact 必须是对象");
-      return {
-        fact: stringValue(fact.fact, "Writer fact 不能为空"),
-        sourceId: source.sourceId,
-        // 行号只是辅助定位。兼容纯数字字符串和常见范围写法；无法可靠定位时保留 Fact、清空行号。
-        sourceLine: normalizeSourceLine(fact.sourceLine, unit.startLine, unitEndLine, source.lineCount),
-      };
-    })).slice(0, MAX_FACTS_PER_PLAN);
+    const bodyMarkdown = stringValue(
+      page.bodyMarkdown,
+      "Writer bodyMarkdown 不能为空",
+    );
+    if (!Array.isArray(page.keyFacts))
+      throw new Error("Writer keyFacts 必须是数组");
+    const keyFacts = uniqueFacts(
+      page.keyFacts.map((rawFact): KeyFact => {
+        const fact = objectValue(rawFact, "Writer Fact 必须是对象");
+        return {
+          fact: stringValue(fact.fact, "Writer fact 不能为空"),
+          sourceId: source.sourceId,
+          // 行号只是辅助定位。兼容纯数字字符串和常见范围写法；无法可靠定位时保留 Fact、清空行号。
+          sourceLine: normalizeSourceLine(
+            fact.sourceLine,
+            unit.startLine,
+            unitEndLine,
+            source.lineCount,
+          ),
+        };
+      }),
+    ).slice(0, MAX_FACTS_PER_PLAN);
     return { pageKey, bodyMarkdown, keyFacts };
   });
   const returnedKeys = pages.map((page) => page.pageKey);
-  if (new Set(returnedKeys).size !== returnedKeys.length) throw new Error("Writer pageKey 不得重复");
+  if (new Set(returnedKeys).size !== returnedKeys.length)
+    throw new Error("Writer pageKey 不得重复");
   const expectedKeys = new Set(plan.pages.map((page) => page.pageKey));
-  if (returnedKeys.length !== expectedKeys.size || returnedKeys.some((pageKey) => !expectedKeys.has(pageKey))) {
+  if (
+    returnedKeys.length !== expectedKeys.size ||
+    returnedKeys.some((pageKey) => !expectedKeys.has(pageKey))
+  ) {
     throw new Error("Writer pageKey 集合必须与 Plan 完全一致");
   }
   return { pages };
 }
-
 
 function plannerPrompt(): string {
   return [
@@ -810,10 +1085,20 @@ function normalizeSourceLine(
   if (typeof value === "number" && Number.isInteger(value)) {
     line = value;
   } else if (typeof value === "string") {
-    const match = value.trim().match(/^(?:(?:line|第)\s*)?(\d+)(?:\s*(?:-|–|—|~|～|至|,|，)\s*\d+)?\s*(?:行)?$/i);
+    const match = value
+      .trim()
+      .match(
+        /^(?:(?:line|第)\s*)?(\d+)(?:\s*(?:-|–|—|~|～|至|,|，)\s*\d+)?\s*(?:行)?$/i,
+      );
     if (match) line = Number(match[1]);
   }
-  if (line === null || line < unitStartLine || line > unitEndLine || line > sourceLineCount) return null;
+  if (
+    line === null ||
+    line < unitStartLine ||
+    line > unitEndLine ||
+    line > sourceLineCount
+  )
+    return null;
   return line;
 }
 
@@ -847,22 +1132,28 @@ function extractModelContent(response: unknown): string {
   const record = objectValue(response, "模型响应为空");
   const choices = Array.isArray(record.choices) ? record.choices : [];
   const first = choices[0];
-  if (!first || typeof first !== "object") throw new Error("模型未返回 choices");
+  if (!first || typeof first !== "object")
+    throw new Error("模型未返回 choices");
   const choice = first as Record<string, unknown>;
-  const message = choice.message && typeof choice.message === "object"
-    ? choice.message as Record<string, unknown>
-    : {};
-  const content = typeof message.content === "string"
-    ? message.content
-    : typeof choice.text === "string"
-      ? choice.text
-      : "";
+  const message =
+    choice.message && typeof choice.message === "object"
+      ? (choice.message as Record<string, unknown>)
+      : {};
+  const content =
+    typeof message.content === "string"
+      ? message.content
+      : typeof choice.text === "string"
+        ? choice.text
+        : "";
   if (!content.trim()) throw new Error("模型未返回文本内容");
   return content;
 }
 
 function parseJson(content: string): unknown {
-  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const trimmed = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
   try {
     return JSON.parse(trimmed) as unknown;
   } catch {
@@ -900,35 +1191,51 @@ function searchScore(
 }
 
 function countFacts(snapshot: WikiSnapshot): number {
-  return Object.values(snapshot.facts.byPage).reduce((sum, facts) => sum + facts.length, 0);
+  return Object.values(snapshot.facts.byPage).reduce(
+    (sum, facts) => sum + facts.length,
+    0,
+  );
 }
 
-function emptySourceState(sourceId: string): CompileSourceState {
+function executionOptions(
+  options: NormalizedCompileOptions,
+): CompileExecutionOptions {
   return {
-    sourceId,
-    status: "pending",
-    compileUnitCount: 0,
+    model: options.model,
+    sourceConcurrency: options.sourceConcurrency,
+    chunkChars: options.chunkChars,
+    plannerMaxOutputTokens: options.plannerMaxOutputTokens,
+    writerMaxOutputTokens: options.writerMaxOutputTokens,
+  };
+}
+
+function createPoolItem(
+  source: SourceSnapshot,
+  estimate: CompileEstimate,
+  now: string,
+): CompilePoolItem {
+  const unitCount = estimate.units.filter(
+    (unit) => unit.sourceId === source.sourceId,
+  ).length;
+  return {
+    sourceId: source.sourceId,
+    contentHash: source.contentHash,
+    status: "queued",
+    compileUnitCount: unitCount,
+    maxModelCalls: unitCount * 2,
+    maxOutputTokens:
+      unitCount * estimate.options.plannerMaxOutputTokens +
+      unitCount * estimate.options.writerMaxOutputTokens,
+    modelCalls: 0,
     plannerCalls: 0,
     writerCalls: 0,
     pageKeys: [],
     error: "",
+    queuedAt: now,
     startedAt: "",
     finishedAt: "",
+    startedOptions: null,
   };
-}
-
-async function runWorkers<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
-  let cursor = 0;
-  const count = Math.min(items.length, concurrency);
-  await Promise.all(
-    Array.from({ length: count }, async () => {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        await worker(items[index]);
-      }
-    }),
-  );
 }
 
 function boundedInt(
@@ -946,7 +1253,8 @@ function boundedInt(
 }
 
 function objectValue(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(message);
   return value as Record<string, unknown>;
 }
 
@@ -957,7 +1265,10 @@ function stringValue(value: unknown, message: string): string {
 }
 
 function stringArray(value: unknown, message: string): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== "string" || !item.trim())
+  ) {
     throw new Error(message);
   }
   return uniqueStrings(value.map((item) => item.trim()));
@@ -982,7 +1293,10 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -992,12 +1306,12 @@ function sha256(value: string): string {
 }
 
 function createBase62Id(length: number): string {
-  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  return Array.from(randomBytes(length), (byte) => alphabet[byte % alphabet.length]).join("");
-}
-
-function isTerminalJob(status: CompileJob["status"]): boolean {
-  return !ACTIVE_JOB_STATUSES.has(status);
+  const alphabet =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  return Array.from(
+    randomBytes(length),
+    (byte) => alphabet[byte % alphabet.length],
+  ).join("");
 }
 
 function formatError(error: unknown): string {

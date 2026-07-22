@@ -27,10 +27,15 @@ export class LlmWikiNextController {
   @ApiConsumes("multipart/form-data")
   @ApiOperation({ summary: "上传不可变 Markdown/Text Source" })
   @Post("sources/upload")
-  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
   uploadSource(@UploadedFile() file?: UploadedSourceFile) {
     if (!file) throw new BadRequestException("请选择上传文件");
-    return this.wiki.uploadSource(decodeUploadFilename(file.originalname), file.buffer);
+    return this.wiki.uploadSource(
+      decodeUploadFilename(file.originalname),
+      file.buffer,
+    );
   }
 
   @Get("sources")
@@ -43,6 +48,11 @@ export class LlmWikiNextController {
     return this.wiki.getSource(sourceId);
   }
 
+  @Post("sources/delete")
+  deleteSources(@Body() request: { sourceIds?: string[] }) {
+    return this.wiki.deleteSources(request?.sourceIds || []);
+  }
+
   @Post("compile/estimate")
   estimateCompile(@Body() request: CompileRequest) {
     return this.wiki.estimateCompile(request || { sourceIds: [], model: "" });
@@ -53,14 +63,14 @@ export class LlmWikiNextController {
     return this.wiki.compile(request || { sourceIds: [], model: "" });
   }
 
-  @Get("compile/:jobId")
-  getJob(@Param("jobId") jobId: string) {
-    return this.wiki.getJob(jobId);
+  @Get("compile")
+  getCompilePool() {
+    return this.wiki.getCompilePool();
   }
 
-  @Post("compile/:jobId/cancel")
-  cancelJob(@Param("jobId") jobId: string) {
-    return this.wiki.cancelJob(jobId);
+  @Post("compile/cancel")
+  cancelCompilePool() {
+    return this.wiki.cancelCompilePool();
   }
 
   @Get("staging")

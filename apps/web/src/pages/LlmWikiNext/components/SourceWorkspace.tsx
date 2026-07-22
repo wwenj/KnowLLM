@@ -6,16 +6,17 @@ import {
   FileText,
   Loader2,
   Play,
+  RefreshCw,
   Search,
   Settings2,
-  Square,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { modelOptionLabel, type ModelOption } from "@/api/model";
 import type {
-  CompileEstimate,
-  CompileJob,
-  CompileSourceState,
+  CompilePool,
+  CompilePoolItem,
   ManifestPage,
   SourceRecord,
   StagingSummary,
@@ -33,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 
 type SourceVisualStatus =
-  | "pending"
+  | "queued"
   | "planning"
   | "writing"
   | "completed"
@@ -52,35 +53,38 @@ interface SourceWorkspaceProps {
   sources: SourceRecord[];
   staging: StagingSummary | null;
   publishedPages: ManifestPage[];
-  job: CompileJob | null;
-  estimate: CompileEstimate | null;
+  pool: CompilePool | null;
   models: ModelOption[];
   model: string;
   sourceConcurrency: number;
   settings: CompileSettings;
   estimating: boolean;
   startingCompile: boolean;
+  uploading: boolean;
+  loading: boolean;
+  deleting: boolean;
   operationsLocked: boolean;
-  cancelling: boolean;
   onModelChange: (model: string) => void;
   onSourceConcurrencyChange: (value: string) => void;
   onSettingsChange: (next: Partial<CompileSettings>) => void;
+  onUpload: () => void;
+  onRefresh: () => void;
   onEstimate: (sourceIds: string[]) => void;
-  onConfirmCompile: () => void;
-  onClearEstimate: () => void;
-  onCancelJob: () => void;
+  onDeleteSelected: (sourceIds: string[]) => void;
+  onOpenCompilePool: () => void;
   onOpenSource: (sourceId: string) => void;
 }
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0];
 const CONCURRENCY_OPTIONS = [1, 2, 4, 8, 16] as const;
 
 const statusMeta: Record<
   SourceVisualStatus,
   { label: string; className: string }
 > = {
-  pending: {
-    label: "等待",
+  queued: {
+    label: "待编译",
     className: "border-slate-200 bg-slate-50 text-slate-600",
   },
   planning: {
@@ -113,10 +117,6 @@ const statusMeta: Record<
   },
 };
 
-function isActiveJob(job: CompileJob | null): boolean {
-  return job?.status === "queued" || job?.status === "running";
-}
-
 function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
@@ -124,34 +124,22 @@ function formatTime(value: string): string {
     : date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function formatChars(value: number): string {
-  return value >= 10_000
-    ? `${(value / 10_000).toFixed(value % 10_000 ? 1 : 0)} 万字`
-    : `${value.toLocaleString()} 字`;
-}
-
 function sourceState(
   source: SourceRecord,
-  job: CompileJob | null,
+  pool: CompilePool | null,
   staging: StagingSummary | null,
   publishedPages: ManifestPage[],
-): { status: SourceVisualStatus; jobState?: CompileSourceState } {
-  const jobState = job?.sources.find(
+): { status: SourceVisualStatus; poolItem?: CompilePoolItem } {
+  const poolItem = pool?.items.find(
     (item) => item.sourceId === source.sourceId,
   );
-  // 运行中优先展示真实进度；完成 Source 的最终状态始终由共享 Staging / Published 派生。
-  if (
-    jobState &&
-    (isActiveJob(job) ||
-      jobState.status === "failed" ||
-      jobState.status === "cancelled")
-  ) {
-    return { status: jobState.status, jobState };
-  }
-  if (staging?.state.completedSourceIds.includes(source.sourceId))
+  if (poolItem) return { status: poolItem.status, poolItem };
+  if (staging?.state.completedSourceIds.includes(source.sourceId)) {
     return { status: "completed" };
-  if (publishedPages.some((page) => page.sourceIds.includes(source.sourceId)))
+  }
+  if (publishedPages.some((page) => page.sourceIds.includes(source.sourceId))) {
     return { status: "published" };
+  }
   return { status: "uploaded" };
 }
 
@@ -164,92 +152,112 @@ function pageCountFor(
   return pages.filter((page) => page.sourceIds.includes(sourceId)).length;
 }
 
+function isCompileSelectable(status: SourceVisualStatus): boolean {
+  return !["queued", "planning", "writing", "completed"].includes(status);
+}
+
 export function SourceWorkspace({
   sources,
   staging,
   publishedPages,
-  job,
-  estimate,
+  pool,
   models,
   model,
   sourceConcurrency,
   settings,
   estimating,
   startingCompile,
+  uploading,
+  loading,
+  deleting,
   operationsLocked,
-  cancelling,
   onModelChange,
   onSourceConcurrencyChange,
   onSettingsChange,
+  onUpload,
+  onRefresh,
   onEstimate,
-  onConfirmCompile,
-  onClearEstimate,
-  onCancelJob,
+  onDeleteSelected,
+  onOpenCompilePool,
   onOpenSource,
 }: SourceWorkspaceProps) {
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | SourceVisualStatus>(
-    "all",
-  );
+  const [searchText, setSearchText] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState<
+    "all" | SourceVisualStatus
+  >("all");
+  const [filters, setFilters] = useState<{
+    query: string;
+    status: "all" | SourceVisualStatus;
+  }>({ query: "", status: "all" });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(
     new Set(),
   );
 
-  const running = isActiveJob(job);
-  const controlsLocked = running || operationsLocked;
   const sourceRows = useMemo(
     () =>
       sources.map((source) => ({
         source,
-        ...sourceState(source, job, staging, publishedPages),
+        ...sourceState(source, pool, staging, publishedPages),
       })),
-    [job, publishedPages, sources, staging],
-  );
-  const sourceNames = useMemo(
-    () => new Map(sources.map((source) => [source.sourceId, source.filename])),
-    [sources],
+    [pool, publishedPages, sources, staging],
   );
   const filteredRows = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const normalizedQuery = filters.query.trim().toLocaleLowerCase();
     return sourceRows.filter((row) => {
       const queryMatched =
         !normalizedQuery ||
         row.source.filename.toLocaleLowerCase().includes(normalizedQuery);
       return (
-        queryMatched && (statusFilter === "all" || row.status === statusFilter)
+        queryMatched &&
+        (filters.status === "all" || row.status === filters.status)
       );
     });
-  }, [query, sourceRows, statusFilter]);
+  }, [filters, sourceRows]);
   const currentPage = Math.min(
     page,
-    Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE)),
+    Math.max(1, Math.ceil(filteredRows.length / pageSize)),
   );
   const pageRows = filteredRows.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
   );
-  const selectableRows = pageRows.filter(
-    (row) => row.status !== "completed" && !controlsLocked,
+  const selectableRows = pageRows.filter(() => !operationsLocked);
+  const selectedIds = useMemo(() => {
+    const knownSourceIds = new Set(sources.map((source) => source.sourceId));
+    return new Set(
+      [...selectedSourceIds].filter((sourceId) => knownSourceIds.has(sourceId)),
+    );
+  }, [selectedSourceIds, sources]);
+  const compileSelectableSourceIds = useMemo(
+    () =>
+      new Set(
+        sourceRows
+          .filter((row) => isCompileSelectable(row.status))
+          .map((row) => row.source.sourceId),
+      ),
+    [sourceRows],
+  );
+  const selectedContainsNonCompilable = [...selectedIds].some(
+    (sourceId) => !compileSelectableSourceIds.has(sourceId),
   );
   const allPageSelected =
     selectableRows.length > 0 &&
-    selectableRows.every((row) => selectedSourceIds.has(row.source.sourceId));
+    selectableRows.every((row) => selectedIds.has(row.source.sourceId));
   const somePageSelected = selectableRows.some((row) =>
-    selectedSourceIds.has(row.source.sourceId),
+    selectedIds.has(row.source.sourceId),
   );
-  const unitGroups = useMemo(() => {
-    if (!estimate) return [];
-    return estimate.sourceIds.map((sourceId) => ({
-      sourceId,
-      filename: sourceNames.get(sourceId) || sourceId,
-      units: estimate.units.filter((unit) => unit.sourceId === sourceId),
-    }));
-  }, [estimate, sourceNames]);
+  const runningCount =
+    pool?.items.filter(
+      (item) => item.status === "planning" || item.status === "writing",
+    ).length || 0;
+  const queuedCount =
+    pool?.items.filter((item) => item.status === "queued").length || 0;
+  const compiling = runningCount + queuedCount > 0;
 
   const toggleSource = (sourceId: string, checked: boolean) => {
-    onClearEstimate();
     setSelectedSourceIds((previous) => {
       const next = new Set(previous);
       if (checked) next.add(sourceId);
@@ -259,7 +267,6 @@ export function SourceWorkspace({
   };
 
   const togglePage = (checked: boolean) => {
-    onClearEstimate();
     setSelectedSourceIds((previous) => {
       const next = new Set(previous);
       selectableRows.forEach((row) => {
@@ -270,24 +277,28 @@ export function SourceWorkspace({
     });
   };
 
-  const enableSelection = () => {
-    onClearEstimate();
+  const toggleSelectionMode = () => {
     setSelectionMode((value) => !value);
     if (selectionMode) setSelectedSourceIds(new Set());
   };
 
+  const runSearch = () => {
+    setFilters({ query: searchText, status: selectedStatus });
+    setPage(1);
+  };
+
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-white">
+    <section className="min-w-0 flex-1 bg-white">
       <div className="flex flex-none flex-col gap-2 border-b border-slate-200 bg-slate-50/70 px-3 py-2.5">
-        <div className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-          <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs font-medium text-slate-600 sm:max-w-md">
-            编译模型
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex h-8 min-w-[300px] items-center gap-2 text-xs font-medium whitespace-nowrap text-slate-600">
+            <span>编译模型</span>
             <Select
               value={model}
               onValueChange={onModelChange}
-              disabled={!models.length || controlsLocked}
+              disabled={!models.length || operationsLocked}
             >
-              <SelectTrigger className="h-8 bg-white text-xs">
+              <SelectTrigger className="h-8 min-w-[220px] flex-1 bg-white text-xs">
                 <SelectValue
                   placeholder={models.length ? "选择模型" : "无可用模型"}
                 />
@@ -301,16 +312,17 @@ export function SourceWorkspace({
               </SelectContent>
             </Select>
           </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-            Source 并发
+
+          <label className="flex h-8 items-center gap-2 text-xs font-medium whitespace-nowrap text-slate-600">
+            <span>Source 并发</span>
             <Select
               value={String(sourceConcurrency)}
               onValueChange={onSourceConcurrencyChange}
-              disabled={controlsLocked}
+              disabled={operationsLocked}
             >
               <SelectTrigger
                 size="sm"
-                className="min-w-[90px] bg-white text-xs"
+                className="min-w-[92px] bg-white text-xs"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -323,20 +335,21 @@ export function SourceWorkspace({
               </SelectContent>
             </Select>
           </label>
-          <details className="relative min-w-[220px] self-end text-xs">
-            <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-slate-200 px-2.5 font-medium text-slate-600 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+
+          <details className="relative text-xs">
+            <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 font-medium text-slate-600 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
               <Settings2 className="size-3.5" />
-              高级编译设置
+              高级设置
             </summary>
-            <div className="absolute z-20 mt-1 grid w-[min(92vw,520px)] grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-lg sm:grid-cols-3">
+            <div className="absolute right-0 z-20 mt-1 grid w-[min(92vw,520px)] grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-lg sm:grid-cols-3">
               <label className="flex flex-col gap-1 text-slate-600">
-                物理切片字符数
+                切片字符数
                 <Input
                   type="number"
                   min={1_000}
                   max={60_000}
                   value={settings.chunkChars}
-                  disabled={controlsLocked}
+                  disabled={operationsLocked}
                   onChange={(event) =>
                     onSettingsChange({ chunkChars: Number(event.target.value) })
                   }
@@ -344,13 +357,13 @@ export function SourceWorkspace({
                 />
               </label>
               <label className="flex flex-col gap-1 text-slate-600">
-                Planner 输出 tokens
+                Planner tokens
                 <Input
                   type="number"
                   min={256}
                   max={16_000}
                   value={settings.plannerMaxOutputTokens}
-                  disabled={controlsLocked}
+                  disabled={operationsLocked}
                   onChange={(event) =>
                     onSettingsChange({
                       plannerMaxOutputTokens: Number(event.target.value),
@@ -360,13 +373,13 @@ export function SourceWorkspace({
                 />
               </label>
               <label className="flex flex-col gap-1 text-slate-600">
-                Writer 输出 tokens
+                Writer tokens
                 <Input
                   type="number"
                   min={256}
                   max={32_000}
                   value={settings.writerMaxOutputTokens}
-                  disabled={controlsLocked}
+                  disabled={operationsLocked}
                   onChange={(event) =>
                     onSettingsChange({
                       writerMaxOutputTokens: Number(event.target.value),
@@ -375,249 +388,155 @@ export function SourceWorkspace({
                   className="h-8 bg-white text-xs"
                 />
               </label>
-              <p className="col-span-full text-[11px] leading-4 text-slate-500">
-                页面预算由服务端按每个 Unit 内容动态计算；一个 Unit
-                只会执行一次统一 Writer。
-              </p>
             </div>
           </details>
+
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="icon-sm"
+              variant="outline"
+              disabled={loading || operationsLocked}
+              title="刷新列表"
+              aria-label="刷新列表"
+              onClick={onRefresh}
+            >
+              <RefreshCw className={loading ? "animate-spin" : ""} />
+            </Button>
+            <Button
+              size="sm"
+              disabled={uploading || operationsLocked}
+              onClick={onUpload}
+            >
+              {uploading ? <Loader2 className="animate-spin" /> : <Upload />}
+              上传文档
+            </Button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            <div className="relative w-full min-w-[190px] max-w-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={selectionMode ? "secondary" : "outline"}
+            onClick={toggleSelectionMode}
+            disabled={operationsLocked}
+          >
+            {selectionMode ? <X /> : <Check />}
+            {selectionMode ? "退出多选" : "多选"}
+          </Button>
+          <Select
+            value={selectedStatus}
+            onValueChange={(value) =>
+              setSelectedStatus(value as typeof selectedStatus)
+            }
+          >
+            <SelectTrigger size="sm" className="min-w-[104px] bg-white text-xs">
+              <SelectValue placeholder="状态" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部状态</SelectItem>
+              {Object.entries(statusMeta).map(([value, meta]) => (
+                <SelectItem key={value} value={value}>
+                  {meta.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <form
+            className="flex w-[320px] shrink-0 items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              runSearch();
+            }}
+          >
+            <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-slate-400" />
               <Input
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setPage(1);
-                }}
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
                 placeholder="搜索文档名"
                 className="h-8 bg-white pl-8 text-sm"
               />
             </div>
-            <Select
-              value={statusFilter}
-              onValueChange={(value) => {
-                setStatusFilter(value as typeof statusFilter);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="min-w-[104px] bg-white text-xs"
-              >
-                <SelectValue placeholder="状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                {Object.entries(statusMeta).map(([value, meta]) => (
-                  <SelectItem key={value} value={value}>
-                    {meta.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <span className="text-xs tabular-nums text-slate-500">
-              {filteredRows.length} 个文档
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant={selectionMode ? "secondary" : "outline"}
-              onClick={enableSelection}
-              disabled={controlsLocked}
-            >
-              {selectionMode ? <X /> : <Check />}
-              {selectionMode ? "退出多选" : "多选"}
+            <Button size="sm" type="submit">
+              <Search />
+              搜索
             </Button>
-            {selectionMode && (
+          </form>
+          <span className="text-xs tabular-nums text-slate-500">
+            {filteredRows.length} 个文档
+          </span>
+          {selectionMode && (
+            <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={!selectedSourceIds.size}
-                onClick={() => {
-                  onClearEstimate();
-                  setSelectedSourceIds(new Set());
-                }}
+                disabled={!selectedIds.size}
+                onClick={() => setSelectedSourceIds(new Set())}
               >
                 清空选择
               </Button>
-            )}
-            {selectionMode && (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!selectedIds.size || operationsLocked || deleting}
+                onClick={() => onDeleteSelected([...selectedIds])}
+              >
+                {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                删除 {selectedIds.size ? `(${selectedIds.size})` : ""}
+              </Button>
               <Button
                 size="sm"
                 disabled={
-                  !selectedSourceIds.size ||
-                  controlsLocked ||
+                  !selectedIds.size ||
+                  selectedContainsNonCompilable ||
+                  operationsLocked ||
                   estimating ||
                   startingCompile
                 }
-                onClick={() => onEstimate([...selectedSourceIds])}
+                title={
+                  selectedContainsNonCompilable
+                    ? "所选 Source 中包含正在编译或已暂存的项目"
+                    : undefined
+                }
+                onClick={() => onEstimate([...selectedIds])}
               >
                 <Play />
-                编译选中项{" "}
-                {selectedSourceIds.size ? `(${selectedSourceIds.size})` : ""}
+                编译 {selectedIds.size ? `(${selectedIds.size})` : ""}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
-        {estimate && (
-          <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-xs text-indigo-950">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-              <span className="font-semibold">确认本次编译</span>
-              <span>
-                {estimate.sourceCount} 个 Source · {estimate.compileUnitCount}{" "}
-                个 Unit
+        {compiling && (
+          <button
+            type="button"
+            className="flex min-h-16 w-full items-center gap-3 border border-indigo-200 bg-indigo-50 px-4 text-left text-indigo-950 transition-colors hover:bg-indigo-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            onClick={onOpenCompilePool}
+          >
+            <Loader2 className="size-6 shrink-0 animate-spin text-indigo-700" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold">编译进行中</span>
+              <span className="mt-0.5 block text-xs text-indigo-800">
+                {runningCount} 个正在编译
+                {queuedCount ? `，${queuedCount} 个等待` : ""}
               </span>
-              <span>动态页面预算 {estimate.maxPlannedPages}</span>
-              <span>Planner {estimate.maxPlannerCalls} 次</span>
-              <span>统一 Writer {estimate.maxWriterCalls} 次</span>
-              <span>模型调用最多 {estimate.maxModelCalls} 次</span>
-              <span>
-                输出上限 {estimate.maxOutputTokens.toLocaleString()} tokens
-              </span>
-              <div className="ml-auto flex items-center gap-1.5">
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={onClearEstimate}
-                  disabled={startingCompile}
-                >
-                  取消
-                </Button>
-                <Button
-                  size="xs"
-                  onClick={onConfirmCompile}
-                  disabled={startingCompile}
-                >
-                  {startingCompile && <Loader2 className="animate-spin" />}
-                  确认编译
-                </Button>
-              </div>
-            </div>
-            <details className="mt-2 border-t border-indigo-200/80 pt-2">
-              <summary className="cursor-pointer font-medium text-indigo-800">
-                查看 Unit 与页面预算
-              </summary>
-              <div className="mt-2 space-y-2 text-indigo-950">
-                {unitGroups.map((group) => (
-                  <div
-                    key={group.sourceId}
-                    className="rounded-md border border-indigo-100 bg-white/65 px-2.5 py-2"
-                  >
-                    <p className="truncate font-medium" title={group.filename}>
-                      {group.filename} · {group.units.length} 个 Unit
-                    </p>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-indigo-800">
-                      {group.units.map((unit, index) => (
-                        <span key={unit.unitId}>
-                          #{index + 1} · {formatChars(unit.charCount)} ·
-                          页面预算 {unit.maxPages}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </details>
-          </div>
-        )}
-
-        {running && job && (
-          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="font-semibold">编译进行中</span>
-              <span>
-                模型调用 {job.modelCalls} / {job.estimate.maxModelCalls}
-              </span>
-              <span>
-                {
-                  job.sources.filter((source) => source.status === "completed")
-                    .length
-                }{" "}
-                / {job.sources.length} 个 Source 已完成
-              </span>
-              <Button
-                size="xs"
-                variant="destructive"
-                className="ml-auto"
-                onClick={onCancelJob}
-                disabled={cancelling}
-              >
-                {cancelling ? <Loader2 className="animate-spin" /> : <Square />}
-                {cancelling ? "正在取消" : "取消编译"}
-              </Button>
-            </div>
-            <details className="mt-2 border-t border-sky-200 pt-2">
-              <summary className="cursor-pointer font-medium text-sky-800">
-                查看每个 Source 的执行状态
-              </summary>
-              <div className="mt-2 divide-y divide-sky-100 rounded-md border border-sky-100 bg-white/70">
-                {job.sources.map((source) => (
-                  <div
-                    key={source.sourceId}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-2"
-                  >
-                    <span
-                      className="min-w-[120px] flex-1 truncate font-medium"
-                      title={sourceNames.get(source.sourceId)}
-                    >
-                      {sourceNames.get(source.sourceId) || source.sourceId}
-                    </span>
-                    <span
-                      className={cn(
-                        "rounded border px-1.5 py-0.5",
-                        statusMeta[source.status].className,
-                      )}
-                    >
-                      {statusMeta[source.status].label}
-                    </span>
-                    <span>
-                      {source.compileUnitCount} Unit · Planner{" "}
-                      {source.plannerCalls} · Writer {source.writerCalls}
-                    </span>
-                    <span>页面 {source.pageKeys.length}</span>
-                    {source.error && (
-                      <span className="basis-full text-rose-700">
-                        失败信息：{source.error}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </details>
-          </div>
-        )}
-        {!running && job?.status === "completed_with_errors" && (
-          <div className="flex items-center gap-2 text-xs text-amber-700">
-            <AlertTriangle className="size-3.5" />
-            本次编译部分完成：
-            {
-              job.sources.filter((source) => source.status === "completed")
-                .length
-            }{" "}
-            个成功，
-            {
-              job.sources.filter((source) => source.status === "failed").length
-            }{" "}
-            个失败；失败 Source 可重新选择编译。
-          </div>
+            </span>
+            <span className="text-xs font-medium text-indigo-700">
+              查看任务
+            </span>
+          </button>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-white">
-        <table className="w-full min-w-[860px] table-fixed text-sm">
+      <div className="overflow-x-auto bg-white">
+        <table className="w-full table-auto text-sm">
           <colgroup>
-            {selectionMode && <col className="w-[42px]" />}
-            <col className="w-[32%]" />
-            <col className="w-[118px]" />
-            <col className="w-[88px]" />
-            <col className="w-[168px]" />
-            <col className="w-[168px]" />
+            {selectionMode && <col className="w-[56px] min-w-[56px]" />}
+            <col className="w-[36%] min-w-[320px]" />
+            <col className="w-[13%] min-w-[120px]" />
+            <col className="w-[10%] min-w-[100px]" />
+            <col className="w-[18%] min-w-[180px]" />
+            <col className="w-[18%] min-w-[190px]" />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-slate-100/95 text-xs text-slate-600 shadow-[0_1px_0_rgb(203_213_225)] backdrop-blur">
             <tr>
@@ -631,44 +550,53 @@ export function SourceWorkspace({
                         node.indeterminate =
                           somePageSelected && !allPageSelected;
                     }}
-                    disabled={!selectableRows.length || controlsLocked}
+                    disabled={!selectableRows.length || operationsLocked}
                     aria-label="选择当前页文档"
                     onChange={(event) => togglePage(event.target.checked)}
                     className="size-4 rounded border-slate-300 accent-indigo-600"
                   />
                 </th>
               )}
-              <th className="px-3 py-2.5 text-left font-medium">文档</th>
-              <th className="px-3 py-2.5 text-center font-medium">知识状态</th>
-              <th className="px-3 py-2.5 text-center font-medium">页面数</th>
-              <th className="px-3 py-2.5 text-center font-medium">上传时间</th>
-              <th className="px-3 py-2.5 text-center font-medium">操作</th>
+              <th className="min-w-[320px] px-3 py-2.5 text-center font-medium">
+                文档
+              </th>
+              <th className="min-w-[120px] px-3 py-2.5 text-center font-medium">
+                编译状态
+              </th>
+              <th className="min-w-[100px] px-3 py-2.5 text-center font-medium">
+                页面数
+              </th>
+              <th className="min-w-[180px] px-3 py-2.5 text-center font-medium">
+                上传时间
+              </th>
+              <th className="min-w-[190px] px-3 py-2.5 text-center font-medium">
+                操作
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {pageRows.map(({ source, status, jobState }) => {
+            {pageRows.map(({ source, status, poolItem }) => {
               const sourceCompletedInStaging =
                 staging?.state.completedSourceIds.includes(source.sourceId) ??
                 false;
               const sourceBusy =
-                status === "pending" ||
+                status === "queued" ||
                 status === "planning" ||
                 status === "writing";
-              const selectable = !sourceCompletedInStaging && !controlsLocked;
+              const selectable = !operationsLocked;
               return (
                 <Fragment key={source.sourceId}>
                   <tr
                     className={cn(
                       "align-middle transition-colors hover:bg-slate-50/80",
-                      selectedSourceIds.has(source.sourceId) &&
-                        "bg-indigo-50/40",
+                      selectedIds.has(source.sourceId) && "bg-indigo-50/40",
                     )}
                   >
                     {selectionMode && (
                       <td className="px-2 py-2 text-center">
                         <input
                           type="checkbox"
-                          checked={selectedSourceIds.has(source.sourceId)}
+                          checked={selectedIds.has(source.sourceId)}
                           disabled={!selectable}
                           aria-label={`选择 ${source.filename}`}
                           onChange={(event) =>
@@ -678,10 +606,10 @@ export function SourceWorkspace({
                         />
                       </td>
                     )}
-                    <td className="px-3 py-2.5">
-                      <div className="flex min-w-0 items-center gap-2">
+                    <td className="min-w-[320px] px-3 py-2.5 text-center">
+                      <div className="flex min-w-0 items-center justify-center gap-2">
                         <FileText className="size-4 shrink-0 text-slate-400" />
-                        <div className="min-w-0">
+                        <div className="min-w-0 text-center">
                           <p
                             className="truncate font-medium text-slate-900"
                             title={source.filename}
@@ -697,7 +625,7 @@ export function SourceWorkspace({
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="min-w-[120px] px-3 py-2 text-center">
                       <span
                         className={cn(
                           "inline-flex min-w-[64px] items-center justify-center rounded-md border px-2 py-0.5 text-xs",
@@ -707,16 +635,16 @@ export function SourceWorkspace({
                         {statusMeta[status].label}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-center tabular-nums text-slate-700">
+                    <td className="min-w-[100px] px-3 py-2 text-center tabular-nums text-slate-700">
                       {pageCountFor(source.sourceId, staging, publishedPages)}
                     </td>
                     <td
-                      className="px-3 py-2 text-center text-xs text-slate-500"
+                      className="min-w-[180px] px-3 py-2 text-center text-xs text-slate-500"
                       title={source.createdAt}
                     >
                       {formatTime(source.createdAt)}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="min-w-[190px] px-3 py-2 text-center">
                       <div className="inline-flex items-center gap-1">
                         <Button
                           size="xs"
@@ -732,7 +660,7 @@ export function SourceWorkspace({
                           variant="ghost"
                           className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
                           disabled={
-                            controlsLocked ||
+                            operationsLocked ||
                             sourceBusy ||
                             sourceCompletedInStaging ||
                             estimating ||
@@ -748,21 +676,35 @@ export function SourceWorkspace({
                           {sourceCompletedInStaging
                             ? "已暂存"
                             : sourceBusy
-                              ? "进行中"
+                              ? "编译中"
                               : "编译"}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          className="bg-rose-50 text-rose-700 hover:bg-rose-100"
+                          disabled={operationsLocked || deleting}
+                          onClick={() => onDeleteSelected([source.sourceId])}
+                        >
+                          {deleting ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <Trash2 />
+                          )}
+                          删除
                         </Button>
                       </div>
                     </td>
                   </tr>
-                  {jobState?.error && (
+                  {poolItem?.error && (
                     <tr className="bg-rose-50/50">
                       <td
                         colSpan={selectionMode ? 7 : 6}
-                        className="px-3 py-2 text-xs text-rose-700"
+                        className="px-3 py-2 text-center text-xs text-rose-700"
                       >
                         <span className="inline-flex items-center gap-1.5">
                           <AlertTriangle className="size-3.5" />
-                          本次编译失败：{jobState.error}
+                          本次编译失败：{poolItem.error}
                         </span>
                       </td>
                     </tr>
@@ -787,9 +729,14 @@ export function SourceWorkspace({
       </div>
       <Pagination
         page={currentPage}
-        pageSize={PAGE_SIZE}
+        pageSize={pageSize}
         total={filteredRows.length}
         onPageChange={setPage}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageSizeChange={(nextPageSize) => {
+          setPageSize(nextPageSize);
+          setPage(1);
+        }}
         className="border-t border-slate-100 bg-slate-50/50"
       />
     </section>

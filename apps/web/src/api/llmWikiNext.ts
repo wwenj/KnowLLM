@@ -3,20 +3,12 @@ import { http } from "./http";
 const ROOT = "/api/llm-wiki-next";
 
 export type SourceCompileStatus =
-  | "pending"
+  | "queued"
   | "planning"
   | "writing"
   | "completed"
   | "failed"
   | "cancelled";
-
-export type CompileJobStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "completed_with_errors"
-  | "cancelled"
-  | "failed";
 
 export interface SourceRecord {
   sourceId: string;
@@ -31,13 +23,20 @@ export interface SourceSnapshot extends SourceRecord {
   content: string;
 }
 
-export interface NormalizedCompileOptions {
-  sourceIds: string[];
+export interface DeleteSourcesResult {
+  deletedSourceIds: string[];
+}
+
+export interface CompileExecutionOptions {
   model: string;
   sourceConcurrency: number;
   chunkChars: number;
   plannerMaxOutputTokens: number;
   writerMaxOutputTokens: number;
+}
+
+export interface NormalizedCompileOptions extends CompileExecutionOptions {
+  sourceIds: string[];
 }
 
 export interface CompileRequest extends Partial<NormalizedCompileOptions> {
@@ -64,34 +63,43 @@ export interface CompileEstimate {
   maxWriterCalls: number;
   maxModelCalls: number;
   maxOutputTokens: number;
-  stagingGeneration: string;
+  workspaceMarker: string;
   options: NormalizedCompileOptions;
   confirmHash: string;
 }
 
-export interface CompileSourceState {
+export interface CompilePoolItem {
   sourceId: string;
+  contentHash: string;
   status: SourceCompileStatus;
   compileUnitCount: number;
+  maxModelCalls: number;
+  maxOutputTokens: number;
+  modelCalls: number;
   plannerCalls: number;
   writerCalls: number;
   pageKeys: string[];
   error: string;
+  queuedAt: string;
   startedAt: string;
   finishedAt: string;
+  startedOptions: CompileExecutionOptions | null;
 }
 
-export interface CompileJob {
-  jobId: string;
-  status: CompileJobStatus;
-  options: NormalizedCompileOptions;
-  estimate: CompileEstimate;
-  sources: CompileSourceState[];
-  modelCalls: number;
-  error: string;
+export interface CompilePool {
+  poolId: string;
+  workspaceId: string;
+  configVersion: number;
+  options: CompileExecutionOptions;
+  items: CompilePoolItem[];
   createdAt: string;
-  startedAt: string;
-  finishedAt: string;
+  updatedAt: string;
+}
+
+export interface CompilePoolCancelResult {
+  cancelled: true;
+  queuedCount: number;
+  runningCount: number;
 }
 
 export interface KeyFact {
@@ -128,7 +136,7 @@ export interface StagingSummary {
   pageCount: number;
   factCount: number;
   pages: ManifestPage[];
-  activeJob: CompileJob | null;
+  compilePool: CompilePool | null;
 }
 
 export interface PublishResult {
@@ -137,6 +145,8 @@ export interface PublishResult {
   factCount: number;
   publishedAt: string;
   cleanupWarnings: string[];
+  cancelledQueuedCount: number;
+  cancelledRunningCount: number;
 }
 
 export interface WikiManifest {
@@ -173,14 +183,20 @@ export const llmWikiNextApi = {
   listSources: () => http.get<{ items: SourceRecord[] }>(`${ROOT}/sources`),
   getSource: (sourceId: string) =>
     http.get<SourceSnapshot>(`${ROOT}/sources/${pathId(sourceId)}`),
+  deleteSources: (sourceIds: string[]) =>
+    http.post<DeleteSourcesResult>(`${ROOT}/sources/delete`, { sourceIds }),
   estimateCompile: (request: CompileRequest) =>
     http.post<CompileEstimate>(`${ROOT}/compile/estimate`, request),
   compile: (request: CompileRequest) =>
-    http.post<CompileJob>(`${ROOT}/compile`, request),
-  getJob: (jobId: string) =>
-    http.get<CompileJob>(`${ROOT}/compile/${pathId(jobId)}`),
-  cancelJob: (jobId: string) =>
-    http.post<CompileJob>(`${ROOT}/compile/${pathId(jobId)}/cancel`),
+    http.post<CompilePool>(`${ROOT}/compile`, request),
+  getCompilePool: async () => {
+    const value = await http.get<CompilePool | Record<string, never>>(
+      `${ROOT}/compile`,
+    );
+    return "poolId" in value ? (value as CompilePool) : null;
+  },
+  cancelCompilePool: () =>
+    http.post<CompilePoolCancelResult>(`${ROOT}/compile/cancel`),
   getStaging: async () => {
     // Nest 的全局响应层会把 controller 返回的 null 转为 {}，统一还原为空 Staging。
     const value = await http.get<StagingSummary | Record<string, never>>(

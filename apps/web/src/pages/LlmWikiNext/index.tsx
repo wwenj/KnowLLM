@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Loader2, RefreshCw, Send, Upload } from "lucide-react";
+import { Archive, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { modelApi, type ModelOption } from "@/api/model";
 import {
   llmWikiNextApi,
   type CompileEstimate,
-  type CompileJob,
+  type CompilePool,
   type ManifestPage,
   type SourceSnapshot,
   type StagingSummary,
@@ -21,6 +21,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  CompileConfirmationDialog,
+  CompilePoolDialog,
+} from "./components/CompileDialogs";
 import { SourcePreviewDialog } from "./components/SourcePreviewDialog";
 import {
   SourceWorkspace,
@@ -30,7 +34,6 @@ import { WikiWorkspace } from "./components/WikiWorkspace";
 
 const MODEL_STORAGE_KEY = "knowllm.llmWikiNext.model";
 const CONCURRENCY_STORAGE_KEY = "knowllm.llmWikiNext.concurrency";
-const RECENT_JOB_STORAGE_KEY = "knowllm.llmWikiNext.jobId";
 const CONCURRENCY_OPTIONS = [1, 2, 4, 8, 16] as const;
 const DEFAULT_SETTINGS: CompileSettings = {
   chunkChars: 12_000,
@@ -38,8 +41,15 @@ const DEFAULT_SETTINGS: CompileSettings = {
   writerMaxOutputTokens: 8_000,
 };
 
-function isActiveJob(job: CompileJob | null): boolean {
-  return job?.status === "queued" || job?.status === "running";
+function isActivePool(pool: CompilePool | null): boolean {
+  return Boolean(
+    pool?.items.some(
+      (item) =>
+        item.status === "queued" ||
+        item.status === "planning" ||
+        item.status === "writing",
+    ),
+  );
 }
 
 function formatTime(value: string): string {
@@ -77,7 +87,7 @@ export function LlmWikiNext() {
     generatedAt: "",
     pages: [],
   });
-  const [job, setJob] = useState<CompileJob | null>(null);
+  const [pool, setPool] = useState<CompilePool | null>(null);
   const [estimate, setEstimate] = useState<CompileEstimate | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -86,6 +96,11 @@ export function LlmWikiNext() {
   const [cancelling, setCancelling] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState("sources");
+  const [compileDialogOpen, setCompileDialogOpen] = useState(false);
+  const [compilePoolDialogOpen, setCompilePoolDialogOpen] = useState(false);
+  const [deleteSourceIds, setDeleteSourceIds] = useState<string[]>([]);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -108,10 +123,7 @@ export function LlmWikiNext() {
       setSources(sourceData.items);
       setStaging(stagingData);
       setPublishedManifest(manifest);
-      setJob(
-        (current) =>
-          stagingData?.activeJob ?? (isActiveJob(current) ? null : current),
-      );
+      setPool(stagingData?.compilePool ?? null);
       if (clearEstimate) setEstimate(null);
       return stagingData;
     } catch {
@@ -138,49 +150,28 @@ export function LlmWikiNext() {
   }, []);
 
   useEffect(() => {
-    let alive = true;
     const timer = window.setTimeout(() => {
-      void Promise.all([refreshWorkspace(), loadModels()]).then(
-        async ([currentStaging]) => {
-          if (!alive || currentStaging?.activeJob) return;
-          const recentJobId = window.localStorage.getItem(
-            RECENT_JOB_STORAGE_KEY,
-          );
-          if (!recentJobId) return;
-          try {
-            const recentJob = await llmWikiNextApi.getJob(recentJobId);
-            if (alive) setJob(recentJob);
-          } catch {
-            window.localStorage.removeItem(RECENT_JOB_STORAGE_KEY);
-          }
-        },
-      );
+      void Promise.all([refreshWorkspace(), loadModels()]);
     }, 0);
     return () => {
-      alive = false;
       window.clearTimeout(timer);
     };
   }, [loadModels, refreshWorkspace]);
 
-  const active = isActiveJob(job);
+  const active = isActivePool(pool);
   useEffect(() => {
-    if (!active || !job) return;
+    if (!active) return;
     let cancelled = false;
     const poll = async () => {
       try {
-        const next = await llmWikiNextApi.getJob(job.jobId);
+        const [nextPool, nextStaging] = await Promise.all([
+          llmWikiNextApi.getCompilePool(),
+          llmWikiNextApi.getStaging(),
+        ]);
         if (cancelled) return;
-        setJob(next);
-        if (!isActiveJob(next)) {
-          await refreshWorkspace();
-          if (cancelled) return;
-          // refresh 可能先读取到 activeJob 已清空的 Staging；保留本次终态，方便查看失败 Source。
-          setJob(next);
-          if (next.status === "completed")
-            toast.success("编译完成，结果已合并到暂存 Wiki");
-          if (next.status === "completed_with_errors")
-            toast.warning("编译部分完成，请查看失败 Source");
-        }
+        setPool(nextPool);
+        setStaging(nextStaging);
+        if (!isActivePool(nextPool)) setCompilePoolDialogOpen(false);
       } catch {
         // 轮询失败时保留最后一次状态；用户可手动刷新，不把未知状态伪装成已结束。
       }
@@ -191,7 +182,7 @@ export function LlmWikiNext() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [active, job, refreshWorkspace]);
+  }, [active]);
 
   const sourceNames = useMemo(
     () =>
@@ -203,7 +194,6 @@ export function LlmWikiNext() {
   const publishedPages: ManifestPage[] = publishedManifest.pages;
   const publishBlocked =
     !staging ||
-    active ||
     staging.state.status === "publishing" ||
     publishing ||
     discarding ||
@@ -264,7 +254,7 @@ export function LlmWikiNext() {
   };
 
   const estimateCompile = async (sourceIds: string[]) => {
-    if (active || publishing || discarding) return;
+    if (publishing || discarding) return;
     if (!sourceIds.length) return toast.error("请选择至少一个 Source");
     if (!model) return toast.error("请选择编译模型");
     if (!validInteger(settings.chunkChars, 1_000, 60_000))
@@ -275,32 +265,32 @@ export function LlmWikiNext() {
       return toast.error("Writer 输出上限必须是 256 到 32,000 的整数");
     setEstimating(true);
     try {
-      setEstimate(
-        await llmWikiNextApi.estimateCompile({
-          sourceIds,
-          model,
-          sourceConcurrency,
-          ...settings,
-        }),
-      );
+      const nextEstimate = await llmWikiNextApi.estimateCompile({
+        sourceIds,
+        model,
+        sourceConcurrency,
+        ...settings,
+      });
+      setEstimate(nextEstimate);
+      setCompileDialogOpen(true);
     } finally {
       setEstimating(false);
     }
   };
 
   const confirmCompile = async () => {
-    if (!estimate || active || publishing || discarding) return;
+    if (!estimate || publishing || discarding) return;
     setStartingCompile(true);
     try {
       // 只提交 estimate 原样返回的 options + confirmHash，配置变更必须重新估算。
-      const nextJob = await llmWikiNextApi.compile({
+      const nextPool = await llmWikiNextApi.compile({
         ...estimate.options,
         confirmHash: estimate.confirmHash,
       });
-      setJob(nextJob);
-      window.localStorage.setItem(RECENT_JOB_STORAGE_KEY, nextJob.jobId);
+      setPool(nextPool);
       setEstimate(null);
-      toast.success("编译任务已开始");
+      setCompileDialogOpen(false);
+      toast.success("已开始编译");
       await refreshWorkspace();
     } finally {
       setStartingCompile(false);
@@ -308,16 +298,31 @@ export function LlmWikiNext() {
   };
 
   const cancelCompile = async () => {
-    if (!job || !active || cancelling) return;
+    if (!pool || cancelling) return;
     setCancelling(true);
     try {
-      const nextJob = await llmWikiNextApi.cancelJob(job.jobId);
-      setJob(nextJob);
-      toast.success("已取消当前编译，之前已合并的暂存结果会保留");
+      const result = await llmWikiNextApi.cancelCompilePool();
+      setPool(null);
+      setCompilePoolDialogOpen(false);
+      toast.success(
+        `已清空编译任务（${result.runningCount} 个运行中，${result.queuedCount} 个等待中）`,
+      );
       await refreshWorkspace();
-      setJob(nextJob);
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const deleteSources = async () => {
+    if (!deleteSourceIds.length || deleting) return;
+    setDeleting(true);
+    try {
+      const result = await llmWikiNextApi.deleteSources(deleteSourceIds);
+      setDeleteSourceIds([]);
+      toast.success(`已删除 ${result.deletedSourceIds.length} 个文档`);
+      await refreshWorkspace(true);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -329,6 +334,11 @@ export function LlmWikiNext() {
       setPublishDialogOpen(false);
       setEstimate(null);
       toast.success(`已发布 ${result.pageCount} 个页面`);
+      if (result.cancelledQueuedCount || result.cancelledRunningCount) {
+        toast.warning(
+          `已清空 ${result.cancelledQueuedCount} 个待编译项并中断 ${result.cancelledRunningCount} 个运行项`,
+        );
+      }
       if (result.cleanupWarnings.length)
         toast.warning(result.cleanupWarnings.join("；"));
       await refreshWorkspace();
@@ -342,7 +352,7 @@ export function LlmWikiNext() {
     setDiscarding(true);
     try {
       await llmWikiNextApi.discardStaging();
-      setJob(null);
+      setPool(null);
       setDiscardDialogOpen(false);
       setEstimate(null);
       toast.success(
@@ -373,74 +383,33 @@ export function LlmWikiNext() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <header className="flex flex-none flex-col gap-2 border-b border-slate-200 bg-white/95 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">
-            文档{" "}
-            <strong className="font-semibold tabular-nums text-slate-950">
-              {sources.length}
-            </strong>
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">
-            暂存页面{" "}
-            <strong className="font-semibold tabular-nums text-slate-950">
-              {staging?.pageCount || 0}
-            </strong>
-          </span>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-slate-600">
-            正式页面{" "}
-            <strong className="font-semibold tabular-nums text-slate-950">
-              {publishedPages.length}
-            </strong>
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".md,.markdown,.txt,text/markdown,text/plain"
-            className="hidden"
-            onChange={(event) => void uploadSources(event.target.files)}
-          />
-          <Button
-            disabled={
-              uploading ||
-              staging?.state.status === "publishing" ||
-              publishing ||
-              discarding
-            }
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {uploading ? <Loader2 className="animate-spin" /> : <Upload />}上传
-          </Button>
-          <Button
-            size="icon"
-            variant="outline"
-            disabled={loading || publishing || discarding}
-            title="刷新"
-            aria-label="刷新"
-            onClick={() => void refreshWorkspace(true)}
-          >
-            <RefreshCw className={loading ? "animate-spin" : ""} />
-          </Button>
-        </div>
-      </header>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".md,.markdown,.txt,text/markdown,text/plain"
+        className="hidden"
+        onChange={(event) => void uploadSources(event.target.files)}
+      />
 
-      <Tabs defaultValue="sources" className="min-h-0 flex-1 gap-0">
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="min-h-0 flex-1 gap-0"
+      >
         <div className="flex flex-none items-center border-b border-slate-200 bg-slate-50/70 px-3">
           <TabsList variant="line" className="h-10 gap-2 p-0">
             <TabsTrigger
               value="sources"
               className="h-10 px-3 text-xs after:bottom-0"
             >
-              文档
+              原文档
             </TabsTrigger>
             <TabsTrigger
               value="staging"
               className="h-10 px-3 text-xs after:bottom-0"
             >
-              暂存 Wiki
+              待发布 Wiki
             </TabsTrigger>
             <TabsTrigger
               value="published"
@@ -453,31 +422,33 @@ export function LlmWikiNext() {
 
         <TabsContent
           value="sources"
-          className="min-h-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden"
+          className="min-h-0 flex-1 overflow-y-auto data-[state=active]:flex data-[state=inactive]:hidden"
         >
           <SourceWorkspace
             sources={sources}
             staging={staging}
             publishedPages={publishedPages}
-            job={job}
-            estimate={estimate}
+            pool={pool}
             models={models}
             model={model}
             sourceConcurrency={sourceConcurrency}
             settings={settings}
             estimating={estimating}
             startingCompile={startingCompile}
+            uploading={uploading}
+            loading={loading}
+            deleting={deleting}
             operationsLocked={
               publishing || discarding || staging?.state.status === "publishing"
             }
-            cancelling={cancelling}
             onModelChange={changeModel}
             onSourceConcurrencyChange={changeConcurrency}
             onSettingsChange={changeSettings}
+            onUpload={() => fileInputRef.current?.click()}
+            onRefresh={() => void refreshWorkspace(true)}
             onEstimate={(sourceIds) => void estimateCompile(sourceIds)}
-            onConfirmCompile={() => void confirmCompile()}
-            onClearEstimate={() => setEstimate(null)}
-            onCancelJob={() => void cancelCompile()}
+            onDeleteSelected={setDeleteSourceIds}
+            onOpenCompilePool={() => setCompilePoolDialogOpen(true)}
             onOpenSource={(sourceId) => void openSourcePreview(sourceId)}
           />
         </TabsContent>
@@ -490,9 +461,9 @@ export function LlmWikiNext() {
             <div className="flex flex-1 items-center justify-center bg-slate-50/50 p-6 text-center">
               <div className="max-w-sm">
                 <Archive className="mx-auto mb-3 size-7 text-slate-300" />
-                <p className="font-medium text-slate-700">还没有暂存编译结果</p>
+                <p className="font-medium text-slate-700">还没有待发布 Wiki</p>
                 <p className="mt-1 text-sm leading-6 text-slate-500">
-                  在“文档”中选择 Source
+                  在“原文档”中选择 Source
                   并确认编译，成功结果会合并到这里统一审阅和发布。
                 </p>
               </div>
@@ -501,7 +472,7 @@ export function LlmWikiNext() {
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex flex-none flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-slate-50/70 px-3 py-2.5 text-xs text-slate-600">
                 <span>
-                  已合并 Source{" "}
+                  已编译 Source{" "}
                   <strong className="ml-1 tabular-nums text-slate-950">
                     {staging.state.completedSourceIds.length}
                   </strong>
@@ -527,7 +498,7 @@ export function LlmWikiNext() {
                     onClick={() => setDiscardDialogOpen(true)}
                   >
                     <Archive />
-                    撤销暂存
+                    撤销待发布
                   </Button>
                   <Button
                     size="sm"
@@ -579,6 +550,28 @@ export function LlmWikiNext() {
         </TabsContent>
       </Tabs>
 
+      <CompileConfirmationDialog
+        open={compileDialogOpen}
+        estimate={estimate}
+        sourceNames={sourceNames}
+        starting={startingCompile}
+        onOpenChange={(open) => {
+          if (startingCompile) return;
+          setCompileDialogOpen(open);
+          if (!open) setEstimate(null);
+        }}
+        onConfirm={() => void confirmCompile()}
+      />
+
+      <CompilePoolDialog
+        open={compilePoolDialogOpen}
+        pool={pool}
+        sourceNames={sourceNames}
+        cancelling={cancelling}
+        onOpenChange={setCompilePoolDialogOpen}
+        onClear={() => void cancelCompile()}
+      />
+
       <SourcePreviewDialog
         open={previewOpen}
         source={previewSource}
@@ -587,13 +580,52 @@ export function LlmWikiNext() {
         onOpenChange={setPreviewOpen}
       />
 
+      <Dialog
+        open={deleteSourceIds.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteSourceIds([]);
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]" showCloseButton={!deleting}>
+          <DialogHeader>
+            <DialogTitle>删除原文档？</DialogTitle>
+            <DialogDescription>
+              接口会再次检查实际的待发布和正式发布产物；任一 Source
+              仍有关联产物时，本次删除将被拒绝。无产物的排队或运行任务会同步停止。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            将删除 {deleteSourceIds.length} 个文档。
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={deleting}
+              onClick={() => setDeleteSourceIds([])}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void deleteSources()}
+            >
+              {deleting && <Loader2 className="animate-spin" />}
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={publishDialogOpen} onOpenChange={setPublishDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>发布暂存 Wiki？</DialogTitle>
+            <DialogTitle>确认发布 Wiki？</DialogTitle>
             <DialogDescription>
-              将整套 Staging 原子替换正式 Wiki。这里审阅的是完整快照，不表示页面
-              diff；发布后不支持撤回。
+              {pool
+                ? `将整套 Staging 原子替换正式 Wiki，并中断 ${pool.items.filter((item) => item.status === "planning" || item.status === "writing").length} 个运行项、清空 ${pool.items.filter((item) => item.status === "queued").length} 个待编译项。`
+                : "将整套 Staging 原子替换正式 Wiki。"}{" "}
+              这里审阅的是完整快照，不表示页面 diff；发布后不支持撤回。
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -620,7 +652,7 @@ export function LlmWikiNext() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {active ? "取消编译并撤销暂存 Wiki？" : "撤销当前暂存 Wiki？"}
+              {active ? "取消编译并撤销待发布 Wiki？" : "撤销当前待发布 Wiki？"}
             </DialogTitle>
             <DialogDescription>
               {active
