@@ -9,6 +9,7 @@ import { DebugModule } from "./modules/debug/debug.module";
 import { EvaluationModule } from "./modules/evaluation/evaluation.module";
 import { HealthModule } from "./modules/health/health.module";
 import { LlmWikiModule } from "./modules/llmWiki/llm-wiki.module";
+import { LlmWikiNextModule } from "./modules/llmWikiNext/llm-wiki-next.module";
 import { ModelModule } from "./modules/model/model.module";
 
 @Module({
@@ -20,6 +21,7 @@ import { ModelModule } from "./modules/model/model.module";
     HealthModule,
     ModelModule,
     LlmWikiModule,
+    LlmWikiNextModule,
     AgentModule,
     EvaluationModule,
     DebugModule
