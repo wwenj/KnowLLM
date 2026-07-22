@@ -9,6 +9,7 @@ import { NavLink, Outlet } from "react-router-dom";
 const navItems = [
   { to: "/agents", label: "调试中心", icon: Sparkles },
   { to: "/llm-wiki", label: "LLM Wiki 管理", icon: BookOpen },
+  { to: "/llm-wiki-next", label: "LLM Wiki Next", icon: BookOpen },
   { to: "/evaluations/llm-wiki-compile", label: "编译评测", icon: ClipboardCheck },
   { to: "/evaluations/llm-wiki-agent", label: "Agent 评测", icon: Bot },
 ];

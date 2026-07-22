@@ -5,6 +5,7 @@ import { DeepAgent } from "@/pages/DeepAgent";
 import { LlmWiki } from "@/pages/LlmWiki";
 import { LlmWikiAgentEvaluation } from "@/pages/LlmWikiAgentEvaluation";
 import { LlmWikiEvaluation } from "@/pages/LlmWikiEvaluation";
+import { LlmWikiNext } from "@/pages/LlmWikiNext";
 
 export const router = createBrowserRouter([
   {
@@ -14,6 +15,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/llm-wiki" replace /> },
       { path: "agents", element: <DeepAgent /> },
       { path: "llm-wiki", element: <LlmWiki /> },
+      { path: "llm-wiki-next", element: <LlmWikiNext /> },
       { path: "evaluations/llm-wiki-compile", element: <LlmWikiEvaluation /> },
       { path: "evaluations/llm-wiki-agent", element: <LlmWikiAgentEvaluation /> },
     ],
