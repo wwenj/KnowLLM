@@ -1,18 +1,10 @@
 export type SourceCompileStatus =
-  | "pending"
+  | "queued"
   | "planning"
   | "writing"
   | "completed"
   | "failed"
   | "cancelled";
-
-export type CompileJobStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "completed_with_errors"
-  | "cancelled"
-  | "failed";
 
 export interface SourceRecord {
   sourceId: string;
@@ -25,6 +17,10 @@ export interface SourceRecord {
 
 export interface SourceSnapshot extends SourceRecord {
   content: string;
+}
+
+export interface DeleteSourcesResult {
+  deletedSourceIds: string[];
 }
 
 export interface CompileUnit {
@@ -47,13 +43,16 @@ export interface CompileRequest {
   confirmHash?: string;
 }
 
-export interface NormalizedCompileOptions {
-  sourceIds: string[];
+export interface CompileExecutionOptions {
   model: string;
   sourceConcurrency: number;
   chunkChars: number;
   plannerMaxOutputTokens: number;
   writerMaxOutputTokens: number;
+}
+
+export interface NormalizedCompileOptions extends CompileExecutionOptions {
+  sourceIds: string[];
 }
 
 export interface CompileUnitEstimate {
@@ -73,35 +72,43 @@ export interface CompileEstimate {
   maxWriterCalls: number;
   maxModelCalls: number;
   maxOutputTokens: number;
-  stagingGeneration: string;
+  workspaceMarker: string;
   options: NormalizedCompileOptions;
   confirmHash: string;
 }
 
-export interface CompileSourceState {
+export interface CompilePoolItem {
   sourceId: string;
+  contentHash: string;
   status: SourceCompileStatus;
   compileUnitCount: number;
+  maxModelCalls: number;
+  maxOutputTokens: number;
+  modelCalls: number;
   plannerCalls: number;
   writerCalls: number;
   pageKeys: string[];
   error: string;
+  queuedAt: string;
   startedAt: string;
   finishedAt: string;
+  startedOptions: CompileExecutionOptions | null;
 }
 
-export interface CompileJob {
-  jobId: string;
-  status: CompileJobStatus;
-  options: NormalizedCompileOptions;
-  estimate: CompileEstimate;
-  sources: CompileSourceState[];
-  modelCalls: number;
-  writeToken: string;
-  error: string;
+export interface CompilePool {
+  poolId: string;
+  workspaceId: string;
+  configVersion: number;
+  options: CompileExecutionOptions;
+  items: CompilePoolItem[];
   createdAt: string;
-  startedAt: string;
-  finishedAt: string;
+  updatedAt: string;
+}
+
+export interface CompilePoolCancelResult {
+  cancelled: true;
+  queuedCount: number;
+  runningCount: number;
 }
 
 export interface WikiPagePlanItem {
@@ -214,7 +221,7 @@ export interface StagingSummary {
   pageCount: number;
   factCount: number;
   pages: ManifestPage[];
-  activeJob: CompileJob | null;
+  compilePool: CompilePool | null;
 }
 
 export interface PublishResult {
@@ -223,4 +230,6 @@ export interface PublishResult {
   factCount: number;
   publishedAt: string;
   cleanupWarnings: string[];
+  cancelledQueuedCount: number;
+  cancelledRunningCount: number;
 }

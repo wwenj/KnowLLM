@@ -45,7 +45,7 @@ export function SourcePreviewDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[80vh] max-w-4xl gap-3 overflow-hidden p-0"
+        className="max-h-[80vh] w-[80vw] max-w-none gap-3 overflow-hidden p-0"
         showCloseButton
       >
         <DialogHeader className="border-b border-slate-200 px-4 py-3 pr-12">

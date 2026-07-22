@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { ModelService, RawChatOptions } from "../model/model.service";
-import { calculateMaxPages, LlmWikiNextService, splitSource } from "./llm-wiki-next.service";
+import {
+  calculateMaxPages,
+  LlmWikiNextService,
+  splitSource,
+} from "./llm-wiki-next.service";
 import { LlmWikiNextStore } from "./llm-wiki-next.store";
-import { CompileJob, SourceSnapshot } from "./llm-wiki-next.types";
+import { CompilePool, SourceSnapshot } from "./llm-wiki-next.types";
 
 test("物理切片保留 offset 和原始全局行号", () => {
   const source: SourceSnapshot = {
@@ -20,7 +31,12 @@ test("物理切片保留 offset 和原始全局行号", () => {
   };
   const units = splitSource(source, 3);
   assert.deepEqual(
-    units.map((unit) => ({ content: unit.content, start: unit.startOffset, end: unit.endOffset, line: unit.startLine })),
+    units.map((unit) => ({
+      content: unit.content,
+      start: unit.startOffset,
+      end: unit.endOffset,
+      line: unit.startLine,
+    })),
     [
       { content: "a\nb", start: 0, end: 3, line: 1 },
       { content: "c\nd", start: 3, end: 6, line: 2 },
@@ -32,19 +48,8 @@ test("物理切片保留 offset 和原始全局行号", () => {
 test("动态 maxPages 在所有阈值边界按预期切换", () => {
   assert.deepEqual(
     [
-      1,
-      4_000,
-      4_001,
-      10_000,
-      10_001,
-      19_000,
-      19_001,
-      31_000,
-      31_001,
-      46_000,
-      46_001,
-      64_000,
-      64_001,
+      1, 4_000, 4_001, 10_000, 10_001, 19_000, 19_001, 31_000, 31_001, 46_000,
+      46_001, 64_000, 64_001,
     ].map((charCount) => calculateMaxPages(charCount)),
     [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8],
   );
@@ -53,8 +58,15 @@ test("动态 maxPages 在所有阈值边界按预期切换", () => {
 test("estimate 返回 Unit 局部上限，统一 Writer 调用预算为 2U", () => {
   const harness = createHarness(new StubModel());
   try {
-    const source = harness.service.uploadSource("estimate.md", Buffer.from("x".repeat(4_001), "utf8"));
-    const request = { sourceIds: [source.sourceId], model: "test:model", chunkChars: 10_000 };
+    const source = harness.service.uploadSource(
+      "estimate.md",
+      Buffer.from("x".repeat(4_001), "utf8"),
+    );
+    const request = {
+      sourceIds: [source.sourceId],
+      model: "test:model",
+      chunkChars: 10_000,
+    };
     const first = harness.service.estimateCompile(request);
     const second = harness.service.estimateCompile(request);
     assert.deepEqual(first.units, [
@@ -80,27 +92,38 @@ test("estimate 返回 Unit 局部上限，统一 Writer 调用预算为 2U", () 
 test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
   const harness = createHarness(new StubModel());
   try {
-    const sourceA = harness.service.uploadSource("a.md", Buffer.from("Alpha content", "utf8"));
-    const sourceB = harness.service.uploadSource("b.txt", Buffer.from("Beta content", "utf8"));
+    const sourceA = harness.service.uploadSource(
+      "a.md",
+      Buffer.from("Alpha content", "utf8"),
+    );
+    const sourceB = harness.service.uploadSource(
+      "b.txt",
+      Buffer.from("Beta content", "utf8"),
+    );
 
     const first = await compileSources(harness.service, [sourceA.sourceId]);
-    assert.equal(first.status, "completed");
+    assert.equal(poolStatus(first), "completed");
     const firstStaging = harness.service.getStaging();
     assert.equal(firstStaging?.pageCount, 1);
     const workspaceId = firstStaging?.state.workspaceId;
     assert.equal(harness.service.getPublishedManifest().pages.length, 0);
 
     const second = await compileSources(harness.service, [sourceB.sourceId]);
-    assert.equal(second.status, "completed");
+    assert.equal(poolStatus(second), "completed");
     const staging = harness.service.getStaging();
     assert.equal(staging?.state.workspaceId, workspaceId);
     assert.equal(staging?.pageCount, 2);
-    assert.deepEqual(new Set(staging?.state.completedSourceIds), new Set([sourceA.sourceId, sourceB.sourceId]));
+    assert.deepEqual(
+      new Set(staging?.state.completedSourceIds),
+      new Set([sourceA.sourceId, sourceB.sourceId]),
+    );
 
     for (const page of staging?.pages || []) {
       const detail = harness.service.getStagingPage(page.pageKey);
       assert.equal(detail.keyFacts.length, 5);
-      assert.ok(detail.keyFacts.every((fact) => fact.sourceId === page.sourceIds[0]));
+      assert.ok(
+        detail.keyFacts.every((fact) => fact.sourceId === page.sourceIds[0]),
+      );
     }
 
     const published = await harness.service.publishStaging();
@@ -110,13 +133,94 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
     assert.equal(harness.service.getPublishedManifest().pages.length, 2);
     assert.equal(harness.service.searchPublished("Alpha").items.length, 1);
     const pointer = JSON.parse(
-      readFileSync(path.join(harness.store.root, "published", "current.json"), "utf8"),
+      readFileSync(
+        path.join(harness.store.root, "published", "current.json"),
+        "utf8",
+      ),
     ) as { revisionId: string };
-    const revisionRoot = path.join(harness.store.root, "published", "revisions", pointer.revisionId);
-    for (const file of ["facts.json", "source-map.json", "manifest.json", "search-index.json"]) {
-      assert.ok(existsSync(path.join(revisionRoot, file)), `${file} 应随 revision 一起发布`);
+    const revisionRoot = path.join(
+      harness.store.root,
+      "published",
+      "revisions",
+      pointer.revisionId,
+    );
+    for (const file of [
+      "facts.json",
+      "source-map.json",
+      "manifest.json",
+      "search-index.json",
+    ]) {
+      assert.ok(
+        existsSync(path.join(revisionRoot, file)),
+        `${file} 应随 revision 一起发布`,
+      );
     }
     assert.ok(existsSync(path.join(revisionRoot, "pages")));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("批量删除只按实际待发布或正式发布产物拒绝 Source", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const removable = harness.service.uploadSource(
+      "removable.md",
+      Buffer.from("Raw only", "utf8"),
+    );
+    const linked = harness.service.uploadSource(
+      "linked.md",
+      Buffer.from("Linked source", "utf8"),
+    );
+
+    await compileSources(harness.service, [linked.sourceId]);
+    await assert.rejects(
+      () => harness.service.deleteSources([linked.sourceId]),
+      /不能删除/,
+    );
+
+    const deleted = await harness.service.deleteSources([removable.sourceId]);
+    assert.deepEqual(deleted.deletedSourceIds, [removable.sourceId]);
+    assert.throws(() => harness.service.getSource(removable.sourceId));
+
+    await harness.service.publishStaging();
+    await assert.rejects(
+      () => harness.service.deleteSources([linked.sourceId]),
+      /不能删除/,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("无编译产物的运行中 Source 可删除且晚到响应不可写回", async () => {
+  const delayed = new DelayedWriterModel();
+  const harness = createHarness(delayed);
+  try {
+    const source = harness.service.uploadSource(
+      "running.md",
+      Buffer.from("Slow source", "utf8"),
+    );
+    const estimate = harness.service.estimateCompile({
+      sourceIds: [source.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...estimate.options,
+      confirmHash: estimate.confirmHash,
+    });
+    await delayed.writerStarted;
+
+    const deleted = await harness.service.deleteSources([source.sourceId]);
+    assert.deepEqual(deleted.deletedSourceIds, [source.sourceId]);
+    assert.throws(() => harness.service.getSource(source.sourceId));
+    assert.equal(harness.service.getCompilePool(), null);
+
+    delayed.finishWriter();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const staging = harness.service.getStaging();
+    assert.equal(staging?.pageCount, 0);
+    assert.ok(!staging?.state.completedSourceIds.includes(source.sourceId));
   } finally {
     harness.cleanup();
   }
@@ -125,14 +229,20 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
 test("Source Writer 失败不会向已有 Staging 写入部分结果", async () => {
   const harness = createHarness(new StubModel());
   try {
-    const good = harness.service.uploadSource("good.md", Buffer.from("Good source", "utf8"));
-    const failed = harness.service.uploadSource("failed.md", Buffer.from("[FAIL] source", "utf8"));
+    const good = harness.service.uploadSource(
+      "good.md",
+      Buffer.from("Good source", "utf8"),
+    );
+    const failed = harness.service.uploadSource(
+      "failed.md",
+      Buffer.from("[FAIL] source", "utf8"),
+    );
     await compileSources(harness.service, [good.sourceId]);
     const before = harness.service.getStaging();
 
     const failedJob = await compileSources(harness.service, [failed.sourceId]);
-    assert.equal(failedJob.status, "completed_with_errors");
-    assert.equal(failedJob.sources[0].status, "failed");
+    assert.equal(poolStatus(failedJob), "completed_with_errors");
+    assert.equal(poolItem(failedJob, failed.sourceId).status, "failed");
     const after = harness.service.getStaging();
     assert.equal(after?.pageCount, before?.pageCount);
     assert.ok(!after?.state.completedSourceIds.includes(failed.sourceId));
@@ -145,16 +255,29 @@ test("Source Writer 失败不会向已有 Staging 写入部分结果", async () 
 test("确认 hash 失效和 Planner 越权 ID 都会阻止编译结果写入", async () => {
   const harness = createHarness(new InvalidPlannerModel());
   try {
-    const source = harness.service.uploadSource("invalid.md", Buffer.from("Invalid plan", "utf8"));
-    const estimate = harness.service.estimateCompile({ sourceIds: [source.sourceId], model: "test:model" });
+    const source = harness.service.uploadSource(
+      "invalid.md",
+      Buffer.from("Invalid plan", "utf8"),
+    );
+    const estimate = harness.service.estimateCompile({
+      sourceIds: [source.sourceId],
+      model: "test:model",
+    });
     await assert.rejects(
-      () => harness.service.compile({ ...estimate.options, confirmHash: "invalid" }),
+      () =>
+        harness.service.compile({
+          ...estimate.options,
+          confirmHash: "invalid",
+        }),
       /编译确认已失效/,
     );
-    const job = await harness.service.compile({ ...estimate.options, confirmHash: estimate.confirmHash });
-    const finished = await waitForJob(harness.service, job.jobId);
-    assert.equal(finished.status, "completed_with_errors");
-    assert.match(finished.sources[0].error, /pageKey 未预留/);
+    await harness.service.compile({
+      ...estimate.options,
+      confirmHash: estimate.confirmHash,
+    });
+    const finished = await waitForSources(harness.service, [source.sourceId]);
+    assert.equal(poolStatus(finished), "completed_with_errors");
+    assert.match(poolItem(finished, source.sourceId).error, /pageKey 未预留/);
     assert.equal(harness.service.getStaging()?.pageCount, 0);
     assert.deepEqual(harness.service.getStaging()?.state.reservedPageKeys, []);
   } finally {
@@ -162,20 +285,186 @@ test("确认 hash 失效和 Planner 越权 ID 都会阻止编译结果写入", a
   }
 });
 
-test("活动任务禁止发布，取消后晚到响应不能写入 Staging", async () => {
+test("取消编译池后晚到响应不能写入 Staging", async () => {
   const delayed = new DelayedWriterModel();
   const harness = createHarness(delayed);
   try {
-    const source = harness.service.uploadSource("slow.md", Buffer.from("Slow source", "utf8"));
-    const estimate = harness.service.estimateCompile({ sourceIds: [source.sourceId], model: "test:model" });
-    const started = await harness.service.compile({ ...estimate.options, confirmHash: estimate.confirmHash });
+    const source = harness.service.uploadSource(
+      "slow.md",
+      Buffer.from("Slow source", "utf8"),
+    );
+    const estimate = harness.service.estimateCompile({
+      sourceIds: [source.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...estimate.options,
+      confirmHash: estimate.confirmHash,
+    });
     await delayed.writerStarted;
-    await assert.rejects(() => harness.service.publishStaging(), /编译任务尚未结束/);
-    await harness.service.cancelJob(started.jobId);
+    const cancelled = await harness.service.cancelCompilePool();
+    assert.equal(cancelled.runningCount, 1);
     delayed.finishWriter();
-    await waitForJob(harness.service, started.jobId);
-    assert.equal(harness.service.getJob(started.jobId).status, "cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(harness.service.getCompilePool(), null);
     assert.equal(harness.service.getStaging()?.pageCount, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("新提交可在编译中加入同一 Pool，待编译项使用最新配置", async () => {
+  const delayed = new DelayedWriterModel("First source");
+  const harness = createHarness(delayed);
+  try {
+    const first = harness.service.uploadSource(
+      "first.md",
+      Buffer.from("First source", "utf8"),
+    );
+    const second = harness.service.uploadSource(
+      "second.md",
+      Buffer.from("Second source", "utf8"),
+    );
+    const firstEstimate = harness.service.estimateCompile({
+      sourceIds: [first.sourceId],
+      model: "test:model",
+      sourceConcurrency: 1,
+      chunkChars: 12_000,
+    });
+    await harness.service.compile({
+      ...firstEstimate.options,
+      confirmHash: firstEstimate.confirmHash,
+    });
+    await delayed.writerStarted;
+
+    const secondEstimate = harness.service.estimateCompile({
+      sourceIds: [second.sourceId],
+      model: "test:model",
+      sourceConcurrency: 1,
+      chunkChars: 1_000,
+    });
+    await harness.service.compile({
+      ...secondEstimate.options,
+      confirmHash: secondEstimate.confirmHash,
+    });
+    const queued = harness.service.getCompilePool();
+    assert.ok(queued);
+    assert.equal(queued.options.chunkChars, 1_000);
+    assert.equal(
+      poolItem(queued, first.sourceId).startedOptions?.chunkChars,
+      12_000,
+    );
+    assert.equal(poolItem(queued, second.sourceId).status, "queued");
+    assert.equal(poolItem(queued, second.sourceId).startedOptions, null);
+
+    delayed.finishWriter();
+    const finished = await waitForSources(harness.service, [
+      first.sourceId,
+      second.sourceId,
+    ]);
+    assert.equal(poolItem(finished, first.sourceId).status, "completed");
+    assert.equal(poolItem(finished, second.sourceId).status, "completed");
+    assert.equal(
+      poolItem(finished, second.sourceId).startedOptions?.chunkChars,
+      1_000,
+    );
+    assert.equal(harness.service.getStaging()?.pageCount, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("提前发布仅保留已合并 Staging，并清空运行和等待项", async () => {
+  const delayed = new DelayedWriterModel("Slow source");
+  const harness = createHarness(delayed);
+  try {
+    const completed = harness.service.uploadSource(
+      "completed.md",
+      Buffer.from("Completed source", "utf8"),
+    );
+    await compileSources(harness.service, [completed.sourceId]);
+    const slow = harness.service.uploadSource(
+      "slow.md",
+      Buffer.from("Slow source", "utf8"),
+    );
+    const waiting = harness.service.uploadSource(
+      "waiting.md",
+      Buffer.from("Waiting source", "utf8"),
+    );
+    const slowEstimate = harness.service.estimateCompile({
+      sourceIds: [slow.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...slowEstimate.options,
+      confirmHash: slowEstimate.confirmHash,
+    });
+    await delayed.writerStarted;
+    const waitingEstimate = harness.service.estimateCompile({
+      sourceIds: [waiting.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...waitingEstimate.options,
+      confirmHash: waitingEstimate.confirmHash,
+    });
+
+    const published = await harness.service.publishStaging();
+    assert.equal(published.pageCount, 1);
+    assert.equal(published.cancelledRunningCount, 1);
+    assert.equal(published.cancelledQueuedCount, 1);
+    delayed.finishWriter();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(harness.service.getStaging(), null);
+    assert.equal(harness.service.getCompilePool(), null);
+    assert.equal(harness.service.getPublishedManifest().pages.length, 1);
+    assert.equal(
+      harness.service.getSource(slow.sourceId).content,
+      "Slow source",
+    );
+    assert.equal(
+      harness.service.getSource(waiting.sourceId).content,
+      "Waiting source",
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("服务启动清空中断 Pool 与旧 Job，但保留已合并 Staging 和 Source", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const source = harness.service.uploadSource(
+      "stable.md",
+      Buffer.from("Stable source", "utf8"),
+    );
+    await compileSources(harness.service, [source.sourceId]);
+    const state = harness.store.readStagingState();
+    assert.ok(state);
+    harness.store.updateStagingState({
+      ...state,
+      reservedPageKeys: ["ABCDEFGH"],
+    });
+    mkdirSync(path.join(harness.store.root, "jobs"), { recursive: true });
+    writeFileSync(
+      path.join(harness.store.root, "jobs", "legacy-job.json"),
+      "{}",
+      "utf8",
+    );
+
+    const restartedStore = new LlmWikiNextStore();
+    const restarted = new LlmWikiNextService(
+      restartedStore,
+      new StubModel() as unknown as ModelService,
+    );
+    restarted.onModuleInit();
+    assert.equal(restarted.getCompilePool(), null);
+    assert.deepEqual(restarted.getStaging()?.state.reservedPageKeys, []);
+    assert.equal(restarted.getStaging()?.pageCount, 1);
+    assert.equal(restarted.getSource(source.sourceId).content, "Stable source");
+    assert.ok(
+      !existsSync(path.join(restartedStore.root, "jobs", "legacy-job.json")),
+    );
   } finally {
     harness.cleanup();
   }
@@ -188,8 +477,12 @@ test("Source worker 并发受 sourceConcurrency 限制", async () => {
     const sources = ["one", "two", "three"].map((content, index) =>
       harness.service.uploadSource(`${index}.md`, Buffer.from(content, "utf8")),
     );
-    const job = await compileSources(harness.service, sources.map((source) => source.sourceId), 2);
-    assert.equal(job.status, "completed");
+    const job = await compileSources(
+      harness.service,
+      sources.map((source) => source.sourceId),
+      2,
+    );
+    assert.equal(poolStatus(job), "completed");
     assert.ok(model.maxActiveCalls >= 2);
     assert.ok(model.maxActiveCalls <= 2);
   } finally {
@@ -203,10 +496,13 @@ test("Writer Facts 先规范化去重再截断，并由后端注入 sourceId", a
   try {
     const source = harness.service.uploadSource(
       "facts.md",
-      Buffer.from("Restart requires allow-hotplug.\nAdditional constraints.", "utf8"),
+      Buffer.from(
+        "Restart requires allow-hotplug.\nAdditional constraints.",
+        "utf8",
+      ),
     );
     const job = await compileSources(harness.service, [source.sourceId]);
-    assert.equal(job.status, "completed");
+    assert.equal(poolStatus(job), "completed");
 
     const pageKey = harness.service.getStaging()?.pages[0]?.pageKey || "";
     const page = harness.service.getStagingPage(pageKey);
@@ -223,8 +519,14 @@ test("Writer Facts 先规范化去重再截断，并由后端注入 sourceId", a
     assert.ok(page.keyFacts.every((fact) => fact.sourceId === source.sourceId));
     assert.match(model.writerSystemPrompt, /Key Facts 不是正文摘要/);
     assert.match(model.writerSystemPrompt, /可以返回 0 条/);
-    assert.match(model.writerSystemPrompt, /sourceLine 必须返回.+格式为单个 JSON 整数，例如 17/);
-    assert.match(model.writerSystemPrompt, /\{pages:\[\{pageKey,bodyMarkdown,keyFacts:\[\{fact,sourceLine:17\}\]\}\]\}/);
+    assert.match(
+      model.writerSystemPrompt,
+      /sourceLine 必须返回.+格式为单个 JSON 整数，例如 17/,
+    );
+    assert.match(
+      model.writerSystemPrompt,
+      /\{pages:\[\{pageKey,bodyMarkdown,keyFacts:\[\{fact,sourceLine:17\}\]\}\]\}/,
+    );
   } finally {
     harness.cleanup();
   }
@@ -247,12 +549,23 @@ test("Planner 结构、数组、ID 和关联边界均执行确定性校验", asy
   for (const item of cases) {
     const harness = createHarness(new PlannerFailureModel(item.variant));
     try {
-      const source = harness.service.uploadSource(`${item.variant}.md`, Buffer.from("Planner input", "utf8"));
+      const source = harness.service.uploadSource(
+        `${item.variant}.md`,
+        Buffer.from("Planner input", "utf8"),
+      );
       const job = await compileSources(harness.service, [source.sourceId]);
-      assert.equal(job.status, "completed_with_errors", item.variant);
-      assert.match(job.sources[0].error, item.error, item.variant);
+      assert.equal(poolStatus(job), "completed_with_errors", item.variant);
+      assert.match(
+        poolItem(job, source.sourceId).error,
+        item.error,
+        item.variant,
+      );
       assert.equal(harness.service.getStaging()?.pageCount, 0, item.variant);
-      assert.deepEqual(harness.service.getStaging()?.state.reservedPageKeys, [], item.variant);
+      assert.deepEqual(
+        harness.service.getStaging()?.state.reservedPageKeys,
+        [],
+        item.variant,
+      );
     } finally {
       harness.cleanup();
     }
@@ -271,10 +584,17 @@ test("Writer 缺页、多页、重复页、空正文和空 Fact 使 Source 整�
   for (const item of cases) {
     const harness = createHarness(new WriterFailureModel(item.variant));
     try {
-      const source = harness.service.uploadSource(`${item.variant}.md`, Buffer.from("Writer input", "utf8"));
+      const source = harness.service.uploadSource(
+        `${item.variant}.md`,
+        Buffer.from("Writer input", "utf8"),
+      );
       const job = await compileSources(harness.service, [source.sourceId]);
-      assert.equal(job.status, "completed_with_errors", item.variant);
-      assert.match(job.sources[0].error, item.error, item.variant);
+      assert.equal(poolStatus(job), "completed_with_errors", item.variant);
+      assert.match(
+        poolItem(job, source.sourceId).error,
+        item.error,
+        item.variant,
+      );
       assert.equal(harness.service.getStaging()?.pageCount, 0, item.variant);
     } finally {
       harness.cleanup();
@@ -285,15 +605,26 @@ test("Writer 缺页、多页、重复页、空正文和空 Fact 使 Source 整�
 test("Writer Fact 行号会兼容常见格式，无法定位时清空且不影响正文写入", async () => {
   const harness = createHarness(new FactLineCompatibilityModel());
   try {
-    const content = Array.from({ length: 20 }, (_, index) => `Line ${index + 1}`).join("\n");
-    const source = harness.service.uploadSource("fact-lines.md", Buffer.from(content, "utf8"));
+    const content = Array.from(
+      { length: 20 },
+      (_, index) => `Line ${index + 1}`,
+    ).join("\n");
+    const source = harness.service.uploadSource(
+      "fact-lines.md",
+      Buffer.from(content, "utf8"),
+    );
     const job = await compileSources(harness.service, [source.sourceId]);
-    assert.equal(job.status, "completed");
+    assert.equal(poolStatus(job), "completed");
 
     const staging = harness.service.getStaging();
     assert.equal(staging?.pageCount, 1);
-    const page = harness.service.getStagingPage(staging?.pages[0]?.pageKey || "");
-    assert.deepEqual(page.keyFacts.map((fact) => fact.sourceLine), [13, 9, 7, null, null]);
+    const page = harness.service.getStagingPage(
+      staging?.pages[0]?.pageKey || "",
+    );
+    assert.deepEqual(
+      page.keyFacts.map((fact) => fact.sourceLine),
+      [13, 9, 7, null, null],
+    );
     assert.match(page.bodyMarkdown, /Valid body/);
   } finally {
     harness.cleanup();
@@ -304,21 +635,34 @@ test("统一 Writer 混合 create/update 时只接收涉及的 update 完整正�
   const model = new MixedCreateUpdateModel();
   const harness = createHarness(model);
   try {
-    const base = harness.service.uploadSource("base.md", Buffer.from("Base content", "utf8"));
+    const base = harness.service.uploadSource(
+      "base.md",
+      Buffer.from("Base content", "utf8"),
+    );
     await compileSources(harness.service, [base.sourceId]);
-    const existingPageKey = harness.service.getStaging()?.pages[0]?.pageKey || "";
-    const existingBody = harness.service.getStagingPage(existingPageKey).bodyMarkdown;
+    const existingPageKey =
+      harness.service.getStaging()?.pages[0]?.pageKey || "";
+    const existingBody =
+      harness.service.getStagingPage(existingPageKey).bodyMarkdown;
 
-    const next = harness.service.uploadSource("next.md", Buffer.from("Update and create", "utf8"));
+    const next = harness.service.uploadSource(
+      "next.md",
+      Buffer.from("Update and create", "utf8"),
+    );
     const job = await compileSources(harness.service, [next.sourceId]);
-    assert.equal(job.status, "completed");
-    assert.equal(job.sources[0].writerCalls, 1);
+    assert.equal(poolStatus(job), "completed");
+    assert.equal(poolItem(job, next.sourceId).writerCalls, 1);
 
     const payload = model.writerPayloads.at(-1);
     assert.ok(payload);
     assert.equal(payload?.pagePlan.pages.length, 2);
-    assert.deepEqual(Object.keys(payload?.existingPages || {}), [existingPageKey]);
-    assert.equal(payload?.existingPages[existingPageKey]?.bodyMarkdown, existingBody);
+    assert.deepEqual(Object.keys(payload?.existingPages || {}), [
+      existingPageKey,
+    ]);
+    assert.equal(
+      payload?.existingPages[existingPageKey]?.bodyMarkdown,
+      existingBody,
+    );
     assert.equal(harness.service.getStaging()?.pageCount, 2);
   } finally {
     harness.cleanup();
@@ -329,14 +673,22 @@ test("多 Unit 更新同页严格按 startOffset 串行，后一 Writer 读到�
   const model = new SequentialUpdateModel();
   const harness = createHarness(model);
   try {
-    const base = harness.service.uploadSource("base.md", Buffer.from("Base page", "utf8"));
+    const base = harness.service.uploadSource(
+      "base.md",
+      Buffer.from("Base page", "utf8"),
+    );
     await compileSources(harness.service, [base.sourceId]);
 
-    const update = harness.service.uploadSource("update.md", Buffer.from("x\n".repeat(1_100), "utf8"));
-    const job = await compileSources(harness.service, [update.sourceId], 1, { chunkChars: 1_000 });
-    assert.equal(job.status, "completed");
-    assert.equal(job.sources[0].compileUnitCount, 3);
-    assert.equal(job.sources[0].writerCalls, 3);
+    const update = harness.service.uploadSource(
+      "update.md",
+      Buffer.from("x\n".repeat(1_100), "utf8"),
+    );
+    const job = await compileSources(harness.service, [update.sourceId], 1, {
+      chunkChars: 1_000,
+    });
+    assert.equal(poolStatus(job), "completed");
+    assert.equal(poolItem(job, update.sourceId).compileUnitCount, 3);
+    assert.equal(poolItem(job, update.sourceId).writerCalls, 3);
     assert.deepEqual(model.updateUnitIds, [
       `${update.sourceId}-0001`,
       `${update.sourceId}-0002`,
@@ -350,7 +702,11 @@ test("多 Unit 更新同页严格按 startOffset 串行，后一 Writer 读到�
     assert.match(page.bodyMarkdown, /0001/);
     assert.match(page.bodyMarkdown, /0002/);
     assert.match(page.bodyMarkdown, /0003/);
-    assert.equal(page.keyFacts.filter((fact) => /Repeated constraint/i.test(fact.fact)).length, 1);
+    assert.equal(
+      page.keyFacts.filter((fact) => /Repeated constraint/i.test(fact.fact))
+        .length,
+      1,
+    );
   } finally {
     harness.cleanup();
   }
@@ -371,7 +727,9 @@ class StubModel {
     this.maxActiveCalls = Math.max(this.maxActiveCalls, this.activeCalls);
     try {
       if (this.delayMs) await abortableDelay(this.delayMs, options.signal);
-      const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+      const payload = JSON.parse(
+        String(options.messages[1]?.content || "{}"),
+      ) as Record<string, unknown>;
       if (Array.isArray(payload.availablePageKeys)) {
         const sourceId = String(payload.sourceId);
         return modelResponse({
@@ -398,7 +756,9 @@ class StubModel {
       const content = String(payload.completeSource || "");
       if (content.includes("[FAIL]")) throw new Error("模拟 Writer 失败");
       const startLine = Number(content.match(/^(\d+):/)?.[1] || 1);
-      const pagePlan = payload.pagePlan as { pages: Array<Record<string, unknown>> };
+      const pagePlan = payload.pagePlan as {
+        pages: Array<Record<string, unknown>>;
+      };
       return modelResponse({
         pages: pagePlan.pages.map((page) => ({
           pageKey: page.pageKey,
@@ -420,7 +780,9 @@ class FactsModel extends StubModel {
   writerSystemPrompt = "";
 
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
 
     this.writerSystemPrompt = String(options.messages[0]?.content || "");
@@ -454,14 +816,27 @@ class DelayedWriterModel extends StubModel {
     this.resolveWriter = resolve;
   });
 
+  constructor(private readonly delaySource = "Slow source") {
+    super();
+  }
+
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
-    if (!Array.isArray(payload.availablePageKeys)) {
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
+    if (
+      !Array.isArray(payload.availablePageKeys) &&
+      String(payload.completeSource || "").includes(this.delaySource)
+    ) {
       this.resolveStarted();
       await Promise.race([
         this.writerGate,
         new Promise<never>((_, reject) => {
-          options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          options.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
         }),
       ]);
     }
@@ -475,7 +850,9 @@ class DelayedWriterModel extends StubModel {
 
 class InvalidPlannerModel extends StubModel {
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) {
       return modelResponse({
         partitionIntent: "测试越权 ID",
@@ -486,7 +863,13 @@ class InvalidPlannerModel extends StubModel {
             title: "Invalid",
             goal: "Invalid",
             scope: "Invalid",
-            outline: [{ heading: "Invalid", writingPoints: ["Invalid"], sourceAnchors: ["Invalid"] }],
+            outline: [
+              {
+                heading: "Invalid",
+                writingPoints: ["Invalid"],
+                sourceAnchors: ["Invalid"],
+              },
+            ],
             relatedPageKeys: [],
           },
         ],
@@ -514,7 +897,9 @@ class PlannerFailureModel extends StubModel {
   }
 
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (!Array.isArray(payload.availablePageKeys)) return super.chat(options);
     if (this.variant === "invalid_json") {
       return { choices: [{ message: { content: "not-json" } }] };
@@ -525,15 +910,22 @@ class PlannerFailureModel extends StubModel {
     const plan = { partitionIntent: "测试规划边界", pages: [page] };
     if (this.variant === "empty_pages") plan.pages = [];
     if (this.variant === "too_many_pages") {
-      plan.pages = [page, validPlanPage(String(payload.availablePageKeys[1]), "create"), { ...page }];
+      plan.pages = [
+        page,
+        validPlanPage(String(payload.availablePageKeys[1]), "create"),
+        { ...page },
+      ];
     }
     if (this.variant === "empty_field") page.scope = "";
     if (this.variant === "empty_outline") page.outline = [];
-    if (this.variant === "empty_writing_points") page.outline[0].writingPoints = [];
-    if (this.variant === "empty_source_anchors") page.outline[0].sourceAnchors = [];
+    if (this.variant === "empty_writing_points")
+      page.outline[0].writingPoints = [];
+    if (this.variant === "empty_source_anchors")
+      page.outline[0].sourceAnchors = [];
     if (this.variant === "duplicate_page_key") plan.pages = [page, { ...page }];
     if (this.variant === "self_relation") page.relatedPageKeys = [pageKey];
-    if (this.variant === "missing_relation") page.relatedPageKeys = ["MISSING1"];
+    if (this.variant === "missing_relation")
+      page.relatedPageKeys = ["MISSING1"];
     return modelResponse(plan);
   }
 }
@@ -551,7 +943,9 @@ class WriterFailureModel extends StubModel {
   }
 
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
     const plan = payload.pagePlan as { pages: Array<{ pageKey: string }> };
     const content = String(payload.completeSource || "");
@@ -575,28 +969,42 @@ class WriterFailureModel extends StubModel {
 
 class FactLineCompatibilityModel extends StubModel {
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
     const plan = payload.pagePlan as { pages: Array<{ pageKey: string }> };
     return modelResponse({
-      pages: [{
-        pageKey: plan.pages[0].pageKey,
-        bodyMarkdown: "# Valid body",
-        keyFacts: [
-          { fact: "Range string", sourceLine: "13-19" },
-          { fact: "Chinese range", sourceLine: "第9至10行" },
-          { fact: "Numeric string", sourceLine: "7" },
-          { fact: "Out of range", sourceLine: 100 },
-          { fact: "Unknown line", sourceLine: "unknown" },
-        ],
-      }],
+      pages: [
+        {
+          pageKey: plan.pages[0].pageKey,
+          bodyMarkdown: "# Valid body",
+          keyFacts: [
+            { fact: "Range string", sourceLine: "13-19" },
+            { fact: "Chinese range", sourceLine: "第9至10行" },
+            { fact: "Numeric string", sourceLine: "7" },
+            { fact: "Out of range", sourceLine: 100 },
+            { fact: "Unknown line", sourceLine: "unknown" },
+          ],
+        },
+      ],
     });
   }
 }
 
 interface CapturedWriterPayload {
-  pagePlan: { unitId: string; pages: Array<{ pageKey: string; operation: "create" | "update"; title: string }> };
-  existingPages: Record<string, { title: string; goal: string; bodyMarkdown: string }>;
+  pagePlan: {
+    unitId: string;
+    pages: Array<{
+      pageKey: string;
+      operation: "create" | "update";
+      title: string;
+    }>;
+  };
+  existingPages: Record<
+    string,
+    { title: string; goal: string; bodyMarkdown: string }
+  >;
   completeSource: string;
 }
 
@@ -604,7 +1012,9 @@ class MixedCreateUpdateModel extends StubModel {
   readonly writerPayloads: CapturedWriterPayload[] = [];
 
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) {
       const existing = payload.existingPages as Array<{ pageKey: string }>;
       const pages = existing.length
@@ -618,13 +1028,16 @@ class MixedCreateUpdateModel extends StubModel {
 
     const writerPayload = payload as unknown as CapturedWriterPayload;
     this.writerPayloads.push(writerPayload);
-    const sourceLine = Number(writerPayload.completeSource.match(/^(\d+):/)?.[1] || 1);
+    const sourceLine = Number(
+      writerPayload.completeSource.match(/^(\d+):/)?.[1] || 1,
+    );
     return modelResponse({
       pages: writerPayload.pagePlan.pages.map((page) => ({
         pageKey: page.pageKey,
-        bodyMarkdown: page.operation === "update"
-          ? `${writerPayload.existingPages[page.pageKey].bodyMarkdown}\n\nUpdated`
-          : `# ${page.title}\n\nCreated`,
+        bodyMarkdown:
+          page.operation === "update"
+            ? `${writerPayload.existingPages[page.pageKey].bodyMarkdown}\n\nUpdated`
+            : `# ${page.title}\n\nCreated`,
         keyFacts: [{ fact: `${page.operation} fact`, sourceLine }],
       })),
     });
@@ -636,36 +1049,48 @@ class SequentialUpdateModel extends StubModel {
   readonly updateExistingBodies: string[] = [];
 
   override async chat(options: RawChatOptions): Promise<unknown> {
-    const payload = JSON.parse(String(options.messages[1]?.content || "{}")) as Record<string, unknown>;
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
     if (Array.isArray(payload.availablePageKeys)) {
       const existing = payload.existingPages as Array<{ pageKey: string }>;
       const page = existing.length
         ? validPlanPage(existing[0].pageKey, "update")
         : validPlanPage(String(payload.availablePageKeys[0]), "create");
-      return modelResponse({ partitionIntent: "多切片顺序更新同页", pages: [page] });
+      return modelResponse({
+        partitionIntent: "多切片顺序更新同页",
+        pages: [page],
+      });
     }
 
     const writerPayload = payload as unknown as CapturedWriterPayload;
     const page = writerPayload.pagePlan.pages[0];
-    const sourceLine = Number(writerPayload.completeSource.match(/^(\d+):/)?.[1] || 1);
+    const sourceLine = Number(
+      writerPayload.completeSource.match(/^(\d+):/)?.[1] || 1,
+    );
     if (page.operation === "update") {
-      const previousBody = writerPayload.existingPages[page.pageKey].bodyMarkdown;
+      const previousBody =
+        writerPayload.existingPages[page.pageKey].bodyMarkdown;
       this.updateUnitIds.push(writerPayload.pagePlan.unitId);
       this.updateExistingBodies.push(previousBody);
       return modelResponse({
-        pages: [{
-          pageKey: page.pageKey,
-          bodyMarkdown: `${previousBody}\n\nUnit ${writerPayload.pagePlan.unitId}`,
-          keyFacts: [{ fact: "Repeated constraint.", sourceLine }],
-        }],
+        pages: [
+          {
+            pageKey: page.pageKey,
+            bodyMarkdown: `${previousBody}\n\nUnit ${writerPayload.pagePlan.unitId}`,
+            keyFacts: [{ fact: "Repeated constraint.", sourceLine }],
+          },
+        ],
       });
     }
     return modelResponse({
-      pages: [{
-        pageKey: page.pageKey,
-        bodyMarkdown: `# ${page.title}\n\nBase`,
-        keyFacts: [{ fact: "Base fact", sourceLine }],
-      }],
+      pages: [
+        {
+          pageKey: page.pageKey,
+          bodyMarkdown: `# ${page.title}\n\nBase`,
+          keyFacts: [{ fact: "Base fact", sourceLine }],
+        },
+      ],
     });
   }
 }
@@ -677,11 +1102,13 @@ function validPlanPage(pageKey: string, operation: "create" | "update") {
     title: `Page ${pageKey}`,
     goal: `Goal ${pageKey}`,
     scope: `Scope ${pageKey}`,
-    outline: [{
-      heading: "Overview",
-      writingPoints: ["Explain the source"],
-      sourceAnchors: ["Source line"],
-    }],
+    outline: [
+      {
+        heading: "Overview",
+        writingPoints: ["Explain the source"],
+        sourceAnchors: ["Source line"],
+      },
+    ],
     relatedPageKeys: [] as string[],
   };
 }
@@ -691,7 +1118,10 @@ function createHarness(model: StubModel) {
   const previous = process.env.KNOWLLM_DATA_ROOT;
   process.env.KNOWLLM_DATA_ROOT = root;
   const store = new LlmWikiNextStore();
-  const service = new LlmWikiNextService(store, model as unknown as ModelService);
+  const service = new LlmWikiNextService(
+    store,
+    model as unknown as ModelService,
+  );
   return {
     service,
     store,
@@ -708,24 +1138,51 @@ async function compileSources(
   sourceIds: string[],
   sourceConcurrency = 1,
   overrides: { chunkChars?: number } = {},
-): Promise<CompileJob> {
+): Promise<CompilePool> {
   const estimate = service.estimateCompile({
     sourceIds,
     model: "test:model",
     sourceConcurrency,
     ...overrides,
   });
-  const started = await service.compile({ ...estimate.options, confirmHash: estimate.confirmHash });
-  return waitForJob(service, started.jobId);
+  await service.compile({
+    ...estimate.options,
+    confirmHash: estimate.confirmHash,
+  });
+  return waitForSources(service, sourceIds);
 }
 
-async function waitForJob(service: LlmWikiNextService, jobId: string): Promise<CompileJob> {
+async function waitForSources(
+  service: LlmWikiNextService,
+  sourceIds: string[],
+): Promise<CompilePool> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const job = service.getJob(jobId);
-    if (!["queued", "running"].includes(job.status)) return job;
+    const pool = service.getCompilePool();
+    if (
+      pool &&
+      sourceIds.every((sourceId) => {
+        const item = pool.items.find(
+          (current) => current.sourceId === sourceId,
+        );
+        return item && !["queued", "planning", "writing"].includes(item.status);
+      })
+    )
+      return pool;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`等待任务结束超时: ${jobId}`);
+  throw new Error(`等待 Source 编译结束超时: ${sourceIds.join(", ")}`);
+}
+
+function poolItem(pool: CompilePool, sourceId: string) {
+  const item = pool.items.find((current) => current.sourceId === sourceId);
+  if (!item) throw new Error(`Pool 中缺少 Source: ${sourceId}`);
+  return item;
+}
+
+function poolStatus(pool: CompilePool): "completed" | "completed_with_errors" {
+  return pool.items.some((item) => item.status === "failed")
+    ? "completed_with_errors"
+    : "completed";
 }
 
 function modelResponse(value: unknown): unknown {

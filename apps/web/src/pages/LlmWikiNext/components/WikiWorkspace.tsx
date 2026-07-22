@@ -135,13 +135,13 @@ export function WikiWorkspace({
           <FileText className="mx-auto mb-3 size-7 text-slate-300" />
           <p className="font-medium text-slate-700">
             {mode === "staging"
-              ? "暂存 Wiki 还没有页面"
+              ? "待发布 Wiki 还没有页面"
               : "正式 Wiki 还没有页面"}
           </p>
           <p className="mt-1 text-sm leading-6 text-slate-500">
             {mode === "staging"
-              ? "页面列表是完整 Staging 快照；后续编译结果会继续合并到这里。"
-              : "发布 Staging 后，正式页面会出现在这里。"}
+              ? "页面列表是完整待发布快照；后续编译结果会继续合并到这里。"
+              : "发布待发布 Wiki 后，正式页面会出现在这里。"}
           </p>
         </div>
       </div>

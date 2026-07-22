@@ -13,6 +13,8 @@ export interface PaginationProps {
   pageSize: number;
   total: number;
   onPageChange: (page: number) => void;
+  pageSizeOptions?: readonly number[];
+  onPageSizeChange?: (pageSize: number) => void;
   ariaLabel?: string;
   className?: string;
   showSummary?: boolean;
@@ -27,8 +29,17 @@ function clampPage(page: number, totalPages: number) {
   return Math.min(Math.max(page, 1), totalPages);
 }
 
-function getPaginationItems(currentPage: number, totalPages: number): PaginationItem[] {
-  const pages = new Set<number>([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+function getPaginationItems(
+  currentPage: number,
+  totalPages: number,
+): PaginationItem[] {
+  const pages = new Set<number>([
+    1,
+    totalPages,
+    currentPage - 1,
+    currentPage,
+    currentPage + 1,
+  ]);
   if (currentPage <= 3) {
     pages.add(2);
     pages.add(3);
@@ -59,6 +70,8 @@ export function Pagination({
   pageSize,
   total,
   onPageChange,
+  pageSizeOptions,
+  onPageSizeChange,
   ariaLabel = "分页",
   className,
   showSummary = true,
@@ -70,13 +83,39 @@ export function Pagination({
   const totalPages = Math.max(1, Math.ceil(total / safePageSize));
   const currentPage = clampPage(page, totalPages);
   const paginationItems = getPaginationItems(currentPage, totalPages);
+  const canChangePageSize =
+    Boolean(onPageSizeChange) && Boolean(pageSizeOptions?.length);
   const goPage = (nextPage: number) => {
     const clampedPage = clampPage(nextPage, totalPages);
     if (clampedPage !== currentPage) onPageChange(clampedPage);
   };
 
   return (
-    <div className={cn("flex justify-center py-1", className)}>
+    <div
+      className={cn(
+        "flex flex-wrap items-center justify-center gap-2 py-2",
+        className,
+      )}
+    >
+      {canChangePageSize && (
+        <label className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600">
+          <span>每页</span>
+          <select
+            aria-label="每页显示数量"
+            value={pageSize}
+            disabled={disabled}
+            onChange={(event) => onPageSizeChange?.(Number(event.target.value))}
+            className="h-6 cursor-pointer bg-transparent text-xs font-medium text-slate-700 outline-none disabled:cursor-not-allowed"
+          >
+            {pageSizeOptions?.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <span>条</span>
+        </label>
+      )}
       <nav
         aria-label={ariaLabel}
         className="inline-flex max-w-full items-center gap-2 overflow-x-auto rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1.5 text-xs shadow-sm backdrop-blur"
@@ -136,7 +175,8 @@ export function Pagination({
 
         {showSummary && (
           <span className="shrink-0 border-l border-slate-200 pl-2 text-slate-500">
-            第 {currentPage} / {formatNumber(totalPages)} 页，共 {formatNumber(total)} 条
+            第 {currentPage} / {formatNumber(totalPages)} 页，共{" "}
+            {formatNumber(total)} 条
           </span>
         )}
       </nav>
