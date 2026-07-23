@@ -1,10 +1,16 @@
-export type SourceCompileStatus =
+export type SourceStatus =
+  | "pending"
+  | "compiling"
+  | "staged"
+  | "published"
+  | "failed";
+
+export type CompilePoolPhase =
   | "queued"
   | "planning"
   | "writing"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | "committing"
+  | "finished";
 
 export interface SourceRecord {
   sourceId: string;
@@ -13,6 +19,7 @@ export interface SourceRecord {
   charCount: number;
   lineCount: number;
   createdAt: string;
+  status: SourceStatus;
 }
 
 export interface SourceSnapshot extends SourceRecord {
@@ -78,9 +85,10 @@ export interface CompileEstimate {
 }
 
 export interface CompilePoolItem {
+  runId: string;
   sourceId: string;
   contentHash: string;
-  status: SourceCompileStatus;
+  phase: CompilePoolPhase;
   compileUnitCount: number;
   maxModelCalls: number;
   maxOutputTokens: number;
@@ -93,6 +101,155 @@ export interface CompilePoolItem {
   startedAt: string;
   finishedAt: string;
   startedOptions: CompileExecutionOptions | null;
+}
+
+export type CompileReportStage = CompilePoolPhase;
+
+export type CompileReportCallStage = "planner" | "writer";
+
+export type CompileReportCallStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface CompileDebugText {
+  text: string;
+  charCount: number;
+  contentHash: string;
+  truncated: boolean;
+}
+
+export interface CompileReportError {
+  stage:
+    | "model_request"
+    | "json_parse"
+    | "planner_validation"
+    | "writer_validation"
+    | "page_lock"
+    | "staging_commit"
+    | "cancelled"
+    | "server_restart"
+    | "report_persist"
+    | "source";
+  category: string;
+  message: string;
+}
+
+export interface CompileReportEvent {
+  sequence: number;
+  at: string;
+  type: string;
+  message: string;
+  unitId?: string;
+  callId?: string;
+}
+
+export interface CompileReportUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  usageSource: "provider" | "estimated";
+}
+
+export interface CompileReportCall {
+  callId: string;
+  stage: CompileReportCallStage;
+  unitId: string;
+  status: CompileReportCallStatus;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  maxOutputTokens: number;
+  model: string;
+  responseId: string;
+  responseModel: string;
+  finishReason: string;
+  usage: CompileReportUsage;
+  request: {
+    systemPrompt: CompileDebugText;
+    payload: CompileDebugText;
+  };
+  response: CompileDebugText | null;
+  error: CompileReportError | null;
+  validation: {
+    status: "pending" | "succeeded" | "failed";
+    error: CompileReportError | null;
+  };
+}
+
+export interface CompileReportWriterPage {
+  pageKey: string;
+  bodyCharCount: number;
+  bodyHash: string;
+  keyFacts: KeyFact[];
+}
+
+export interface CompileReportUnit {
+  unitId: string;
+  index: number;
+  startOffset: number;
+  endOffset: number;
+  startLine: number;
+  endLine: number;
+  charCount: number;
+  contentHash: string;
+  maxPages: number;
+  reservedPageKeys: string[];
+  plannerCallId: string;
+  writerCallId: string;
+  plan: WikiPagePlan | null;
+  writerPages: CompileReportWriterPage[];
+  error: CompileReportError | null;
+}
+
+export interface SourceCompileReport {
+  version: 1 | 2;
+  legacy: boolean;
+  runId: string;
+  poolId: string;
+  workspaceId: string;
+  sourceId: string;
+  contentHash: string;
+  stage: CompileReportStage;
+  model: {
+    id: string;
+    name: string;
+    provider: string;
+    providerName: string;
+  };
+  options: CompileExecutionOptions;
+  compiler: {
+    promptVersion: string;
+    pageLimitPolicyVersion: string;
+    modelTimeoutMs: number;
+    maxFactsPerPlan: number;
+  };
+  queuedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  updatedAt: string;
+  events: CompileReportEvent[];
+  units: CompileReportUnit[];
+  calls: CompileReportCall[];
+  summary: {
+    compileUnitCount: number;
+    modelCalls: number;
+    succeededCalls: number;
+    failedCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    pageKeys: string[];
+    factCount: number;
+  };
+  error: CompileReportError | null;
+}
+
+export interface SourceCompileDetailResponse {
+  source: SourceRecord;
+  report: SourceCompileReport | null;
 }
 
 export interface CompilePool {
@@ -232,4 +389,16 @@ export interface PublishResult {
   cleanupWarnings: string[];
   cancelledQueuedCount: number;
   cancelledRunningCount: number;
+}
+
+export interface DeletePublishedPageResult {
+  revisionId: string;
+  publishedAt: string;
+  deletedPageKey: string;
+  deletedFactCount: number;
+  affectedPageKeys: string[];
+  pageCount: number;
+  factCount: number;
+  stagingRetainsPage: boolean;
+  cleanupWarnings: string[];
 }

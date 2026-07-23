@@ -17,7 +17,11 @@ import {
   splitSource,
 } from "./llm-wiki-next.service";
 import { LlmWikiNextStore } from "./llm-wiki-next.store";
-import { CompilePool, SourceSnapshot } from "./llm-wiki-next.types";
+import {
+  CompilePool,
+  SourceOverlay,
+  SourceSnapshot,
+} from "./llm-wiki-next.types";
 
 test("物理切片保留 offset 和原始全局行号", () => {
   const source: SourceSnapshot = {
@@ -28,6 +32,7 @@ test("物理切片保留 offset 和原始全局行号", () => {
     charCount: 8,
     lineCount: 3,
     createdAt: new Date(0).toISOString(),
+    status: "pending",
   };
   const units = splitSource(source, 3);
   assert.deepEqual(
@@ -100,9 +105,12 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
       "b.txt",
       Buffer.from("Beta content", "utf8"),
     );
+    assert.equal(harness.service.getSource(sourceA.sourceId).status, "pending");
+    assert.equal(harness.service.getSource(sourceB.sourceId).status, "pending");
 
     const first = await compileSources(harness.service, [sourceA.sourceId]);
     assert.equal(poolStatus(first), "completed");
+    assert.equal(harness.service.getSource(sourceA.sourceId).status, "staged");
     const firstStaging = harness.service.getStaging();
     assert.equal(firstStaging?.pageCount, 1);
     const workspaceId = firstStaging?.state.workspaceId;
@@ -110,6 +118,7 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
 
     const second = await compileSources(harness.service, [sourceB.sourceId]);
     assert.equal(poolStatus(second), "completed");
+    assert.equal(harness.service.getSource(sourceB.sourceId).status, "staged");
     const staging = harness.service.getStaging();
     assert.equal(staging?.state.workspaceId, workspaceId);
     assert.equal(staging?.pageCount, 2);
@@ -131,6 +140,8 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
     assert.deepEqual(published.cleanupWarnings, []);
     assert.equal(harness.service.getStaging(), null);
     assert.equal(harness.service.getPublishedManifest().pages.length, 2);
+    assert.equal(harness.service.getSource(sourceA.sourceId).status, "published");
+    assert.equal(harness.service.getSource(sourceB.sourceId).status, "published");
     assert.equal(harness.service.searchPublished("Alpha").items.length, 1);
     const pointer = JSON.parse(
       readFileSync(
@@ -156,6 +167,206 @@ test("顺序 Job 合并到同一 Staging，发布后整套切换", async () => {
       );
     }
     assert.ok(existsSync(path.join(revisionRoot, "pages")));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("永久删除正式页面会重建完整 revision 并清理关联与 Source Map", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const fixture = publishDeleteFixture(harness);
+    const oldRevisionRoot = path.join(
+      harness.store.root,
+      "published",
+      "revisions",
+      fixture.revisionId,
+    );
+    const remainingBody = harness.service.getPublishedPage(
+      fixture.remainingPageKey,
+    ).bodyMarkdown;
+    const remainingFacts = harness.service.getPublishedPage(
+      fixture.remainingPageKey,
+    ).keyFacts;
+
+    const result = await harness.service.deletePublishedPage(
+      fixture.targetPageKey,
+      fixture.revisionId,
+    );
+
+    assert.notEqual(result.revisionId, fixture.revisionId);
+    assert.equal(result.deletedPageKey, fixture.targetPageKey);
+    assert.equal(result.deletedFactCount, 2);
+    assert.deepEqual(result.affectedPageKeys, [fixture.remainingPageKey]);
+    assert.equal(result.pageCount, 1);
+    assert.equal(result.factCount, 1);
+    assert.equal(result.stagingRetainsPage, false);
+    assert.deepEqual(result.cleanupWarnings, []);
+    assert.equal(existsSync(oldRevisionRoot), false);
+
+    const manifest = harness.service.getPublishedManifest();
+    assert.equal(manifest.revisionId, result.revisionId);
+    assert.deepEqual(
+      manifest.pages.map((page) => page.pageKey),
+      [fixture.remainingPageKey],
+    );
+    assert.deepEqual(manifest.pages[0].relatedPageKeys, []);
+    assert.equal(
+      harness.service.getPublishedPage(fixture.remainingPageKey).bodyMarkdown,
+      remainingBody,
+    );
+    assert.deepEqual(
+      harness.service.getPublishedPage(fixture.remainingPageKey).keyFacts,
+      remainingFacts,
+    );
+    assert.throws(
+      () => harness.service.getPublishedPage(fixture.targetPageKey),
+      /Wiki 页面不存在/,
+    );
+    assert.equal(
+      harness.service.searchPublished("target deletion marker").items.length,
+      0,
+    );
+
+    const revisionRoot = path.join(
+      harness.store.root,
+      "published",
+      "revisions",
+      result.revisionId,
+    );
+    const facts = readJsonFile<{
+      byPage: Record<string, unknown[]>;
+    }>(path.join(revisionRoot, "facts.json"));
+    const sourceMap = readJsonFile<{
+      sourceToPages: Record<string, string[]>;
+      pageToSources: Record<string, string[]>;
+    }>(path.join(revisionRoot, "source-map.json"));
+    const searchIndex = readJsonFile<{
+      documents: Array<{ pageKey: string }>;
+    }>(path.join(revisionRoot, "search-index.json"));
+    assert.equal(facts.byPage[fixture.targetPageKey], undefined);
+    assert.deepEqual(sourceMap.sourceToPages[fixture.sharedSourceId], [
+      fixture.remainingPageKey,
+    ]);
+    assert.equal(sourceMap.sourceToPages[fixture.targetOnlySourceId], undefined);
+    assert.equal(sourceMap.pageToSources[fixture.targetPageKey], undefined);
+    assert.equal(
+      existsSync(
+        path.join(revisionRoot, "pages", `${fixture.targetPageKey}.md`),
+      ),
+      false,
+    );
+    assert.equal(
+      searchIndex.documents.some(
+        (document) => document.pageKey === fixture.targetPageKey,
+      ),
+      false,
+    );
+    assert.equal(
+      harness.service.getSource(fixture.sharedSourceId).content,
+      "shared raw source",
+    );
+    assert.equal(
+      harness.service.getSource(fixture.targetOnlySourceId).content,
+      "target raw source",
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("旧 revision、非法 pageKey 和不存在页面都不会切换正式指针", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const fixture = publishDeleteFixture(harness);
+    const pointerPath = path.join(
+      harness.store.root,
+      "published",
+      "current.json",
+    );
+    const pointerBefore = readFileSync(pointerPath, "utf8");
+
+    await assert.rejects(
+      () =>
+        harness.service.deletePublishedPage(
+          fixture.targetPageKey,
+          "Z".repeat(16),
+        ),
+      /正式 Wiki 已更新/,
+    );
+    await assert.rejects(
+      () => harness.service.deletePublishedPage("../bad", fixture.revisionId),
+      /pageKey 非法/,
+    );
+    await assert.rejects(
+      () => harness.service.deletePublishedPage("ZZZZZZZZ", fixture.revisionId),
+      /Wiki 页面已不存在/,
+    );
+    assert.equal(readFileSync(pointerPath, "utf8"), pointerBefore);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("正式删除不会修改包含该页面的 Staging", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const fixture = publishDeleteFixture(harness);
+    const stagingBefore = harness.store.ensureStaging();
+    const stagingPageBefore = harness.service.getStagingPage(
+      fixture.targetPageKey,
+    );
+
+    const result = await harness.service.deletePublishedPage(
+      fixture.targetPageKey,
+      fixture.revisionId,
+    );
+
+    assert.equal(result.stagingRetainsPage, true);
+    assert.equal(
+      harness.store.readStagingState()?.generation,
+      stagingBefore.generation,
+    );
+    assert.deepEqual(
+      harness.service.getStagingPage(fixture.targetPageKey),
+      stagingPageBefore,
+    );
+    assert.equal(
+      harness.service.getPublishedManifest().pages.some(
+        (page) => page.pageKey === fixture.targetPageKey,
+      ),
+      false,
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("删除正式 Wiki 最后一页后进入空状态", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const fixture = publishDeleteFixture(harness, true);
+    const result = await harness.service.deletePublishedPage(
+      fixture.targetPageKey,
+      fixture.revisionId,
+    );
+
+    assert.equal(result.pageCount, 0);
+    assert.equal(result.factCount, 0);
+    assert.deepEqual(harness.service.getPublishedManifest().pages, []);
+    assert.deepEqual(harness.service.searchPublished("target").items, []);
+    const revisionRoot = path.join(
+      harness.store.root,
+      "published",
+      "revisions",
+      result.revisionId,
+    );
+    assert.deepEqual(
+      readJsonFile<{ byPage: Record<string, unknown[]> }>(
+        path.join(revisionRoot, "facts.json"),
+      ).byPage,
+      {},
+    );
   } finally {
     harness.cleanup();
   }
@@ -242,11 +453,83 @@ test("Source Writer 失败不会向已有 Staging 写入部分结果", async () 
 
     const failedJob = await compileSources(harness.service, [failed.sourceId]);
     assert.equal(poolStatus(failedJob), "completed_with_errors");
-    assert.equal(poolItem(failedJob, failed.sourceId).status, "failed");
+    assert.equal(poolItem(failedJob, failed.sourceId).phase, "finished");
+    assert.ok(poolItem(failedJob, failed.sourceId).error);
+    assert.equal(harness.service.getSource(failed.sourceId).status, "failed");
     const after = harness.service.getStaging();
     assert.equal(after?.pageCount, before?.pageCount);
     assert.ok(!after?.state.completedSourceIds.includes(failed.sourceId));
     assert.deepEqual(after?.state.reservedPageKeys, []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("已发布 Source 重编译失败会标记失败，但保留旧正式产物", async () => {
+  const model = new ToggleWriterFailureModel();
+  const harness = createHarness(model);
+  try {
+    const source = harness.service.uploadSource(
+      "published-then-failed.md",
+      Buffer.from("Published source", "utf8"),
+    );
+    await compileSources(harness.service, [source.sourceId]);
+    const published = await harness.service.publishStaging();
+    const publishedPageCount = harness.service.getPublishedManifest().pages.length;
+    assert.equal(harness.service.getSource(source.sourceId).status, "published");
+
+    model.failWrites = true;
+    const retry = await compileSources(harness.service, [source.sourceId]);
+
+    assert.equal(poolStatus(retry), "completed_with_errors");
+    assert.equal(harness.service.getSource(source.sourceId).status, "failed");
+    assert.equal(
+      harness.service.getPublishedManifest().revisionId,
+      published.revisionId,
+    );
+    assert.equal(harness.service.getPublishedManifest().pages.length, publishedPageCount);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("撤销 Staging 会将已暂存 Source 恢复为待编译", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const source = harness.service.uploadSource(
+      "discard.md",
+      Buffer.from("Discard source", "utf8"),
+    );
+    await compileSources(harness.service, [source.sourceId]);
+    assert.equal(harness.service.getSource(source.sourceId).status, "staged");
+
+    await harness.service.discardStaging();
+
+    assert.equal(harness.service.getStaging(), null);
+    assert.equal(harness.service.getSource(source.sourceId).status, "pending");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("发布失败时 Source 保持已暂存", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const source = harness.service.uploadSource(
+      "publish-failure.md",
+      Buffer.from("Publish failure source", "utf8"),
+    );
+    await compileSources(harness.service, [source.sourceId]);
+    const originalPublish = harness.store.publishStaging.bind(harness.store);
+    harness.store.publishStaging = () => {
+      throw new Error("模拟发布失败");
+    };
+
+    await assert.rejects(() => harness.service.publishStaging(), /模拟发布失败/);
+
+    assert.equal(harness.service.getSource(source.sourceId).status, "staged");
+    assert.equal(harness.service.getStaging()?.state.status, "open");
+    harness.store.publishStaging = originalPublish;
   } finally {
     harness.cleanup();
   }
@@ -302,12 +585,111 @@ test("取消编译池后晚到响应不能写入 Staging", async () => {
       confirmHash: estimate.confirmHash,
     });
     await delayed.writerStarted;
+    assert.equal(harness.service.getSource(source.sourceId).status, "compiling");
     const cancelled = await harness.service.cancelCompilePool();
     assert.equal(cancelled.runningCount, 1);
     delayed.finishWriter();
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(harness.service.getCompilePool(), null);
     assert.equal(harness.service.getStaging()?.pageCount, 0);
+    assert.equal(harness.service.getSource(source.sourceId).status, "pending");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("成功编译会按 Source 持久化完整最新报告", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const source = harness.service.uploadSource(
+      "report.md",
+      Buffer.from("Report source", "utf8"),
+    );
+    const pool = await compileSources(harness.service, [source.sourceId]);
+    const item = poolItem(pool, source.sourceId);
+    const report = harness.service.getSourceCompileDetail(source.sourceId).report;
+
+    assert.ok(report);
+    assert.equal(report.stage, "finished");
+    assert.equal(report.error, null);
+    assert.equal(
+      harness.service.getSourceCompileDetail(source.sourceId).source.status,
+      "staged",
+    );
+    assert.equal(report.runId, item.runId);
+    assert.equal(report.units.length, 1);
+    assert.equal(report.calls.length, 2);
+    assert.ok(report.calls.every((call) => call.status === "succeeded"));
+    assert.ok(report.calls.every((call) => call.validation.status === "succeeded"));
+    assert.ok(report.calls.every((call) => call.request.payload.text));
+    assert.ok(report.calls.every((call) => call.response?.text));
+    assert.ok(report.units[0].plan);
+    assert.equal(report.units[0].writerPages.length, 1);
+    assert.ok(report.events.some((event) => event.type === "staging_commit_started"));
+    assert.ok(report.events.some((event) => event.type === "source_completed"));
+    assert.ok(
+      existsSync(
+        path.join(harness.store.root, "compile-reports", `${source.sourceId}.json`),
+      ),
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("模型 JSON 解析失败会在报告中保留调用响应和失败位置", async () => {
+  const harness = createHarness(new PlannerFailureModel("invalid_json"));
+  try {
+    const source = harness.service.uploadSource(
+      "bad-json.md",
+      Buffer.from("Bad JSON source", "utf8"),
+    );
+    await compileSources(harness.service, [source.sourceId]);
+    const report = harness.service.getSourceCompileDetail(source.sourceId).report;
+
+    assert.ok(report);
+    assert.equal(report.stage, "finished");
+    assert.equal(report.error?.stage, "json_parse");
+    assert.equal(harness.service.getSource(source.sourceId).status, "failed");
+    assert.equal(report.calls.length, 1);
+    assert.equal(report.calls[0].status, "failed");
+    assert.equal(report.calls[0].error?.stage, "json_parse");
+    assert.match(report.calls[0].response?.text || "", /not-json/);
+    assert.ok(
+      report.events.some((event) => event.type === "model_json_parse_failed"),
+    );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("取消任务后报告保留取消原因和已开始调用", async () => {
+  const delayed = new DelayedWriterModel();
+  const harness = createHarness(delayed);
+  try {
+    const source = harness.service.uploadSource(
+      "cancel-report.md",
+      Buffer.from("Slow source", "utf8"),
+    );
+    const estimate = harness.service.estimateCompile({
+      sourceIds: [source.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...estimate.options,
+      confirmHash: estimate.confirmHash,
+    });
+    await delayed.writerStarted;
+    await harness.service.cancelCompilePool();
+    const report = harness.service.getSourceCompileDetail(source.sourceId).report;
+
+    assert.ok(report);
+    assert.equal(report.stage, "finished");
+    assert.equal(report.error?.stage, "cancelled");
+    assert.equal(harness.service.getSource(source.sourceId).status, "pending");
+    assert.ok(report.events.some((event) => event.type === "source_cancelled"));
+    assert.ok(report.calls.some((call) => call.status === "cancelled"));
+    delayed.finishWriter();
   } finally {
     harness.cleanup();
   }
@@ -354,7 +736,7 @@ test("新提交可在编译中加入同一 Pool，待编译项使用最新配置
       poolItem(queued, first.sourceId).startedOptions?.chunkChars,
       12_000,
     );
-    assert.equal(poolItem(queued, second.sourceId).status, "queued");
+    assert.equal(poolItem(queued, second.sourceId).phase, "queued");
     assert.equal(poolItem(queued, second.sourceId).startedOptions, null);
 
     delayed.finishWriter();
@@ -362,8 +744,8 @@ test("新提交可在编译中加入同一 Pool，待编译项使用最新配置
       first.sourceId,
       second.sourceId,
     ]);
-    assert.equal(poolItem(finished, first.sourceId).status, "completed");
-    assert.equal(poolItem(finished, second.sourceId).status, "completed");
+    assert.equal(poolItem(finished, first.sourceId).phase, "finished");
+    assert.equal(poolItem(finished, second.sourceId).phase, "finished");
     assert.equal(
       poolItem(finished, second.sourceId).startedOptions?.chunkChars,
       1_000,
@@ -426,6 +808,9 @@ test("提前发布仅保留已合并 Staging，并清空运行和等待项", asy
       harness.service.getSource(waiting.sourceId).content,
       "Waiting source",
     );
+    assert.equal(harness.service.getSource(completed.sourceId).status, "published");
+    assert.equal(harness.service.getSource(slow.sourceId).status, "pending");
+    assert.equal(harness.service.getSource(waiting.sourceId).status, "pending");
   } finally {
     harness.cleanup();
   }
@@ -445,6 +830,14 @@ test("服务启动清空中断 Pool 与旧 Job，但保留已合并 Staging 和 
       ...state,
       reservedPageKeys: ["ABCDEFGH"],
     });
+    const sourceMetaPath = path.join(
+      harness.store.root,
+      "sources",
+      `${source.sourceId}.json`,
+    );
+    const interruptedMeta = readJsonFile<Record<string, unknown>>(sourceMetaPath);
+    interruptedMeta.status = "compiling";
+    writeFileSync(sourceMetaPath, `${JSON.stringify(interruptedMeta)}\n`, "utf8");
     mkdirSync(path.join(harness.store.root, "jobs"), { recursive: true });
     writeFileSync(
       path.join(harness.store.root, "jobs", "legacy-job.json"),
@@ -462,9 +855,104 @@ test("服务启动清空中断 Pool 与旧 Job，但保留已合并 Staging 和 
     assert.deepEqual(restarted.getStaging()?.state.reservedPageKeys, []);
     assert.equal(restarted.getStaging()?.pageCount, 1);
     assert.equal(restarted.getSource(source.sourceId).content, "Stable source");
+    assert.equal(restarted.getSource(source.sourceId).status, "staged");
     assert.ok(
       !existsSync(path.join(restartedStore.root, "jobs", "legacy-job.json")),
     );
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("启动时只补齐缺失的 Source 正式状态", async () => {
+  const harness = createHarness(new StubModel());
+  try {
+    const published = harness.service.uploadSource(
+      "legacy-published.md",
+      Buffer.from("Legacy published", "utf8"),
+    );
+    await compileSources(harness.service, [published.sourceId]);
+    await harness.service.publishStaging();
+
+    const staged = harness.service.uploadSource(
+      "legacy-staged.md",
+      Buffer.from("Legacy staged", "utf8"),
+    );
+    await compileSources(harness.service, [staged.sourceId]);
+    const failed = harness.service.uploadSource(
+      "legacy-failed.md",
+      Buffer.from("[FAIL] legacy", "utf8"),
+    );
+    await compileSources(harness.service, [failed.sourceId]);
+    const pending = harness.service.uploadSource(
+      "legacy-pending.md",
+      Buffer.from("Legacy pending", "utf8"),
+    );
+
+    for (const source of [published, staged, failed, pending]) {
+      const metaPath = path.join(
+        harness.store.root,
+        "sources",
+        `${source.sourceId}.json`,
+      );
+      const meta = readJsonFile<Record<string, unknown>>(metaPath);
+      delete meta.status;
+      writeFileSync(metaPath, `${JSON.stringify(meta)}\n`, "utf8");
+    }
+
+    const restarted = new LlmWikiNextService(
+      new LlmWikiNextStore(),
+      new StubModel() as unknown as ModelService,
+    );
+    restarted.onModuleInit();
+
+    assert.equal(restarted.getSource(published.sourceId).status, "published");
+    assert.equal(restarted.getSource(staged.sourceId).status, "staged");
+    assert.equal(restarted.getSource(failed.sourceId).status, "failed");
+    assert.equal(restarted.getSource(pending.sourceId).status, "pending");
+    for (const source of [published, staged, failed, pending]) {
+      const meta = readJsonFile<Record<string, unknown>>(
+        path.join(harness.store.root, "sources", `${source.sourceId}.json`),
+      );
+      assert.ok("status" in meta);
+    }
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("服务重启将未完成报告标记为 interrupted，并保留最新详情", async () => {
+  const delayed = new DelayedWriterModel();
+  const harness = createHarness(delayed);
+  try {
+    const source = harness.service.uploadSource(
+      "restart-report.md",
+      Buffer.from("Slow source", "utf8"),
+    );
+    const estimate = harness.service.estimateCompile({
+      sourceIds: [source.sourceId],
+      model: "test:model",
+    });
+    await harness.service.compile({
+      ...estimate.options,
+      confirmHash: estimate.confirmHash,
+    });
+    await delayed.writerStarted;
+
+    const restarted = new LlmWikiNextService(
+      new LlmWikiNextStore(),
+      new StubModel() as unknown as ModelService,
+    );
+    restarted.onModuleInit();
+    const report = restarted.getSourceCompileDetail(source.sourceId).report;
+
+    assert.ok(report);
+    assert.equal(report.stage, "finished");
+    assert.equal(report.error?.stage, "server_restart");
+    assert.ok(report.events.some((event) => event.type === "source_interrupted"));
+    assert.equal(restarted.getCompilePool(), null);
+    assert.equal(restarted.getSource(source.sourceId).status, "pending");
+    delayed.finishWriter();
   } finally {
     harness.cleanup();
   }
@@ -848,6 +1336,20 @@ class DelayedWriterModel extends StubModel {
   }
 }
 
+class ToggleWriterFailureModel extends StubModel {
+  failWrites = false;
+
+  override async chat(options: RawChatOptions): Promise<unknown> {
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
+    if (this.failWrites && !Array.isArray(payload.availablePageKeys)) {
+      throw new Error("模拟重编译 Writer 失败");
+    }
+    return super.chat(options);
+  }
+}
+
 class InvalidPlannerModel extends StubModel {
   override async chat(options: RawChatOptions): Promise<unknown> {
     const payload = JSON.parse(
@@ -1113,6 +1615,91 @@ function validPlanPage(pageKey: string, operation: "create" | "update") {
   };
 }
 
+function publishDeleteFixture(
+  harness: ReturnType<typeof createHarness>,
+  singlePage = false,
+) {
+  const targetPageKey = "Target01";
+  const remainingPageKey = "Remain01";
+  const sharedSource = harness.service.uploadSource(
+    "shared.md",
+    Buffer.from("shared raw source", "utf8"),
+  );
+  const targetOnlySource = harness.service.uploadSource(
+    "target-only.md",
+    Buffer.from("target raw source", "utf8"),
+  );
+  const sharedPages: SourceOverlay["pages"] = [
+    {
+      pageKey: targetPageKey,
+      title: "Target page",
+      goal: "Target deletion marker",
+      relatedPageKeys: [],
+      bodyMarkdown: "# Target page\n\nTarget deletion marker.",
+      facts: [
+        {
+          fact: "Target shared fact",
+          sourceId: sharedSource.sourceId,
+          sourceLine: 1,
+        },
+      ],
+    },
+  ];
+  if (!singlePage) {
+    sharedPages.push({
+      pageKey: remainingPageKey,
+      title: "Remaining page",
+      goal: "Must remain unchanged",
+      relatedPageKeys: [targetPageKey],
+      bodyMarkdown: "# Remaining page\n\nKeep this body unchanged.",
+      facts: [
+        {
+          fact: "Remaining fact",
+          sourceId: sharedSource.sourceId,
+          sourceLine: 1,
+        },
+      ],
+    });
+  }
+
+  harness.store.ensureStaging();
+  harness.store.commitSourceOverlay({
+    sourceId: sharedSource.sourceId,
+    pages: sharedPages,
+  });
+  harness.store.commitSourceOverlay({
+    sourceId: targetOnlySource.sourceId,
+    pages: [
+      {
+        pageKey: targetPageKey,
+        title: "Target page",
+        goal: "Target deletion marker",
+        relatedPageKeys: [],
+        bodyMarkdown: "# Target page\n\nTarget deletion marker final body.",
+        facts: [
+          {
+            fact: "Target isolated fact",
+            sourceId: targetOnlySource.sourceId,
+            sourceLine: 1,
+          },
+        ],
+      },
+    ],
+  });
+  const published = harness.store.publishStaging();
+  return {
+    revisionId: published.revisionId,
+    targetPageKey,
+    remainingPageKey,
+    sharedSourceId: sharedSource.sourceId,
+    targetOnlySourceId: targetOnlySource.sourceId,
+  };
+}
+
+function readJsonFile<T>(file: string): T {
+  return JSON.parse(readFileSync(file, "utf8")) as T;
+}
+
 function createHarness(model: StubModel) {
   const root = mkdtempSync(path.join(tmpdir(), "knowllm-next-"));
   const previous = process.env.KNOWLLM_DATA_ROOT;
@@ -1164,7 +1751,7 @@ async function waitForSources(
         const item = pool.items.find(
           (current) => current.sourceId === sourceId,
         );
-        return item && !["queued", "planning", "writing"].includes(item.status);
+        return item?.phase === "finished";
       })
     )
       return pool;
@@ -1180,7 +1767,7 @@ function poolItem(pool: CompilePool, sourceId: string) {
 }
 
 function poolStatus(pool: CompilePool): "completed" | "completed_with_errors" {
-  return pool.items.some((item) => item.status === "failed")
+  return pool.items.some((item) => Boolean(item.error))
     ? "completed_with_errors"
     : "completed";
 }

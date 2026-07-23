@@ -5,11 +5,14 @@ import * as path from "node:path";
 import { getDataRoot } from "../../config/data-root";
 import {
   CompilePool,
+  DeletePublishedPageResult,
   ManifestPage,
   PublishResult,
+  SourceCompileReport,
   SourceOverlay,
   SourceRecord,
   SourceSnapshot,
+  SourceStatus,
   StagingState,
   WikiManifest,
   WikiSearchIndex,
@@ -20,6 +23,9 @@ interface PublishedPointer {
   revisionId: string;
   publishedAt: string;
 }
+
+export class PublishedRevisionChangedError extends Error {}
+export class PublishedPageNotFoundError extends Error {}
 
 @Injectable()
 export class LlmWikiNextStore {
@@ -45,6 +51,7 @@ export class LlmWikiNextStore {
       charCount: content.length,
       lineCount: countLines(content),
       createdAt: now,
+      status: "pending",
     };
     atomicWriteText(this.sourceContentPath(sourceId), content);
     atomicWriteJson(this.sourceMetaPath(sourceId), record);
@@ -53,13 +60,42 @@ export class LlmWikiNextStore {
 
   listSources(): SourceRecord[] {
     return listJsonFiles(this.sourcesRoot())
-      .map((file) => readJson<SourceRecord>(file))
+      .map((file) => normalizeSourceRecord(readJson<SourceRecord>(file)))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  getSourceRecord(sourceId: string): SourceRecord {
+    const id = safeId(sourceId, 16, "sourceId");
+    return normalizeSourceRecord(readJson<SourceRecord>(this.sourceMetaPath(id)));
+  }
+
+  sourceNeedsStatusMigration(sourceId: string): boolean {
+    const id = safeId(sourceId, 16, "sourceId");
+    const raw = readJson<Partial<SourceRecord>>(this.sourceMetaPath(id));
+    return !isSourceStatus(raw.status);
+  }
+
+  updateSourceStatus(sourceId: string, status: SourceStatus): SourceRecord {
+    const record = this.getSourceRecord(sourceId);
+    // 旧记录在内存中会被规范成 pending，但仍须把正式字段写回磁盘。
+    if (
+      record.status === status &&
+      !this.sourceNeedsStatusMigration(record.sourceId)
+    )
+      return record;
+    const next = { ...record, status };
+    atomicWriteJson(this.sourceMetaPath(record.sourceId), next);
+    return next;
+  }
+
+  updateSourceStatuses(sourceIds: string[], status: SourceStatus): void {
+    for (const sourceId of [...new Set(sourceIds)])
+      this.updateSourceStatus(sourceId, status);
   }
 
   getSource(sourceId: string): SourceSnapshot {
     const id = safeId(sourceId, 16, "sourceId");
-    const record = readJson<SourceRecord>(this.sourceMetaPath(id));
+    const record = this.getSourceRecord(id);
     const content = fs.readFileSync(this.sourceContentPath(id), "utf8");
     if (sha256(content) !== record.contentHash)
       throw new Error(`Source 内容校验失败: ${id}`);
@@ -72,6 +108,7 @@ export class LlmWikiNextStore {
       const id = safeId(sourceId, 16, "sourceId");
       fs.unlinkSync(this.sourceContentPath(id));
       fs.unlinkSync(this.sourceMetaPath(id));
+      this.deleteCompileReport(id);
     }
   }
 
@@ -136,7 +173,33 @@ export class LlmWikiNextStore {
 
   readCompilePool(): CompilePool | null {
     const file = this.compilePoolPath();
-    return fs.existsSync(file) ? readJson<CompilePool>(file) : null;
+    return fs.existsSync(file) ? normalizeCompilePool(readJson<CompilePool>(file)) : null;
+  }
+
+  readCompileReport(sourceId: string): SourceCompileReport | null {
+    const file = this.compileReportPath(sourceId);
+    return fs.existsSync(file)
+      ? normalizeCompileReport(readJson<SourceCompileReport>(file))
+      : null;
+  }
+
+  listCompileReports(): SourceCompileReport[] {
+    return listJsonFiles(this.compileReportsRoot())
+      .map((file) => normalizeCompileReport(readJson<SourceCompileReport>(file)))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  saveCompileReport(report: SourceCompileReport): SourceCompileReport {
+    const normalized = normalizeCompileReport(report);
+    const sourceId = safeId(normalized.sourceId, 16, "sourceId");
+    if (normalized.sourceId !== sourceId) throw new Error("编译报告 Source 非法");
+    atomicWriteJson(this.compileReportPath(sourceId), normalized);
+    return normalized;
+  }
+
+  deleteCompileReport(sourceId: string): void {
+    const file = this.compileReportPath(sourceId);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
   }
 
   saveCompilePool(pool: CompilePool): CompilePool {
@@ -248,6 +311,89 @@ export class LlmWikiNextStore {
     };
   }
 
+  deletePublishedPage(
+    pageKey: string,
+    expectedRevisionId: string,
+  ): Omit<DeletePublishedPageResult, "stagingRetainsPage"> {
+    const previous = this.readPublishedPointer();
+    if (!previous || previous.revisionId !== expectedRevisionId) {
+      throw new PublishedRevisionChangedError("正式 Wiki 已更新");
+    }
+
+    const snapshot = this.readSnapshot(
+      this.publishedRevisionRoot(previous.revisionId),
+    );
+    if (!snapshot.manifest.pages.some((page) => page.pageKey === pageKey)) {
+      throw new PublishedPageNotFoundError("Wiki 页面不存在");
+    }
+
+    const deletedFactCount = snapshot.facts.byPage[pageKey]?.length || 0;
+    const affectedPageKeys = snapshot.manifest.pages
+      .filter(
+        (page) =>
+          page.pageKey !== pageKey && page.relatedPageKeys.includes(pageKey),
+      )
+      .map((page) => page.pageKey)
+      .sort();
+
+    delete snapshot.pages[pageKey];
+    delete snapshot.facts.byPage[pageKey];
+    delete snapshot.sourceMap.pageToSources[pageKey];
+    snapshot.manifest.pages = snapshot.manifest.pages
+      .filter((page) => page.pageKey !== pageKey)
+      .map((page) => ({
+        ...page,
+        relatedPageKeys: page.relatedPageKeys.filter((id) => id !== pageKey),
+      }));
+    for (const [sourceId, pageKeys] of Object.entries(
+      snapshot.sourceMap.sourceToPages,
+    )) {
+      const remaining = unique(pageKeys.filter((id) => id !== pageKey));
+      if (remaining.length) {
+        snapshot.sourceMap.sourceToPages[sourceId] = remaining;
+      } else {
+        delete snapshot.sourceMap.sourceToPages[sourceId];
+      }
+    }
+    rebuildDerivedArtifacts(snapshot);
+
+    const revisionId = createId(16);
+    const publishedAt = new Date().toISOString();
+    snapshot.manifest = {
+      ...snapshot.manifest,
+      revisionId,
+      generatedAt: publishedAt,
+    };
+    const revisionRoot = this.publishedRevisionRoot(revisionId);
+    this.writeSnapshot(revisionRoot, snapshot);
+
+    // 写完新 revision 后再次做 CAS；失败时清理未提交 revision，不改变 current。
+    const current = this.readPublishedPointer();
+    if (!current || current.revisionId !== expectedRevisionId) {
+      removeDir(revisionRoot);
+      throw new PublishedRevisionChangedError("正式 Wiki 已更新");
+    }
+    atomicWriteJson(this.publishedPointerPath(), { revisionId, publishedAt });
+    this.readSnapshot(revisionRoot);
+
+    const cleanupWarnings: string[] = [];
+    try {
+      removeDir(this.publishedRevisionRoot(previous.revisionId));
+    } catch (error) {
+      cleanupWarnings.push(`旧 revision 清理失败: ${formatError(error)}`);
+    }
+    return {
+      revisionId,
+      publishedAt,
+      deletedPageKey: pageKey,
+      deletedFactCount,
+      affectedPageKeys,
+      pageCount: snapshot.manifest.pages.length,
+      factCount: countFacts(snapshot),
+      cleanupWarnings,
+    };
+  }
+
   readPublishedPointer(): PublishedPointer | null {
     const file = this.publishedPointerPath();
     return fs.existsSync(file) ? readJson<PublishedPointer>(file) : null;
@@ -319,6 +465,14 @@ export class LlmWikiNextStore {
 
   private jobsRoot(): string {
     return path.join(this.root, "jobs");
+  }
+
+  private compileReportsRoot(): string {
+    return path.join(this.root, "compile-reports");
+  }
+
+  private compileReportPath(sourceId: string): string {
+    return path.join(this.compileReportsRoot(), `${safeId(sourceId, 16, "sourceId")}.json`);
   }
 
   private stagingRoot(): string {
@@ -481,6 +635,69 @@ function snapshotHasSourceCompileArtifact(
       document.sourceIds.includes(sourceId),
     )
   );
+}
+
+function normalizeSourceRecord(record: SourceRecord): SourceRecord {
+  return {
+    ...record,
+    status: isSourceStatus(record.status) ? record.status : "pending",
+  };
+}
+
+function isSourceStatus(value: unknown): value is SourceStatus {
+  return ["pending", "compiling", "staged", "published", "failed"].includes(
+    String(value || ""),
+  );
+}
+
+function normalizeCompilePool(pool: CompilePool): CompilePool {
+  return {
+    ...pool,
+    items: (pool.items || []).map((item) => {
+      const legacy = item as CompilePoolItemWithLegacyStatus;
+      const { status: legacyStatus, phase, ...rest } = legacy;
+      return {
+        ...rest,
+        phase: isCompilePoolPhase(phase)
+          ? phase
+          : compilePhaseFromLegacyStatus(legacyStatus),
+      };
+    }),
+  };
+}
+
+function normalizeCompileReport(report: SourceCompileReport): SourceCompileReport {
+  const legacy = report as SourceCompileReportWithLegacyStatus;
+  const { status: legacyStatus, stage, ...rest } = legacy;
+  return {
+    ...rest,
+    version: legacy.version === 2 ? 2 : 1,
+    stage: isCompilePoolPhase(stage)
+      ? stage
+      : compilePhaseFromLegacyStatus(legacyStatus),
+  };
+}
+
+type CompilePoolItemWithLegacyStatus = CompilePool["items"][number] & {
+  status?: string;
+  phase?: string;
+};
+
+type SourceCompileReportWithLegacyStatus = SourceCompileReport & {
+  status?: string;
+  stage?: string;
+};
+
+function isCompilePoolPhase(value: unknown): value is CompilePool["items"][number]["phase"] {
+  return ["queued", "planning", "writing", "committing", "finished"].includes(
+    String(value || ""),
+  );
+}
+
+function compilePhaseFromLegacyStatus(value: unknown): CompilePool["items"][number]["phase"] {
+  if (["queued", "planning", "writing", "committing"].includes(String(value)))
+    return String(value) as CompilePool["items"][number]["phase"];
+  return "finished";
 }
 
 function normalizeSourceFilename(filename: string): string {

@@ -4,6 +4,7 @@ import {
   Check,
   Eye,
   FileText,
+  Info,
   Loader2,
   Play,
   RefreshCw,
@@ -19,6 +20,7 @@ import type {
   CompilePoolItem,
   ManifestPage,
   SourceRecord,
+  SourceStatus,
   StagingSummary,
 } from "@/api/llmWikiNext";
 import { Button } from "@/components/ui/button";
@@ -33,15 +35,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-type SourceVisualStatus =
-  | "queued"
-  | "planning"
-  | "writing"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "published"
-  | "uploaded";
+type SourceVisualStatus = SourceStatus;
 
 export interface CompileSettings {
   chunkChars: number;
@@ -73,6 +67,7 @@ interface SourceWorkspaceProps {
   onDeleteSelected: (sourceIds: string[]) => void;
   onOpenCompilePool: () => void;
   onOpenSource: (sourceId: string) => void;
+  onOpenCompileDetail: (sourceId: string) => void;
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
@@ -83,19 +78,15 @@ const statusMeta: Record<
   SourceVisualStatus,
   { label: string; className: string }
 > = {
-  queued: {
+  pending: {
     label: "待编译",
-    className: "border-slate-200 bg-slate-50 text-slate-600",
+    className: "border-amber-200 bg-amber-50 text-amber-700",
   },
-  planning: {
-    label: "规划中",
-    className: "border-violet-200 bg-violet-50 text-violet-700",
-  },
-  writing: {
-    label: "写入中",
+  compiling: {
+    label: "编译中",
     className: "border-indigo-200 bg-indigo-50 text-indigo-700",
   },
-  completed: {
+  staged: {
     label: "已暂存",
     className: "border-sky-200 bg-sky-50 text-sky-700",
   },
@@ -103,19 +94,55 @@ const statusMeta: Record<
     label: "失败",
     className: "border-rose-200 bg-rose-50 text-rose-700",
   },
-  cancelled: {
-    label: "已取消",
-    className: "border-slate-200 bg-slate-100 text-slate-600",
-  },
   published: {
     label: "已发布",
     className: "border-emerald-200 bg-emerald-50 text-emerald-700",
   },
-  uploaded: {
-    label: "待编译",
-    className: "border-amber-200 bg-amber-50 text-amber-700",
-  },
 };
+
+const statusSummaryMeta = [
+  {
+    key: "pending",
+    label: "待编译",
+    statuses: ["pending"],
+    dotClassName: "bg-amber-500",
+    alwaysVisible: true,
+  },
+  {
+    key: "running",
+    label: "编译中",
+    statuses: ["compiling"],
+    dotClassName: "bg-indigo-500",
+    alwaysVisible: true,
+  },
+  {
+    key: "staged",
+    label: "已暂存",
+    statuses: ["staged"],
+    dotClassName: "bg-sky-500",
+    alwaysVisible: true,
+  },
+  {
+    key: "published",
+    label: "已发布",
+    statuses: ["published"],
+    dotClassName: "bg-emerald-500",
+    alwaysVisible: true,
+  },
+  {
+    key: "failed",
+    label: "失败",
+    statuses: ["failed"],
+    dotClassName: "bg-rose-500",
+    alwaysVisible: false,
+  },
+] as const satisfies ReadonlyArray<{
+  key: string;
+  label: string;
+  statuses: readonly SourceVisualStatus[];
+  dotClassName: string;
+  alwaysVisible: boolean;
+}>;
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -127,20 +154,11 @@ function formatTime(value: string): string {
 function sourceState(
   source: SourceRecord,
   pool: CompilePool | null,
-  staging: StagingSummary | null,
-  publishedPages: ManifestPage[],
 ): { status: SourceVisualStatus; poolItem?: CompilePoolItem } {
   const poolItem = pool?.items.find(
     (item) => item.sourceId === source.sourceId,
   );
-  if (poolItem) return { status: poolItem.status, poolItem };
-  if (staging?.state.completedSourceIds.includes(source.sourceId)) {
-    return { status: "completed" };
-  }
-  if (publishedPages.some((page) => page.sourceIds.includes(source.sourceId))) {
-    return { status: "published" };
-  }
-  return { status: "uploaded" };
+  return { status: source.status, poolItem };
 }
 
 function pageCountFor(
@@ -153,7 +171,7 @@ function pageCountFor(
 }
 
 function isCompileSelectable(status: SourceVisualStatus): boolean {
-  return !["queued", "planning", "writing", "completed"].includes(status);
+  return ["pending", "published", "failed"].includes(status);
 }
 
 export function SourceWorkspace({
@@ -180,6 +198,7 @@ export function SourceWorkspace({
   onDeleteSelected,
   onOpenCompilePool,
   onOpenSource,
+  onOpenCompileDetail,
 }: SourceWorkspaceProps) {
   const [searchText, setSearchText] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<
@@ -200,10 +219,23 @@ export function SourceWorkspace({
     () =>
       sources.map((source) => ({
         source,
-        ...sourceState(source, pool, staging, publishedPages),
+        ...sourceState(source, pool),
       })),
-    [pool, publishedPages, sources, staging],
+    [pool, sources],
   );
+  const statusSummary = useMemo(() => {
+    const statusCounts = new Map<SourceVisualStatus, number>();
+    sourceRows.forEach(({ status }) => {
+      statusCounts.set(status, (statusCounts.get(status) || 0) + 1);
+    });
+    return statusSummaryMeta.map((item) => ({
+      ...item,
+      count: item.statuses.reduce(
+        (total, status) => total + (statusCounts.get(status) || 0),
+        0,
+      ),
+    }));
+  }, [sourceRows]);
   const filteredRows = useMemo(() => {
     const normalizedQuery = filters.query.trim().toLocaleLowerCase();
     return sourceRows.filter((row) => {
@@ -236,6 +268,7 @@ export function SourceWorkspace({
       new Set(
         sourceRows
           .filter((row) => isCompileSelectable(row.status))
+          .filter((row) => !row.poolItem)
           .map((row) => row.source.sourceId),
       ),
     [sourceRows],
@@ -251,10 +284,13 @@ export function SourceWorkspace({
   );
   const runningCount =
     pool?.items.filter(
-      (item) => item.status === "planning" || item.status === "writing",
+      (item) =>
+        item.phase === "planning" ||
+        item.phase === "writing" ||
+        item.phase === "committing",
     ).length || 0;
   const queuedCount =
-    pool?.items.filter((item) => item.status === "queued").length || 0;
+    pool?.items.filter((item) => item.phase === "queued").length || 0;
   const compiling = runningCount + queuedCount > 0;
 
   const toggleSource = (sourceId: string, checked: boolean) => {
@@ -462,9 +498,28 @@ export function SourceWorkspace({
               搜索
             </Button>
           </form>
-          <span className="text-xs tabular-nums text-slate-500">
-            {filteredRows.length} 个文档
-          </span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+            <span className="tabular-nums text-slate-500">
+              {filteredRows.length} 个文档
+            </span>
+            <span className="h-3.5 w-px bg-slate-200" aria-hidden="true" />
+            <div
+              className="flex flex-wrap items-center gap-x-3 gap-y-1"
+              aria-label="文档状态统计"
+            >
+              {statusSummary
+                .filter((item) => item.alwaysVisible || item.count > 0)
+                .map((item) => (
+                  <span key={item.key} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <span className={cn("size-1.5 rounded-full", item.dotClassName)} />
+                    {item.label}
+                    <strong className="font-semibold tabular-nums text-slate-900">
+                      {item.count}
+                    </strong>
+                  </span>
+                ))}
+            </div>
+          </div>
           {selectionMode && (
             <div className="flex items-center gap-2">
               <Button
@@ -536,7 +591,7 @@ export function SourceWorkspace({
             <col className="w-[13%] min-w-[120px]" />
             <col className="w-[10%] min-w-[100px]" />
             <col className="w-[18%] min-w-[180px]" />
-            <col className="w-[18%] min-w-[190px]" />
+            <col className="w-[22%] min-w-[260px]" />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-slate-100/95 text-xs text-slate-600 shadow-[0_1px_0_rgb(203_213_225)] backdrop-blur">
             <tr>
@@ -569,20 +624,16 @@ export function SourceWorkspace({
               <th className="min-w-[180px] px-3 py-2.5 text-center font-medium">
                 上传时间
               </th>
-              <th className="min-w-[190px] px-3 py-2.5 text-center font-medium">
+              <th className="min-w-[260px] px-3 py-2.5 text-center font-medium">
                 操作
               </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {pageRows.map(({ source, status, poolItem }) => {
-              const sourceCompletedInStaging =
-                staging?.state.completedSourceIds.includes(source.sourceId) ??
-                false;
+              const sourceCompletedInStaging = status === "staged";
               const sourceBusy =
-                status === "queued" ||
-                status === "planning" ||
-                status === "writing";
+                status === "compiling" || Boolean(poolItem);
               const selectable = !operationsLocked;
               return (
                 <Fragment key={source.sourceId}>
@@ -644,7 +695,7 @@ export function SourceWorkspace({
                     >
                       {formatTime(source.createdAt)}
                     </td>
-                    <td className="min-w-[190px] px-3 py-2 text-center">
+                    <td className="min-w-[260px] px-3 py-2 text-center">
                       <div className="inline-flex items-center gap-1">
                         <Button
                           size="xs"
@@ -654,6 +705,15 @@ export function SourceWorkspace({
                         >
                           <Eye />
                           原文
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          onClick={() => onOpenCompileDetail(source.sourceId)}
+                        >
+                          <Info />
+                          详情
                         </Button>
                         <Button
                           size="xs"

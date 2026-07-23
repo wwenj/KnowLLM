@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -46,6 +47,11 @@ export class LlmWikiNextController {
   @Get("sources/:sourceId")
   getSource(@Param("sourceId") sourceId: string) {
     return this.wiki.getSource(sourceId);
+  }
+
+  @Get("sources/:sourceId/compile-detail")
+  getSourceCompileDetail(@Param("sourceId") sourceId: string) {
+    return this.wiki.getSourceCompileDetail(sourceId);
   }
 
   @Post("sources/delete")
@@ -101,6 +107,14 @@ export class LlmWikiNextController {
   @Get("wiki/pages/:pageKey")
   getPublishedPage(@Param("pageKey") pageKey: string) {
     return this.wiki.getPublishedPage(pageKey);
+  }
+
+  @Delete("wiki/pages/:pageKey")
+  deletePublishedPage(
+    @Param("pageKey") pageKey: string,
+    @Query("revisionId") revisionId = "",
+  ) {
+    return this.wiki.deletePublishedPage(pageKey, revisionId);
   }
 
   @Get("wiki/search")
