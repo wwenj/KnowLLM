@@ -2,13 +2,19 @@ import { http } from "./http";
 
 const ROOT = "/api/llm-wiki-next";
 
-export type SourceCompileStatus =
+export type SourceStatus =
+  | "pending"
+  | "compiling"
+  | "staged"
+  | "published"
+  | "failed";
+
+export type CompilePoolPhase =
   | "queued"
   | "planning"
   | "writing"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | "committing"
+  | "finished";
 
 export interface SourceRecord {
   sourceId: string;
@@ -17,6 +23,7 @@ export interface SourceRecord {
   charCount: number;
   lineCount: number;
   createdAt: string;
+  status: SourceStatus;
 }
 
 export interface SourceSnapshot extends SourceRecord {
@@ -69,9 +76,10 @@ export interface CompileEstimate {
 }
 
 export interface CompilePoolItem {
+  runId: string;
   sourceId: string;
   contentHash: string;
-  status: SourceCompileStatus;
+  phase: CompilePoolPhase;
   compileUnitCount: number;
   maxModelCalls: number;
   maxOutputTokens: number;
@@ -84,6 +92,156 @@ export interface CompilePoolItem {
   startedAt: string;
   finishedAt: string;
   startedOptions: CompileExecutionOptions | null;
+}
+
+export type CompileReportStage = CompilePoolPhase;
+
+export type CompileReportCallStage = "planner" | "writer";
+
+export type CompileReportCallStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface CompileDebugText {
+  text: string;
+  charCount: number;
+  contentHash: string;
+  truncated: boolean;
+}
+
+export interface CompileReportError {
+  stage: string;
+  category: string;
+  message: string;
+}
+
+export interface CompileReportEvent {
+  sequence: number;
+  at: string;
+  type: string;
+  message: string;
+  unitId?: string;
+  callId?: string;
+}
+
+export interface CompileReportUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  usageSource: "provider" | "estimated";
+}
+
+export interface CompileReportCall {
+  callId: string;
+  stage: CompileReportCallStage;
+  unitId: string;
+  status: CompileReportCallStatus;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  maxOutputTokens: number;
+  model: string;
+  responseId: string;
+  responseModel: string;
+  finishReason: string;
+  usage: CompileReportUsage;
+  request: { systemPrompt: CompileDebugText; payload: CompileDebugText };
+  response: CompileDebugText | null;
+  error: CompileReportError | null;
+  validation: {
+    status: "pending" | "succeeded" | "failed";
+    error: CompileReportError | null;
+  };
+}
+
+export interface WikiPagePlanItem {
+  pageKey: string;
+  operation: "create" | "update";
+  title: string;
+  goal: string;
+  scope: string;
+  outline: Array<{
+    heading: string;
+    writingPoints: string[];
+    sourceAnchors: string[];
+  }>;
+  relatedPageKeys: string[];
+}
+
+export interface WikiPagePlan {
+  sourceId: string;
+  unitId: string;
+  partitionIntent: string;
+  pages: WikiPagePlanItem[];
+}
+
+export interface CompileReportUnit {
+  unitId: string;
+  index: number;
+  startOffset: number;
+  endOffset: number;
+  startLine: number;
+  endLine: number;
+  charCount: number;
+  contentHash: string;
+  maxPages: number;
+  reservedPageKeys: string[];
+  plannerCallId: string;
+  writerCallId: string;
+  plan: WikiPagePlan | null;
+  writerPages: Array<{
+    pageKey: string;
+    bodyCharCount: number;
+    bodyHash: string;
+    keyFacts: KeyFact[];
+  }>;
+  error: CompileReportError | null;
+}
+
+export interface SourceCompileReport {
+  version: 1 | 2;
+  legacy: boolean;
+  runId: string;
+  poolId: string;
+  workspaceId: string;
+  sourceId: string;
+  contentHash: string;
+  stage: CompileReportStage;
+  model: { id: string; name: string; provider: string; providerName: string };
+  options: CompileExecutionOptions;
+  compiler: {
+    promptVersion: string;
+    pageLimitPolicyVersion: string;
+    modelTimeoutMs: number;
+    maxFactsPerPlan: number;
+  };
+  queuedAt: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  updatedAt: string;
+  events: CompileReportEvent[];
+  units: CompileReportUnit[];
+  calls: CompileReportCall[];
+  summary: {
+    compileUnitCount: number;
+    modelCalls: number;
+    succeededCalls: number;
+    failedCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    pageKeys: string[];
+    factCount: number;
+  };
+  error: CompileReportError | null;
+}
+
+export interface SourceCompileDetailResponse {
+  source: SourceRecord;
+  report: SourceCompileReport | null;
 }
 
 export interface CompilePool {
@@ -114,6 +272,7 @@ export interface ManifestPage {
   goal: string;
   relatedPageKeys: string[];
   sourceIds: string[];
+  factCount?: number;
 }
 
 export interface WikiPageDetail extends ManifestPage {
@@ -147,6 +306,18 @@ export interface PublishResult {
   cleanupWarnings: string[];
   cancelledQueuedCount: number;
   cancelledRunningCount: number;
+}
+
+export interface DeletePublishedPageResult {
+  revisionId: string;
+  publishedAt: string;
+  deletedPageKey: string;
+  deletedFactCount: number;
+  affectedPageKeys: string[];
+  pageCount: number;
+  factCount: number;
+  stagingRetainsPage: boolean;
+  cleanupWarnings: string[];
 }
 
 export interface WikiManifest {
@@ -183,6 +354,10 @@ export const llmWikiNextApi = {
   listSources: () => http.get<{ items: SourceRecord[] }>(`${ROOT}/sources`),
   getSource: (sourceId: string) =>
     http.get<SourceSnapshot>(`${ROOT}/sources/${pathId(sourceId)}`),
+  getSourceCompileDetail: (sourceId: string) =>
+    http.get<SourceCompileDetailResponse>(
+      `${ROOT}/sources/${pathId(sourceId)}/compile-detail`,
+    ),
   deleteSources: (sourceIds: string[]) =>
     http.post<DeleteSourcesResult>(`${ROOT}/sources/delete`, { sourceIds }),
   estimateCompile: (request: CompileRequest) =>
@@ -212,6 +387,11 @@ export const llmWikiNextApi = {
   getPublishedManifest: () => http.get<WikiManifest>(`${ROOT}/wiki/manifest`),
   getPublishedPage: (pageKey: string) =>
     http.get<WikiPageDetail>(`${ROOT}/wiki/pages/${pathId(pageKey)}`),
+  deletePublishedPage: (pageKey: string, revisionId: string) =>
+    http.delete<DeletePublishedPageResult>(
+      `${ROOT}/wiki/pages/${pathId(pageKey)}`,
+      { params: { revisionId } },
+    ),
   searchPublished: (query: string, limit = 20) =>
     http.get<SearchResult>(`${ROOT}/wiki/search`, { q: query, limit }),
 };

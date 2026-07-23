@@ -1,20 +1,32 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
 import { createHash, randomBytes } from "node:crypto";
 import { ModelService } from "../model/model.service";
-import { LlmWikiNextStore } from "./llm-wiki-next.store";
+import {
+  LlmWikiNextStore,
+  PublishedPageNotFoundError,
+  PublishedRevisionChangedError,
+} from "./llm-wiki-next.store";
 import {
   CompileEstimate,
+  CompileDebugText,
   CompileExecutionOptions,
   CompilePool,
   CompilePoolCancelResult,
   CompilePoolItem,
+  CompileReportCall,
+  CompileReportCallStage,
+  CompileReportError,
+  CompileReportUnit,
   CompileRequest,
   CompileUnit,
+  DeletePublishedPageResult,
   DeleteSourcesResult,
   KeyFact,
   ManifestPage,
@@ -23,8 +35,11 @@ import {
   PublishResult,
   SourceOverlay,
   SourceOverlayPage,
+  SourceCompileDetailResponse,
+  SourceCompileReport,
   SourceRecord,
   SourceSnapshot,
+  SourceStatus,
   StagingSummary,
   WikiPagePlan,
   WikiPagePlanItem,
@@ -43,6 +58,7 @@ export class LlmWikiNextService implements OnModuleInit {
   private readonly logger = new Logger(LlmWikiNextService.name);
   private readonly stateMutex = new AsyncMutex();
   private pageMutex = new KeyedMutex();
+  private readonly reportMutex = new KeyedMutex();
   private readonly controllers = new Map<string, AbortController>();
   private readonly activeTokens = new Map<string, string>();
   private schedulerQueued = false;
@@ -53,7 +69,9 @@ export class LlmWikiNextService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
+    this.recoverCompileReports();
     this.store.clearInterruptedCompileState();
+    this.reconcileSourceStatuses();
   }
 
   uploadSource(filename: string, buffer: Buffer): SourceRecord {
@@ -68,6 +86,11 @@ export class LlmWikiNextService implements OnModuleInit {
 
   getSource(sourceId: string): SourceSnapshot {
     return this.store.getSource(sourceId);
+  }
+
+  getSourceCompileDetail(sourceId: string): SourceCompileDetailResponse {
+    const source = this.store.getSource(sourceId);
+    return { source, report: this.store.readCompileReport(sourceId) };
   }
 
   async deleteSources(sourceIds: string[]): Promise<DeleteSourcesResult> {
@@ -99,7 +122,7 @@ export class LlmWikiNextService implements OnModuleInit {
       }
 
       // 编译状态本身不阻止删除；删除前使对应任务失去写权限，防止晚到响应写回。
-      this.removeSourcesFromCompilePoolLocked(new Set(ids));
+      await this.removeSourcesFromCompilePoolLocked(new Set(ids));
       const staging = this.store.readStagingState();
       if (staging) {
         const completedSourceIds = staging.completedSourceIds.filter(
@@ -184,7 +207,7 @@ export class LlmWikiNextService implements OnModuleInit {
       const activeIds = new Set(
         (existing?.items || [])
           .filter((item) =>
-            ["queued", "planning", "writing"].includes(item.status),
+            isActivePoolPhase(item.phase),
           )
           .map((item) => item.sourceId),
       );
@@ -215,13 +238,25 @@ export class LlmWikiNextService implements OnModuleInit {
             createdAt: now,
             updatedAt: now,
           };
+      const addedItems: Array<{
+        source: SourceSnapshot;
+        item: CompilePoolItem;
+      }> = [];
       for (const sourceId of estimate.sourceIds) {
         const source = this.store.getSource(sourceId);
         const previous = pool.items.findIndex(
           (item) => item.sourceId === sourceId,
         );
         if (previous >= 0) pool.items.splice(previous, 1);
-        pool.items.push(createPoolItem(source, estimate, now));
+        const item = createPoolItem(source, estimate, now);
+        pool.items.push(item);
+        addedItems.push({ source, item });
+      }
+      for (const { source, item } of addedItems) {
+        this.store.saveCompileReport(
+          this.createQueuedReport(source, pool, item, pool.options),
+        );
+        this.store.updateSourceStatus(source.sourceId, "pending");
       }
       this.store.saveCompilePool(pool);
       return pool;
@@ -236,7 +271,7 @@ export class LlmWikiNextService implements OnModuleInit {
 
   async cancelCompilePool(): Promise<CompilePoolCancelResult> {
     return this.stateMutex.runExclusive(async () =>
-      this.clearCompilePoolLocked(),
+      this.clearCompilePoolLocked("user_cancelled"),
     );
   }
 
@@ -248,7 +283,7 @@ export class LlmWikiNextService implements OnModuleInit {
       state,
       pageCount: snapshot.manifest.pages.length,
       factCount: countFacts(snapshot),
-      pages: snapshot.manifest.pages,
+      pages: pageSummaries(snapshot),
       compilePool: this.store.readCompilePool(),
     };
   }
@@ -265,12 +300,22 @@ export class LlmWikiNextService implements OnModuleInit {
       if (state.status !== "open") throw new Error("Staging 当前不可发布");
       if (!state.completedSourceIds.length)
         throw new Error("需要至少一个已合并 Source 才能发布");
-      const cancelled = this.clearCompilePoolLocked();
+      const completedSourceIds = [...state.completedSourceIds];
+      const cancelled = await this.clearCompilePoolLocked("published");
       const current = this.store.readStagingState();
       if (!current) throw new Error("当前没有可发布的 Staging");
       this.store.updateStagingState({ ...current, status: "publishing" });
       try {
         const result = this.store.publishStaging();
+        try {
+          this.store.updateSourceStatuses(completedSourceIds, "published");
+        } catch (error) {
+          // current.json 已切换即代表发布成功，状态补写失败不能误报发布失败；
+          // 下次启动会按 Published 快照补齐。
+          const message = `Source 状态同步失败: ${formatError(error)}`;
+          this.logger.error(message);
+          result.cleanupWarnings.push(message);
+        }
         this.pageMutex = new KeyedMutex();
         return {
           ...result,
@@ -288,19 +333,106 @@ export class LlmWikiNextService implements OnModuleInit {
 
   async discardStaging(): Promise<{ discarded: true }> {
     return this.stateMutex.runExclusive(async () => {
-      this.clearCompilePoolLocked();
+      const stagedSourceIds = [
+        ...(this.store.readStagingState()?.completedSourceIds || []),
+      ];
+      await this.clearCompilePoolLocked("discarded");
       this.store.discardStaging();
+      this.store.updateSourceStatuses(stagedSourceIds, "pending");
       this.pageMutex = new KeyedMutex();
       return { discarded: true };
     });
   }
 
   getPublishedManifest() {
-    return this.store.readPublishedSnapshot().manifest;
+    const snapshot = this.store.readPublishedSnapshot();
+    return {
+      ...snapshot.manifest,
+      pages: pageSummaries(snapshot),
+    };
   }
 
   getPublishedPage(pageKey: string) {
     return pageResult(this.store.readPublishedSnapshot(), pageKey);
+  }
+
+  async deletePublishedPage(
+    pageKey: string,
+    revisionId: string,
+  ): Promise<DeletePublishedPageResult> {
+    const normalizedPageKey = String(pageKey || "").trim();
+    const expectedRevisionId = String(revisionId || "").trim();
+    if (!/^[A-Za-z0-9]{8}$/.test(normalizedPageKey)) {
+      throw new BadRequestException({
+        message: "pageKey 非法",
+        error: "INVALID_PAGE_KEY",
+      });
+    }
+    if (!/^[A-Za-z0-9]{16}$/.test(expectedRevisionId)) {
+      throw new BadRequestException({
+        message: "revisionId 非法",
+        error: "INVALID_REVISION_ID",
+      });
+    }
+
+    return this.stateMutex.runExclusive(async () => {
+      const current = this.store.readPublishedPointer();
+      if (!current) {
+        throw new NotFoundException({
+          message: "正式 Wiki 不存在",
+          error: "PUBLISHED_WIKI_NOT_FOUND",
+        });
+      }
+      if (current.revisionId !== expectedRevisionId) {
+        throw new ConflictException({
+          message: "正式 Wiki 已更新，请刷新后重新选择页面",
+          error: "PUBLISHED_REVISION_CHANGED",
+        });
+      }
+
+      const snapshot = this.store.readPublishedSnapshot();
+      if (
+        !snapshot.manifest.pages.some(
+          (page) => page.pageKey === normalizedPageKey,
+        )
+      ) {
+        throw new NotFoundException({
+          message: "Wiki 页面已不存在，请刷新后重新选择页面",
+          error: "WIKI_PAGE_NOT_FOUND",
+        });
+      }
+      const staging = this.store.readStagingState();
+      const stagingRetainsPage = Boolean(
+        staging &&
+          this.store
+            .readStagingSnapshot()
+            .manifest.pages.some((page) => page.pageKey === normalizedPageKey),
+      );
+
+      try {
+        return {
+          ...this.store.deletePublishedPage(
+            normalizedPageKey,
+            expectedRevisionId,
+          ),
+          stagingRetainsPage,
+        };
+      } catch (error) {
+        if (error instanceof PublishedRevisionChangedError) {
+          throw new ConflictException({
+            message: "正式 Wiki 已更新，请刷新后重新选择页面",
+            error: "PUBLISHED_REVISION_CHANGED",
+          });
+        }
+        if (error instanceof PublishedPageNotFoundError) {
+          throw new NotFoundException({
+            message: "Wiki 页面已不存在，请刷新后重新选择页面",
+            error: "WIKI_PAGE_NOT_FOUND",
+          });
+        }
+        throw error;
+      }
+    });
   }
 
   searchPublished(query: string, limit = 20) {
@@ -372,6 +504,7 @@ export class LlmWikiNextService implements OnModuleInit {
 
   private async processSource(
     sourceId: string,
+    runId: string,
     token: string,
     signal: AbortSignal,
     options: CompileExecutionOptions,
@@ -380,15 +513,28 @@ export class LlmWikiNextService implements OnModuleInit {
     const sourceSignal = AbortSignal.any([signal, sourceController.signal]);
     const allocatedPageKeys: string[] = [];
     let releasePages: (() => void) | null = null;
+    let errorStage: CompileReportError["stage"] = "source";
     try {
       this.assertWritable(sourceId, token);
+      await this.updateSourceStatusForRun(sourceId, token, "compiling");
+      await this.updateReport(sourceId, runId, (report) => {
+        const now = new Date().toISOString();
+        report.stage = "planning";
+        report.startedAt = now;
+        appendReportEvent(report, "source_started", "Source 开始编译");
+      });
       const source = this.store.getSource(sourceId);
       if (source.contentHash !== this.getPoolItem(sourceId)?.contentHash) {
         throw new Error("Source 内容已变化，请重新加入待编译池");
       }
       const units = splitSource(source, options.chunkChars);
+      await this.updateReport(sourceId, runId, (report) => {
+        report.units = units.map((unit, index) => createReportUnit(unit, index));
+        report.summary.compileUnitCount = units.length;
+        appendReportEvent(report, "source_split", `已生成 ${units.length} 个 Compile Unit`);
+      });
       await this.patchPoolItem(sourceId, token, {
-        status: "planning",
+        phase: "planning",
         compileUnitCount: units.length,
         error: "",
       });
@@ -400,8 +546,20 @@ export class LlmWikiNextService implements OnModuleInit {
             const maxPages = calculateMaxPages(unit.content.length);
             const availablePageKeys = await this.reservePageKeys(maxPages);
             allocatedPageKeys.push(...availablePageKeys);
+            await this.updateReport(sourceId, runId, (report) => {
+              const reportUnit = requireReportUnit(report, unit.unitId);
+              reportUnit.maxPages = maxPages;
+              reportUnit.reservedPageKeys = [...availablePageKeys];
+              appendReportEvent(
+                report,
+                "page_keys_reserved",
+                `已预留 ${availablePageKeys.length} 个页面 ID`,
+                unit.unitId,
+              );
+            });
             const plan = await this.runPlanner(
               sourceId,
+              runId,
               token,
               options,
               source,
@@ -435,18 +593,25 @@ export class LlmWikiNextService implements OnModuleInit {
         return result.value;
       });
       this.assertWritable(sourceId, token);
+      await this.updateReport(sourceId, runId, (report) => {
+        report.stage = "writing";
+        appendReportEvent(report, "planning_completed", "全部 Planner 调用完成");
+      });
       await this.patchPoolItem(sourceId, token, {
-        status: "writing",
+        phase: "writing",
         plannerCalls: units.length,
       });
 
       const pageKeys = uniqueStrings(
         plans.flatMap(({ plan }) => plan.pages.map((page) => page.pageKey)),
       ).sort();
+      errorStage = "page_lock";
       releasePages = await this.pageMutex.acquireMany(pageKeys);
+      errorStage = "source";
       this.assertWritable(sourceId, token);
       const overlay = await this.runWriters(
         sourceId,
+        runId,
         token,
         options,
         source,
@@ -456,26 +621,60 @@ export class LlmWikiNextService implements OnModuleInit {
       this.assertWritable(sourceId, token);
 
       // Source 只有在全部 Writer 成功后才进入这个提交点，失败不会留下半成品。
+      errorStage = "staging_commit";
+      await this.updateReport(sourceId, runId, (report) => {
+        report.stage = "committing";
+        appendReportEvent(report, "staging_commit_started", "准备合并到共享 Staging");
+      });
+      await this.patchPoolItem(sourceId, token, { phase: "committing" });
       await this.stateMutex.runExclusive(async () => {
         this.assertWritable(sourceId, token);
         this.store.commitSourceOverlay(overlay);
+        this.store.updateSourceStatus(sourceId, "staged");
       });
       await this.releasePageKeys(allocatedPageKeys);
       await this.patchPoolItem(sourceId, token, {
-        status: "completed",
+        phase: "finished",
         writerCalls: plans.length,
         pageKeys,
         finishedAt: new Date().toISOString(),
+      });
+      await this.finishReport(sourceId, runId, null, {
+        pageKeys,
+        factCount: overlay.pages.reduce(
+          (sum, page) => sum + page.facts.length,
+          0,
+        ),
+        eventType: "source_completed",
+        eventMessage: "Source 已成功合并到共享 Staging",
       });
     } catch (error) {
       sourceController.abort();
       await this.releasePageKeys(allocatedPageKeys).catch(() => undefined);
       if (this.isWritable(sourceId, token)) {
         await this.patchPoolItem(sourceId, token, {
-          status: "failed",
+          phase: "finished",
           error: formatError(error),
           finishedAt: new Date().toISOString(),
         }).catch(() => undefined);
+        await this.updateSourceStatusForRun(sourceId, token, "failed").catch(
+          () => undefined,
+        );
+        await this.finishReport(
+          sourceId,
+          runId,
+          error instanceof CompileTraceError
+            ? error.detail
+            : reportError(errorStage, error),
+          {
+            eventType: "source_failed",
+            eventMessage: `Source 编译失败：${formatError(error)}`,
+          },
+        ).catch((reportError) => {
+          this.logger.error(
+            `llmWikiNext 编译报告写入失败: ${sourceId}: ${formatError(reportError)}`,
+          );
+        });
       }
     } finally {
       releasePages?.();
@@ -488,6 +687,7 @@ export class LlmWikiNextService implements OnModuleInit {
 
   private async runPlanner(
     sourceId: string,
+    runId: string,
     token: string,
     options: CompileExecutionOptions,
     source: SourceSnapshot,
@@ -498,7 +698,11 @@ export class LlmWikiNextService implements OnModuleInit {
     signal: AbortSignal,
   ): Promise<WikiPagePlan> {
     await this.beforeModelCall(sourceId, token);
-    const value = await this.callJson({
+    const result = await this.callJson({
+      sourceId,
+      runId,
+      stage: "planner",
+      unitId: unit.unitId,
       model: options.model,
       maxTokens: options.plannerMaxOutputTokens,
       signal,
@@ -513,18 +717,53 @@ export class LlmWikiNextService implements OnModuleInit {
       },
     });
     this.assertWritable(sourceId, token);
-    return validatePlan(
-      value,
-      source.sourceId,
-      unit.unitId,
-      existingPages,
-      availablePageKeys,
-      maxPages,
-    );
+    try {
+      const plan = validatePlan(
+        result.value,
+        source.sourceId,
+        unit.unitId,
+        existingPages,
+        availablePageKeys,
+        maxPages,
+      );
+      await this.updateReport(sourceId, runId, (report) => {
+        const call = requireReportCall(report, result.callId);
+        call.validation = { status: "succeeded", error: null };
+        const reportUnit = requireReportUnit(report, unit.unitId);
+        reportUnit.plannerCallId = result.callId;
+        reportUnit.plan = plan;
+        appendReportEvent(
+          report,
+          "planner_validated",
+          "Planner 输出校验通过",
+          unit.unitId,
+          result.callId,
+        );
+      });
+      return plan;
+    } catch (error) {
+      const detail = reportError("planner_validation", error);
+      await this.updateReport(sourceId, runId, (report) => {
+        const call = requireReportCall(report, result.callId);
+        call.validation = { status: "failed", error: detail };
+        const reportUnit = requireReportUnit(report, unit.unitId);
+        reportUnit.plannerCallId = result.callId;
+        reportUnit.error = detail;
+        appendReportEvent(
+          report,
+          "planner_validation_failed",
+          detail.message,
+          unit.unitId,
+          result.callId,
+        );
+      });
+      throw new CompileTraceError(detail, error);
+    }
   }
 
   private async runWriters(
     sourceId: string,
+    runId: string,
     token: string,
     options: CompileExecutionOptions,
     source: SourceSnapshot,
@@ -562,7 +801,11 @@ export class LlmWikiNextService implements OnModuleInit {
       }
 
       await this.beforeModelCall(sourceId, token);
-      const raw = await this.callJson({
+      const result = await this.callJson({
+        sourceId,
+        runId,
+        stage: "writer",
+        unitId: unit.unitId,
         model: options.model,
         maxTokens: options.writerMaxOutputTokens,
         signal,
@@ -575,7 +818,46 @@ export class LlmWikiNextService implements OnModuleInit {
         },
       });
       this.assertWritable(sourceId, token);
-      const output = validateWriterOutput(raw, source, unit, plan);
+      let output: MultiPageWriterOutput;
+      try {
+        output = validateWriterOutput(result.value, source, unit, plan);
+        await this.updateReport(sourceId, runId, (report) => {
+          const call = requireReportCall(report, result.callId);
+          call.validation = { status: "succeeded", error: null };
+          const reportUnit = requireReportUnit(report, unit.unitId);
+          reportUnit.writerCallId = result.callId;
+          reportUnit.writerPages = output.pages.map((page) => ({
+            pageKey: page.pageKey,
+            bodyCharCount: page.bodyMarkdown.length,
+            bodyHash: sha256(page.bodyMarkdown),
+            keyFacts: page.keyFacts,
+          }));
+          appendReportEvent(
+            report,
+            "writer_validated",
+            "Writer 输出校验通过",
+            unit.unitId,
+            result.callId,
+          );
+        });
+      } catch (error) {
+        const detail = reportError("writer_validation", error);
+        await this.updateReport(sourceId, runId, (report) => {
+          const call = requireReportCall(report, result.callId);
+          call.validation = { status: "failed", error: detail };
+          const reportUnit = requireReportUnit(report, unit.unitId);
+          reportUnit.writerCallId = result.callId;
+          reportUnit.error = detail;
+          appendReportEvent(
+            report,
+            "writer_validation_failed",
+            detail.message,
+            unit.unitId,
+            result.callId,
+          );
+        });
+        throw new CompileTraceError(detail, error);
+      }
       const planByKey = new Map(plan.pages.map((page) => [page.pageKey, page]));
 
       for (const written of output.pages) {
@@ -602,25 +884,132 @@ export class LlmWikiNextService implements OnModuleInit {
   }
 
   private async callJson(args: {
+    sourceId: string;
+    runId: string;
+    stage: CompileReportCallStage;
+    unitId: string;
     model: string;
     maxTokens: number;
     signal: AbortSignal;
     system: string;
     payload: unknown;
-  }): Promise<unknown> {
-    const timeoutSignal = AbortSignal.timeout(MODEL_TIMEOUT_MS);
-    const response = await this.model.chat({
-      model: args.model,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      maxTokens: args.maxTokens,
-      signal: AbortSignal.any([args.signal, timeoutSignal]),
-      messages: [
-        { role: "system", content: args.system },
-        { role: "user", content: JSON.stringify(args.payload) },
-      ],
+  }): Promise<{ value: unknown; callId: string }> {
+    const callId = createBase62Id(20);
+    const startedAt = new Date().toISOString();
+    const payloadText = JSON.stringify(args.payload);
+    const estimatedInputTokens = estimateTokens(`${args.system}\n${payloadText}`);
+    await this.updateReport(args.sourceId, args.runId, (report) => {
+      const reportUnit = requireReportUnit(report, args.unitId);
+      const call: CompileReportCall = {
+        callId,
+        stage: args.stage,
+        unitId: args.unitId,
+        status: "running",
+        startedAt,
+        finishedAt: "",
+        durationMs: 0,
+        maxOutputTokens: args.maxTokens,
+        model: args.model,
+        responseId: "",
+        responseModel: "",
+        finishReason: "",
+        usage: {
+          inputTokens: estimatedInputTokens,
+          outputTokens: 0,
+          totalTokens: estimatedInputTokens,
+          usageSource: "estimated",
+        },
+        request: {
+          systemPrompt: debugText(args.system),
+          payload: debugText(payloadText),
+        },
+        response: null,
+        error: null,
+        validation: { status: "pending", error: null },
+      };
+      report.calls.push(call);
+      if (args.stage === "planner") reportUnit.plannerCallId = callId;
+      else reportUnit.writerCallId = callId;
+      appendReportEvent(
+        report,
+        "model_call_started",
+        `${args.stage === "planner" ? "Planner" : "Writer"} 模型调用开始`,
+        args.unitId,
+        callId,
+      );
     });
-    return parseJson(extractModelContent(response));
+    const timeoutSignal = AbortSignal.timeout(MODEL_TIMEOUT_MS);
+    try {
+      const response = await this.model.chat({
+        model: args.model,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        maxTokens: args.maxTokens,
+        signal: AbortSignal.any([args.signal, timeoutSignal]),
+        messages: [
+          { role: "system", content: args.system },
+          { role: "user", content: payloadText },
+        ],
+      });
+      const content = extractModelContent(response);
+      const usage = modelUsage(response, estimatedInputTokens, estimateTokens(content));
+      const responseMeta = modelResponseMeta(response);
+      let value: unknown;
+      try {
+        value = parseJson(content);
+      } catch (error) {
+        const detail = reportError("json_parse", error);
+        await this.completeReportCall(args.sourceId, args.runId, callId, {
+          status: "failed",
+          response: debugText(content),
+          usage,
+          error: detail,
+          responseMeta,
+          eventType: "model_json_parse_failed",
+          eventMessage: detail.message,
+        });
+        throw new CompileTraceError(detail, error);
+      }
+      await this.completeReportCall(args.sourceId, args.runId, callId, {
+        status: "succeeded",
+        response: debugText(content),
+        usage,
+        error: null,
+        responseMeta,
+        eventType: "model_call_succeeded",
+        eventMessage: `${args.stage === "planner" ? "Planner" : "Writer"} 模型调用完成`,
+      });
+      return { value, callId };
+    } catch (error) {
+      if (error instanceof CompileTraceError) throw error;
+      const detail = reportError(
+        timeoutSignal.aborted && !args.signal.aborted
+          ? "model_request"
+          : args.signal.aborted
+            ? "cancelled"
+            : "model_request",
+        error,
+        timeoutSignal.aborted && !args.signal.aborted
+          ? "timeout"
+          : args.signal.aborted
+            ? "cancelled"
+            : "model_request",
+      );
+      await this.completeReportCall(args.sourceId, args.runId, callId, {
+        status: detail.stage === "cancelled" ? "cancelled" : "failed",
+        response: null,
+        usage: null,
+        error: detail,
+        responseMeta: null,
+        eventType: "model_call_failed",
+        eventMessage: detail.message,
+      }).catch((reportError) => {
+        this.logger.error(
+          `llmWikiNext 模型调用报告写入失败: ${args.sourceId}: ${formatError(reportError)}`,
+        );
+      });
+      throw new CompileTraceError(detail, error);
+    }
   }
 
   private async reservePageKeys(count: number): Promise<string[]> {
@@ -687,13 +1076,16 @@ export class LlmWikiNextService implements OnModuleInit {
       )
         return [];
       const running = pool.items.filter(
-        (item) => item.status === "planning" || item.status === "writing",
+        (item) =>
+          item.phase === "planning" ||
+          item.phase === "writing" ||
+          item.phase === "committing",
       ).length;
       const capacity = Math.max(0, pool.options.sourceConcurrency - running);
       if (!capacity) return [];
       const now = new Date().toISOString();
       const sourceIds = pool.items
-        .filter((item) => item.status === "queued")
+        .filter((item) => item.phase === "queued")
         .slice(0, capacity)
         .map((item) => item.sourceId);
       if (!sourceIds.length) return [];
@@ -704,7 +1096,7 @@ export class LlmWikiNextService implements OnModuleInit {
           selected.has(item.sourceId)
             ? {
                 ...item,
-                status: "planning",
+                phase: "planning",
                 startedAt: now,
                 error: "",
                 startedOptions: { ...pool.options },
@@ -713,17 +1105,27 @@ export class LlmWikiNextService implements OnModuleInit {
         ),
       };
       this.store.saveCompilePool(next);
+      this.store.updateSourceStatuses(sourceIds, "compiling");
       return sourceIds.map((sourceId) => {
+        const poolItem = next.items.find((item) => item.sourceId === sourceId);
+        if (!poolItem) throw new Error("待调度 Source 不存在");
         const token = createBase62Id(24);
         const controller = new AbortController();
         this.activeTokens.set(sourceId, token);
         this.controllers.set(sourceId, controller);
-        return { sourceId, token, controller, options: { ...pool.options } };
+        return {
+          sourceId,
+          runId: poolItem.runId,
+          token,
+          controller,
+          options: { ...pool.options },
+        };
       });
     });
     for (const item of dispatched) {
       void this.processSource(
         item.sourceId,
+        item.runId,
         item.token,
         item.controller.signal,
         item.options,
@@ -797,19 +1199,44 @@ export class LlmWikiNextService implements OnModuleInit {
     return item;
   }
 
-  private clearCompilePoolLocked(): CompilePoolCancelResult {
+  private async clearCompilePoolLocked(
+    reason: "user_cancelled" | "published" | "discarded",
+  ): Promise<CompilePoolCancelResult> {
     const pool = this.store.readCompilePool();
     const queuedCount =
-      pool?.items.filter((item) => item.status === "queued").length || 0;
+      pool?.items.filter((item) => item.phase === "queued").length || 0;
     const runningItems =
       pool?.items.filter(
-        (item) => item.status === "planning" || item.status === "writing",
+        (item) =>
+          item.phase === "planning" ||
+          item.phase === "writing" ||
+          item.phase === "committing",
       ) || [];
+    const activeItems = (pool?.items || []).filter((item) =>
+      isActivePoolPhase(item.phase),
+    );
     for (const item of runningItems) {
       this.activeTokens.delete(item.sourceId);
       this.controllers.get(item.sourceId)?.abort();
       this.controllers.delete(item.sourceId);
     }
+    await Promise.all(
+      activeItems.map((item) =>
+        this.cancelReport(
+          item.sourceId,
+          item.runId,
+          reason,
+        ).catch((error) => {
+          this.logger.error(
+            `llmWikiNext 取消编译报告写入失败: ${item.sourceId}: ${formatError(error)}`,
+          );
+        }),
+      ),
+    );
+    this.store.updateSourceStatuses(
+      activeItems.map((item) => item.sourceId),
+      "pending",
+    );
     this.store.deleteCompilePool();
     const state = this.store.readStagingState();
     if (state?.reservedPageKeys.length)
@@ -818,7 +1245,9 @@ export class LlmWikiNextService implements OnModuleInit {
     return { cancelled: true, queuedCount, runningCount: runningItems.length };
   }
 
-  private removeSourcesFromCompilePoolLocked(sourceIds: Set<string>): void {
+  private async removeSourcesFromCompilePoolLocked(
+    sourceIds: Set<string>,
+  ): Promise<void> {
     const pool = this.store.readCompilePool();
     if (!pool) return;
     const removedItems = pool.items.filter((item) =>
@@ -840,6 +1269,298 @@ export class LlmWikiNextService implements OnModuleInit {
     this.store.saveCompilePool({ ...pool, items });
   }
 
+  private createQueuedReport(
+    source: SourceSnapshot,
+    pool: CompilePool,
+    item: CompilePoolItem,
+    options: CompileExecutionOptions,
+  ): SourceCompileReport {
+    const model = this.model.findModel(options.model);
+    if (!model) throw new Error(`解析模型不存在或不可用: ${options.model}`);
+    const report: SourceCompileReport = {
+      version: 2,
+      legacy: false,
+      runId: item.runId,
+      poolId: pool.poolId,
+      workspaceId: pool.workspaceId,
+      sourceId: source.sourceId,
+      contentHash: source.contentHash,
+      stage: "queued",
+      model: {
+        id: model.id,
+        name: model.name || model.id,
+        provider: model.provider || "unknown",
+        providerName: model.providerName || "Unknown",
+      },
+      options: { ...options },
+      compiler: {
+        promptVersion: PROMPT_VERSION,
+        pageLimitPolicyVersion: PAGE_LIMIT_POLICY_VERSION,
+        modelTimeoutMs: MODEL_TIMEOUT_MS,
+        maxFactsPerPlan: MAX_FACTS_PER_PLAN,
+      },
+      queuedAt: item.queuedAt,
+      startedAt: "",
+      finishedAt: "",
+      durationMs: 0,
+      updatedAt: item.queuedAt,
+      events: [],
+      units: [],
+      calls: [],
+      summary: emptyReportSummary(item.compileUnitCount),
+      error: null,
+    };
+    appendReportEvent(report, "source_queued", "Source 已加入编译队列");
+    return report;
+  }
+
+  private async updateReport(
+    sourceId: string,
+    runId: string,
+    mutate: (report: SourceCompileReport) => void,
+  ): Promise<SourceCompileReport | null> {
+    const release = await this.reportMutex.acquireMany([sourceId]);
+    try {
+      const report = this.store.readCompileReport(sourceId);
+      if (!report || report.runId !== runId) return null;
+      mutate(report);
+      report.updatedAt = new Date().toISOString();
+      refreshReportSummary(report);
+      this.store.saveCompileReport(report);
+      return report;
+    } finally {
+      release();
+    }
+  }
+
+  private async completeReportCall(
+    sourceId: string,
+    runId: string,
+    callId: string,
+    result: {
+      status: CompileReportCall["status"];
+      response: CompileDebugText | null;
+      usage: CompileReportCall["usage"] | null;
+      error: CompileReportError | null;
+      responseMeta: {
+        responseId: string;
+        responseModel: string;
+        finishReason: string;
+      } | null;
+      eventType: string;
+      eventMessage: string;
+    },
+  ): Promise<void> {
+    await this.updateReport(sourceId, runId, (report) => {
+      const call = requireReportCall(report, callId);
+      const now = new Date().toISOString();
+      const cancelledByReport =
+        report.stage === "finished" &&
+        ["cancelled", "server_restart"].includes(report.error?.stage || "");
+      call.status =
+        cancelledByReport && result.status === "succeeded"
+          ? "cancelled"
+          : result.status;
+      call.finishedAt = now;
+      call.durationMs = durationMs(call.startedAt, now);
+      call.response = result.response;
+      if (result.usage) call.usage = result.usage;
+      call.error =
+        call.status === "cancelled" && !result.error
+          ? reportError("cancelled", new Error("任务已取消"), "cancelled")
+          : result.error;
+      if (result.responseMeta) {
+        call.responseId = result.responseMeta.responseId;
+        call.responseModel = result.responseMeta.responseModel;
+        call.finishReason = result.responseMeta.finishReason;
+      }
+      appendReportEvent(
+        report,
+        result.eventType,
+        result.eventMessage,
+        call.unitId,
+        callId,
+      );
+    });
+  }
+
+  private async finishReport(
+    sourceId: string,
+    runId: string,
+    error: CompileReportError | null,
+    result: {
+      pageKeys?: string[];
+      factCount?: number;
+      eventType: string;
+      eventMessage: string;
+    },
+  ): Promise<void> {
+    await this.updateReport(sourceId, runId, (report) => {
+      if (report.stage === "finished") return;
+      const now = new Date().toISOString();
+      report.stage = "finished";
+      report.finishedAt = now;
+      report.durationMs = durationMs(report.startedAt || report.queuedAt, now);
+      report.error = error;
+      if (result.pageKeys) report.summary.pageKeys = [...result.pageKeys];
+      if (result.factCount !== undefined) report.summary.factCount = result.factCount;
+      appendReportEvent(report, result.eventType, result.eventMessage);
+    });
+  }
+
+  private async cancelReport(
+    sourceId: string,
+    runId: string,
+    reason: "user_cancelled" | "published" | "discarded",
+  ): Promise<void> {
+    await this.updateReport(sourceId, runId, (report) => {
+      if (report.stage === "finished") return;
+      const now = new Date().toISOString();
+      const detail = reportError(
+        "cancelled",
+        new Error(
+          reason === "published"
+            ? "发布时取消未完成编译"
+            : reason === "discarded"
+              ? "撤销 Staging 时取消未完成编译"
+              : "用户清空待编译池",
+        ),
+        reason,
+      );
+      for (const call of report.calls) {
+        if (call.status !== "running") continue;
+        call.status = "cancelled";
+        call.finishedAt = now;
+        call.durationMs = durationMs(call.startedAt, now);
+        call.error = detail;
+      }
+      report.stage = "finished";
+      report.finishedAt = now;
+      report.durationMs = durationMs(report.startedAt || report.queuedAt, now);
+      report.error = detail;
+      appendReportEvent(report, "source_cancelled", detail.message);
+    });
+  }
+
+  private recoverCompileReports(): void {
+    const pool = this.store.readCompilePool();
+    const reports = new Map(
+      this.store
+        .listCompileReports()
+        .map((report) => [report.sourceId, report]),
+    );
+    if (pool) {
+      for (const item of pool.items) {
+        if (reports.has(item.sourceId)) continue;
+        const source = safeReadSource(this.store, item.sourceId);
+        if (!source) continue;
+        const report = createLegacyReport(
+          source,
+          pool,
+          item,
+          this.model.findModel(pool.options.model),
+        );
+        this.store.saveCompileReport(report);
+        reports.set(item.sourceId, report);
+      }
+    }
+
+    const completedSourceIds = new Set(
+      this.store.readStagingState()?.completedSourceIds || [],
+    );
+    for (const report of reports.values()) {
+      if (report.stage === "finished") continue;
+      const now = new Date().toISOString();
+      if (
+        report.stage === "committing" &&
+        completedSourceIds.has(report.sourceId)
+      ) {
+        report.stage = "finished";
+        report.finishedAt = now;
+        report.durationMs = durationMs(report.startedAt || report.queuedAt, now);
+        report.error = null;
+        appendReportEvent(
+          report,
+          "source_recovered",
+          "服务重启后确认 Source 已合并到 Staging",
+        );
+        safeUpdateSourceStatus(this.store, report.sourceId, "staged");
+      } else {
+        const detail = reportError(
+          "server_restart",
+          new Error("服务重启，未完成编译已中断"),
+          "server_restart",
+        );
+        for (const call of report.calls) {
+          if (call.status !== "running") continue;
+          call.status = "cancelled";
+          call.finishedAt = now;
+          call.durationMs = durationMs(call.startedAt, now);
+          call.error = detail;
+        }
+        report.stage = "finished";
+        report.finishedAt = now;
+        report.durationMs = durationMs(report.startedAt || report.queuedAt, now);
+        report.error = detail;
+        appendReportEvent(report, "source_interrupted", detail.message);
+        safeUpdateSourceStatus(this.store, report.sourceId, "pending");
+      }
+      report.updatedAt = now;
+      refreshReportSummary(report);
+      this.store.saveCompileReport(report);
+    }
+  }
+
+  private reconcileSourceStatuses(): void {
+    const stagedSourceIds = new Set(
+      this.store.readStagingState()?.completedSourceIds || [],
+    );
+    const publishedSourceIds = new Set(
+      this.store
+        .readPublishedSnapshot()
+        .manifest.pages.flatMap((page) => page.sourceIds),
+    );
+    const reports = new Map(
+      this.store
+        .listCompileReports()
+        .map((report) => [report.sourceId, report]),
+    );
+
+    for (const source of this.store.listSources()) {
+      const needsMigration = this.store.sourceNeedsStatusMigration(source.sourceId);
+      let next: SourceStatus | null = null;
+
+      if (source.status === "compiling") {
+        next = stagedSourceIds.has(source.sourceId) ? "staged" : "pending";
+      } else if (source.status === "staged" && !stagedSourceIds.has(source.sourceId)) {
+        next = publishedSourceIds.has(source.sourceId) ? "published" : "pending";
+      } else if (needsMigration) {
+        const report = reports.get(source.sourceId);
+        next = stagedSourceIds.has(source.sourceId)
+          ? "staged"
+          : reportRepresentsFailure(report)
+            ? "failed"
+            : publishedSourceIds.has(source.sourceId)
+              ? "published"
+              : "pending";
+      }
+
+      if (next && (needsMigration || next !== source.status))
+        this.store.updateSourceStatus(source.sourceId, next);
+    }
+  }
+
+  private async updateSourceStatusForRun(
+    sourceId: string,
+    token: string,
+    status: SourceStatus,
+  ): Promise<void> {
+    await this.stateMutex.runExclusive(async () => {
+      this.assertWritable(sourceId, token);
+      this.store.updateSourceStatus(sourceId, status);
+    });
+  }
+
   private isWritable(sourceId: string, token: string): boolean {
     return (
       this.activeTokens.get(sourceId) === token &&
@@ -850,6 +1571,294 @@ export class LlmWikiNextService implements OnModuleInit {
   private assertWritable(sourceId: string, token: string): void {
     if (!this.isWritable(sourceId, token)) throw new Error("任务写权限已失效");
   }
+}
+
+const DEBUG_TEXT_LIMIT = 256 * 1024;
+
+class CompileTraceError extends Error {
+  constructor(
+    readonly detail: CompileReportError,
+    readonly cause: unknown,
+  ) {
+    super(detail.message);
+    this.name = "CompileTraceError";
+  }
+}
+
+function createReportUnit(unit: CompileUnit, index: number): CompileReportUnit {
+  return {
+    unitId: unit.unitId,
+    index: index + 1,
+    startOffset: unit.startOffset,
+    endOffset: unit.endOffset,
+    startLine: unit.startLine,
+    endLine: unit.startLine + (unit.content.match(/\n/g)?.length || 0),
+    charCount: unit.content.length,
+    contentHash: unit.contentHash,
+    maxPages: calculateMaxPages(unit.content.length),
+    reservedPageKeys: [],
+    plannerCallId: "",
+    writerCallId: "",
+    plan: null,
+    writerPages: [],
+    error: null,
+  };
+}
+
+function emptyReportSummary(compileUnitCount: number): SourceCompileReport["summary"] {
+  return {
+    compileUnitCount,
+    modelCalls: 0,
+    succeededCalls: 0,
+    failedCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    pageKeys: [],
+    factCount: 0,
+  };
+}
+
+function appendReportEvent(
+  report: SourceCompileReport,
+  type: string,
+  message: string,
+  unitId?: string,
+  callId?: string,
+): void {
+  report.events.push({
+    sequence: (report.events.at(-1)?.sequence || 0) + 1,
+    at: new Date().toISOString(),
+    type,
+    message,
+    ...(unitId ? { unitId } : {}),
+    ...(callId ? { callId } : {}),
+  });
+}
+
+function requireReportUnit(
+  report: SourceCompileReport,
+  unitId: string,
+): CompileReportUnit {
+  const unit = report.units.find((item) => item.unitId === unitId);
+  if (!unit) throw new Error(`编译报告 Unit 不存在: ${unitId}`);
+  return unit;
+}
+
+function requireReportCall(
+  report: SourceCompileReport,
+  callId: string,
+): CompileReportCall {
+  const call = report.calls.find((item) => item.callId === callId);
+  if (!call) throw new Error(`编译报告调用不存在: ${callId}`);
+  return call;
+}
+
+function refreshReportSummary(report: SourceCompileReport): void {
+  if (report.legacy && !report.calls.length) return;
+  const calls = report.calls;
+  report.summary = {
+    ...report.summary,
+    compileUnitCount: report.units.length || report.summary.compileUnitCount,
+    modelCalls: calls.length,
+    succeededCalls: calls.filter((call) => call.status === "succeeded").length,
+    failedCalls: calls.filter(
+      (call) => call.status === "failed" || call.status === "cancelled",
+    ).length,
+    inputTokens: calls.reduce((sum, call) => sum + call.usage.inputTokens, 0),
+    outputTokens: calls.reduce((sum, call) => sum + call.usage.outputTokens, 0),
+    totalTokens: calls.reduce((sum, call) => sum + call.usage.totalTokens, 0),
+    factCount: report.units.reduce(
+      (sum, unit) =>
+        sum + unit.writerPages.reduce((count, page) => count + page.keyFacts.length, 0),
+      0,
+    ),
+  };
+}
+
+function isActivePoolPhase(phase: CompilePoolItem["phase"]): boolean {
+  return ["queued", "planning", "writing", "committing"].includes(phase);
+}
+
+function reportRepresentsFailure(
+  report: SourceCompileReport | undefined,
+): boolean {
+  return Boolean(
+    report?.error &&
+      !["cancelled", "server_restart"].includes(report.error.stage),
+  );
+}
+
+function safeUpdateSourceStatus(
+  store: LlmWikiNextStore,
+  sourceId: string,
+  status: SourceStatus,
+): void {
+  try {
+    store.updateSourceStatus(sourceId, status);
+  } catch {
+    // Source 可能已在重启前被删除；报告仍保留其历史信息即可。
+  }
+}
+
+function debugText(value: string): CompileDebugText {
+  const text = String(value || "");
+  if (text.length <= DEBUG_TEXT_LIMIT) {
+    return {
+      text,
+      charCount: text.length,
+      contentHash: sha256(text),
+      truncated: false,
+    };
+  }
+  const half = Math.floor(DEBUG_TEXT_LIMIT / 2);
+  return {
+    text: `${text.slice(0, half)}\n\n…[已截断，完整内容 Hash 如上]…\n\n${text.slice(-half)}`,
+    charCount: text.length,
+    contentHash: sha256(text),
+    truncated: true,
+  };
+}
+
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 2));
+}
+
+function modelUsage(
+  response: unknown,
+  fallbackInputTokens: number,
+  fallbackOutputTokens: number,
+): CompileReportCall["usage"] {
+  const record = response && typeof response === "object"
+    ? (response as { usage?: unknown })
+    : {};
+  const usage = record.usage && typeof record.usage === "object"
+    ? (record.usage as Record<string, unknown>)
+    : {};
+  const input = numberField(usage.input_tokens) ?? numberField(usage.prompt_tokens);
+  const output = numberField(usage.output_tokens) ?? numberField(usage.completion_tokens);
+  const hasProviderUsage = input !== null || output !== null;
+  const inputTokens = input ?? fallbackInputTokens;
+  const outputTokens = output ?? fallbackOutputTokens;
+  const total = numberField(usage.total_tokens);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: total ?? inputTokens + outputTokens,
+    usageSource: hasProviderUsage ? "provider" : "estimated",
+  };
+}
+
+function modelResponseMeta(response: unknown): {
+  responseId: string;
+  responseModel: string;
+  finishReason: string;
+} {
+  const record = response && typeof response === "object"
+    ? (response as {
+        id?: unknown;
+        model?: unknown;
+        choices?: Array<{ finish_reason?: unknown }>;
+      })
+    : {};
+  return {
+    responseId: typeof record.id === "string" ? record.id : "",
+    responseModel: typeof record.model === "string" ? record.model : "",
+    finishReason:
+      typeof record.choices?.[0]?.finish_reason === "string"
+        ? record.choices[0].finish_reason
+        : "",
+  };
+}
+
+function numberField(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function reportError(
+  stage: CompileReportError["stage"],
+  error: unknown,
+  category: string = stage,
+): CompileReportError {
+  return { stage, category, message: formatError(error).slice(0, 4_000) };
+}
+
+function durationMs(startedAt: string, finishedAt: string): number {
+  const start = Date.parse(startedAt);
+  const end = Date.parse(finishedAt);
+  return Number.isFinite(start) && Number.isFinite(end)
+    ? Math.max(0, end - start)
+    : 0;
+}
+
+function safeReadSource(
+  store: LlmWikiNextStore,
+  sourceId: string,
+): SourceSnapshot | null {
+  try {
+    return store.getSource(sourceId);
+  } catch {
+    return null;
+  }
+}
+
+function createLegacyReport(
+  source: SourceSnapshot,
+  pool: CompilePool,
+  item: CompilePoolItem,
+  model: ReturnType<ModelService["findModel"]>,
+): SourceCompileReport {
+  const now = new Date().toISOString();
+  const report: SourceCompileReport = {
+    version: 1,
+    legacy: true,
+    runId: item.runId || `legacy-${pool.poolId}-${source.sourceId}`,
+    poolId: pool.poolId,
+    workspaceId: pool.workspaceId,
+    sourceId: source.sourceId,
+    contentHash: item.contentHash || source.contentHash,
+    stage: item.phase,
+    model: model
+      ? {
+          id: model.id,
+          name: model.name || model.id,
+          provider: model.provider || "unknown",
+          providerName: model.providerName || "Unknown",
+        }
+      : {
+          id: pool.options.model,
+          name: pool.options.model,
+          provider: "unknown",
+          providerName: "Unknown",
+        },
+    options: { ...(item.startedOptions || pool.options) },
+    compiler: {
+      promptVersion: PROMPT_VERSION,
+      pageLimitPolicyVersion: PAGE_LIMIT_POLICY_VERSION,
+      modelTimeoutMs: MODEL_TIMEOUT_MS,
+      maxFactsPerPlan: MAX_FACTS_PER_PLAN,
+    },
+    queuedAt: item.queuedAt || pool.createdAt,
+    startedAt: item.startedAt || "",
+    finishedAt: item.finishedAt || "",
+    durationMs: durationMs(item.startedAt || item.queuedAt, item.finishedAt || now),
+    updatedAt: now,
+    events: [],
+    units: [],
+    calls: [],
+    summary: {
+      ...emptyReportSummary(item.compileUnitCount),
+      modelCalls: item.modelCalls,
+      succeededCalls: item.plannerCalls + item.writerCalls,
+      failedCalls: item.error ? 1 : 0,
+      pageKeys: [...item.pageKeys],
+    },
+    error: item.error ? reportError("source", new Error(item.error), "legacy") : null,
+  };
+  appendReportEvent(report, "legacy_report_imported", "从旧编译池导入汇总记录");
+  return report;
 }
 
 export function calculateMaxPages(charCount: number): number {
@@ -1171,6 +2180,13 @@ function pageResult(snapshot: WikiSnapshot, pageKey: string) {
   };
 }
 
+function pageSummaries(snapshot: WikiSnapshot) {
+  return snapshot.manifest.pages.map((page) => ({
+    ...page,
+    factCount: snapshot.facts.byPage[page.pageKey]?.length || 0,
+  }));
+}
+
 function searchScore(
   document: WikiSnapshot["searchIndex"]["documents"][number],
   query: string,
@@ -1218,9 +2234,10 @@ function createPoolItem(
     (unit) => unit.sourceId === source.sourceId,
   ).length;
   return {
+    runId: createBase62Id(20),
     sourceId: source.sourceId,
     contentHash: source.contentHash,
-    status: "queued",
+    phase: "queued",
     compileUnitCount: unitCount,
     maxModelCalls: unitCount * 2,
     maxOutputTokens:

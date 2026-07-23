@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "@/api/http";
 import { modelApi, type ModelOption } from "@/api/model";
 import {
   llmWikiNextApi,
   type CompileEstimate,
   type CompilePool,
   type ManifestPage,
+  type SourceCompileReport,
+  type SourceRecord,
   type SourceSnapshot,
   type StagingSummary,
   type WikiManifest,
@@ -26,11 +29,15 @@ import {
   CompilePoolDialog,
 } from "./components/CompileDialogs";
 import { SourcePreviewDialog } from "./components/SourcePreviewDialog";
+import { SourceCompileDetailDialog } from "./components/SourceCompileDetailDialog";
 import {
   SourceWorkspace,
   type CompileSettings,
 } from "./components/SourceWorkspace";
-import { WikiWorkspace } from "./components/WikiWorkspace";
+import {
+  WikiWorkspace,
+  type WikiPageDeleteTarget,
+} from "./components/WikiWorkspace";
 
 const MODEL_STORAGE_KEY = "knowllm.llmWikiNext.model";
 const CONCURRENCY_STORAGE_KEY = "knowllm.llmWikiNext.concurrency";
@@ -45,9 +52,10 @@ function isActivePool(pool: CompilePool | null): boolean {
   return Boolean(
     pool?.items.some(
       (item) =>
-        item.status === "queued" ||
-        item.status === "planning" ||
-        item.status === "writing",
+        item.phase === "queued" ||
+        item.phase === "planning" ||
+        item.phase === "writing" ||
+        item.phase === "committing",
     ),
   );
 }
@@ -101,6 +109,9 @@ export function LlmWikiNext() {
   const [compileDialogOpen, setCompileDialogOpen] = useState(false);
   const [compilePoolDialogOpen, setCompilePoolDialogOpen] = useState(false);
   const [deleteSourceIds, setDeleteSourceIds] = useState<string[]>([]);
+  const [deletePageTarget, setDeletePageTarget] =
+    useState<WikiPageDeleteTarget | null>(null);
+  const [deletingPage, setDeletingPage] = useState(false);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -111,6 +122,16 @@ export function LlmWikiNext() {
   const [previewSourceLine, setPreviewSourceLine] = useState<number | null>(
     null,
   );
+  const [compileDetailOpen, setCompileDetailOpen] = useState(false);
+  const [compileDetailLoading, setCompileDetailLoading] = useState(false);
+  const [compileDetailSource, setCompileDetailSource] =
+    useState<SourceRecord | null>(null);
+  const [compileDetailReport, setCompileDetailReport] =
+    useState<SourceCompileReport | null>(null);
+  const [wikiTarget, setWikiTarget] = useState<{
+    mode: "staging" | "published";
+    pageKey: string;
+  } | null>(null);
 
   const refreshWorkspace = useCallback(async (clearEstimate = false) => {
     setLoading(true);
@@ -164,13 +185,15 @@ export function LlmWikiNext() {
     let cancelled = false;
     const poll = async () => {
       try {
-        const [nextPool, nextStaging] = await Promise.all([
+        const [nextPool, nextStaging, sourceData] = await Promise.all([
           llmWikiNextApi.getCompilePool(),
           llmWikiNextApi.getStaging(),
+          llmWikiNextApi.listSources(),
         ]);
         if (cancelled) return;
         setPool(nextPool);
         setStaging(nextStaging);
+        setSources(sourceData.items);
         if (!isActivePool(nextPool)) setCompilePoolDialogOpen(false);
       } catch {
         // 轮询失败时保留最后一次状态；用户可手动刷新，不把未知状态伪装成已结束。
@@ -326,6 +349,44 @@ export function LlmWikiNext() {
     }
   };
 
+  const deletePublishedPage = async () => {
+    if (
+      !deletePageTarget ||
+      deletingPage ||
+      !deletePageTarget.revisionId
+    ) {
+      return;
+    }
+    setDeletingPage(true);
+    try {
+      const result = await llmWikiNextApi.deletePublishedPage(
+        deletePageTarget.pageKey,
+        deletePageTarget.revisionId,
+      );
+      setDeletePageTarget(null);
+      toast.success(
+        `已永久删除页面及 ${result.deletedFactCount} 条 Facts，清理 ${result.affectedPageKeys.length} 个页面关联`,
+      );
+      if (result.stagingRetainsPage) {
+        toast.warning("待发布 Wiki 仍包含此页面，后续发布可能重新恢复");
+      }
+      if (result.cleanupWarnings.length) {
+        toast.warning(result.cleanupWarnings.join("；"));
+      }
+      await refreshWorkspace();
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        (error.code === 404 || error.code === 409)
+      ) {
+        setDeletePageTarget(null);
+        await refreshWorkspace();
+      }
+    } finally {
+      setDeletingPage(false);
+    }
+  };
+
   const publish = async () => {
     if (publishBlocked) return;
     setPublishing(true);
@@ -380,6 +441,61 @@ export function LlmWikiNext() {
       setPreviewLoading(false);
     }
   };
+
+  const loadCompileDetail = useCallback(async (sourceId: string) => {
+    setCompileDetailLoading(true);
+    try {
+      const result = await llmWikiNextApi.getSourceCompileDetail(sourceId);
+      setCompileDetailSource(result.source);
+      setCompileDetailReport(result.report);
+      setSources((current) =>
+        current.map((source) =>
+          source.sourceId === result.source.sourceId ? result.source : source,
+        ),
+      );
+    } catch {
+      setCompileDetailReport(null);
+      toast.error("读取编译详情失败");
+    } finally {
+      setCompileDetailLoading(false);
+    }
+  }, []);
+
+  const openCompileDetail = (sourceId: string) => {
+    setCompileDetailSource(
+      sources.find((source) => source.sourceId === sourceId) || null,
+    );
+    setCompileDetailReport(null);
+    setCompileDetailOpen(true);
+    void loadCompileDetail(sourceId);
+  };
+
+  const openCompiledPage = (pageKey: string) => {
+    const mode = staging?.pages.some((page) => page.pageKey === pageKey)
+      ? "staging"
+      : publishedPages.some((page) => page.pageKey === pageKey)
+        ? "published"
+        : null;
+    if (!mode) {
+      toast.info("该产物页面当前不在 Staging 或正式 Wiki 中");
+      return;
+    }
+    setWikiTarget({ mode, pageKey });
+    setActiveTab(mode);
+    setCompileDetailOpen(false);
+  };
+
+  const detailCompiling = Boolean(
+    compileDetailReport && compileDetailReport.stage !== "finished",
+  );
+  useEffect(() => {
+    if (!compileDetailOpen || !compileDetailSource || !detailCompiling) return;
+    const timer = window.setInterval(
+      () => void loadCompileDetail(compileDetailSource.sourceId),
+      1_500,
+    );
+    return () => window.clearInterval(timer);
+  }, [compileDetailOpen, compileDetailSource, detailCompiling, loadCompileDetail]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -450,6 +566,7 @@ export function LlmWikiNext() {
             onDeleteSelected={setDeleteSourceIds}
             onOpenCompilePool={() => setCompilePoolDialogOpen(true)}
             onOpenSource={(sourceId) => void openSourcePreview(sourceId)}
+            onOpenCompileDetail={openCompileDetail}
           />
         </TabsContent>
 
@@ -526,6 +643,10 @@ export function LlmWikiNext() {
                 onOpenSource={(sourceId, sourceLine) =>
                   void openSourcePreview(sourceId, sourceLine)
                 }
+                openPageKey={
+                  wikiTarget?.mode === "staging" ? wikiTarget.pageKey : null
+                }
+                onPageOpened={() => setWikiTarget(null)}
               />
             </div>
           )}
@@ -536,6 +657,7 @@ export function LlmWikiNext() {
           className="min-h-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden"
         >
           <WikiWorkspace
+            key={publishedManifest.revisionId || "published-empty"}
             mode="published"
             pages={publishedPages}
             loadPage={llmWikiNextApi.getPublishedPage}
@@ -543,9 +665,15 @@ export function LlmWikiNext() {
             revisionId={publishedManifest.revisionId}
             generatedAt={publishedManifest.generatedAt}
             sourceNames={sourceNames}
+            stagingPageKeys={staging?.pages.map((page) => page.pageKey) || []}
+            onRequestDelete={setDeletePageTarget}
             onOpenSource={(sourceId, sourceLine) =>
               void openSourcePreview(sourceId, sourceLine)
             }
+            openPageKey={
+              wikiTarget?.mode === "published" ? wikiTarget.pageKey : null
+            }
+            onPageOpened={() => setWikiTarget(null)}
           />
         </TabsContent>
       </Tabs>
@@ -579,6 +707,82 @@ export function LlmWikiNext() {
         loading={previewLoading}
         onOpenChange={setPreviewOpen}
       />
+
+      <SourceCompileDetailDialog
+        open={compileDetailOpen}
+        source={compileDetailSource}
+        report={compileDetailReport}
+        loading={compileDetailLoading}
+        onOpenChange={(open) => {
+          setCompileDetailOpen(open);
+          if (!open) {
+            setCompileDetailReport(null);
+            setCompileDetailSource(null);
+          }
+        }}
+        onRefresh={() => {
+          if (compileDetailSource)
+            void loadCompileDetail(compileDetailSource.sourceId);
+        }}
+        onOpenPage={openCompiledPage}
+      />
+
+      <Dialog
+        open={Boolean(deletePageTarget)}
+        onOpenChange={(open) => {
+          if (!open && !deletingPage) setDeletePageTarget(null);
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-[440px]"
+          showCloseButton={!deletingPage}
+        >
+          <DialogHeader>
+            <DialogTitle className="text-rose-700">永久删除页面？</DialogTitle>
+            <DialogDescription className="text-rose-700">
+              将从当前正式 Wiki 删除页面、其中的 Facts、搜索索引和其他页面的关联记录。
+            </DialogDescription>
+          </DialogHeader>
+          {deletePageTarget && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="truncate text-sm font-medium text-slate-900">
+                  {deletePageTarget.title}
+                </p>
+                <p className="mt-1 text-xs font-medium text-rose-700">
+                  删除 {deletePageTarget.factCount} 条 Facts · 清理 {" "}
+                  {deletePageTarget.affectedPageCount} 个页面关联
+                </p>
+              </div>
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm leading-6 text-rose-800">
+                原始 Source 不会删除。此操作无法撤回。
+              </div>
+              {deletePageTarget.stagingRetainsPage && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium leading-6 text-amber-900">
+                  待发布 Wiki 仍包含此页面，后续发布可能重新恢复。
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={deletingPage}
+              onClick={() => setDeletePageTarget(null)}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deletingPage}
+              onClick={() => void deletePublishedPage()}
+            >
+              {deletingPage && <Loader2 className="animate-spin" />}
+              永久删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={deleteSourceIds.length > 0}
@@ -623,7 +827,7 @@ export function LlmWikiNext() {
             <DialogTitle>确认发布 Wiki？</DialogTitle>
             <DialogDescription>
               {pool
-                ? `将整套 Staging 原子替换正式 Wiki，并中断 ${pool.items.filter((item) => item.status === "planning" || item.status === "writing").length} 个运行项、清空 ${pool.items.filter((item) => item.status === "queued").length} 个待编译项。`
+                ? `将整套 Staging 原子替换正式 Wiki，并中断 ${pool.items.filter((item) => item.phase === "planning" || item.phase === "writing" || item.phase === "committing").length} 个运行项、清空 ${pool.items.filter((item) => item.phase === "queued").length} 个待编译项。`
                 : "将整套 Staging 原子替换正式 Wiki。"}{" "}
               这里审阅的是完整快照，不表示页面 diff；发布后不支持撤回。
             </DialogDescription>

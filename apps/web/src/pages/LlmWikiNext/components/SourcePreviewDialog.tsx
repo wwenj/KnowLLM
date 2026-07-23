@@ -45,10 +45,10 @@ export function SourcePreviewDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[80vh] w-[80vw] max-w-none gap-3 overflow-hidden p-0"
+        className="flex max-h-[90vh] w-[min(92vw,1120px)] max-w-[1120px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1120px]"
         showCloseButton
       >
-        <DialogHeader className="border-b border-slate-200 px-4 py-3 pr-12">
+        <DialogHeader className="flex-none border-b border-slate-200 px-4 py-3 pr-12">
           <DialogTitle className="truncate">
             {source?.filename || "读取原文"}
           </DialogTitle>
@@ -58,7 +58,7 @@ export function SourcePreviewDialog({
             </DialogDescription>
           )}
         </DialogHeader>
-        <div className="min-h-0 overflow-auto px-4 pb-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
           {loading ? (
             <div className="flex items-center gap-2 py-10 text-sm text-slate-500">
               <Loader2 className="size-4 animate-spin" />

@@ -42,17 +42,13 @@ const poolStatusMeta = {
     label: "写入中",
     className: "border-indigo-200 bg-indigo-50 text-indigo-700",
   },
-  completed: {
-    label: "已暂存",
-    className: "border-sky-200 bg-sky-50 text-sky-700",
+  committing: {
+    label: "合并中",
+    className: "border-amber-200 bg-amber-50 text-amber-800",
   },
-  failed: {
-    label: "失败",
-    className: "border-rose-200 bg-rose-50 text-rose-700",
-  },
-  cancelled: {
-    label: "已取消",
-    className: "border-slate-200 bg-slate-100 text-slate-600",
+  finished: {
+    label: "已结束",
+    className: "border-slate-200 bg-slate-50 text-slate-600",
   },
 };
 
@@ -160,9 +156,12 @@ export function CompilePoolDialog({
 }: CompilePoolDialogProps) {
   const items = pool?.items || [];
   const runningCount = items.filter(
-    (item) => item.status === "planning" || item.status === "writing",
+    (item) =>
+      item.phase === "planning" ||
+      item.phase === "writing" ||
+      item.phase === "committing",
   ).length;
-  const queuedCount = items.filter((item) => item.status === "queued").length;
+  const queuedCount = items.filter((item) => item.phase === "queued").length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -187,7 +186,7 @@ export function CompilePoolDialog({
 
         <div className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-200">
           {items.map((item) => {
-            const meta = poolStatusMeta[item.status];
+            const meta = poolStatusMeta[item.phase];
             return (
               <div key={item.sourceId} className="px-3 py-2.5">
                 <div className="flex min-w-0 items-center gap-2">

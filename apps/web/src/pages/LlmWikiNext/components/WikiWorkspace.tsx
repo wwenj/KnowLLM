@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FileText,
   Link2,
@@ -6,6 +6,8 @@ import {
   MapPin,
   Search,
   SearchX,
+  Trash2,
+  X,
 } from "lucide-react";
 import type {
   ManifestPage,
@@ -17,7 +19,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-type PageListItem = ManifestPage & { score?: number };
+type PageListItem = ManifestPage;
+
+export interface WikiPageDeleteTarget {
+  pageKey: string;
+  revisionId: string;
+  title: string;
+  factCount: number;
+  affectedPageCount: number;
+  stagingRetainsPage: boolean;
+}
 
 interface WikiWorkspaceProps {
   mode: "staging" | "published";
@@ -29,6 +40,10 @@ interface WikiWorkspaceProps {
   completedSourceIds?: string[];
   sourceNames?: Record<string, string>;
   onOpenSource: (sourceId: string, sourceLine?: number | null) => void;
+  openPageKey?: string | null;
+  onPageOpened?: () => void;
+  stagingPageKeys?: string[];
+  onRequestDelete?: (target: WikiPageDeleteTarget) => void;
 }
 
 function formatTime(value: string | undefined): string {
@@ -49,6 +64,10 @@ export function WikiWorkspace({
   completedSourceIds = [],
   sourceNames = {},
   onOpenSource,
+  openPageKey,
+  onPageOpened,
+  stagingPageKeys = [],
+  onRequestDelete,
 }: WikiWorkspaceProps) {
   const [selectedPageKey, setSelectedPageKey] = useState("");
   const [detail, setDetail] = useState<WikiPageDetail | null>(null);
@@ -61,6 +80,10 @@ export function WikiWorkspace({
   const [searchLoading, setSearchLoading] = useState(false);
   const [stagingFilter, setStagingFilter] = useState("");
   const [onlyCurrentSources, setOnlyCurrentSources] = useState(false);
+  const stagingPageKeySet = useMemo(
+    () => new Set(stagingPageKeys),
+    [stagingPageKeys],
+  );
 
   const stagingPages = useMemo(() => {
     const normalized = stagingFilter.trim().toLocaleLowerCase();
@@ -104,6 +127,20 @@ export function WikiWorkspace({
     }
   };
 
+  useEffect(() => {
+    if (!openPageKey || !pages.some((page) => page.pageKey === openPageKey)) {
+      return;
+    }
+    if (mode === "staging") {
+      setStagingFilter("");
+      setOnlyCurrentSources(false);
+    } else {
+      setSearchResults(null);
+    }
+    void selectPage(openPageKey);
+    onPageOpened?.();
+  }, [mode, onPageOpened, openPageKey, pages, selectPage]);
+
   const runSearch = async () => {
     const normalized = query.trim();
     if (!normalized || !search) {
@@ -120,7 +157,7 @@ export function WikiWorkspace({
           goal: item.goal,
           relatedPageKeys: [],
           sourceIds: item.sourceIds,
-          score: item.score,
+          factCount: item.facts.length,
         })),
       );
     } finally {
@@ -166,8 +203,24 @@ export function WikiWorkspace({
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="搜索正式 Wiki"
-                  className="bg-white pl-8 text-sm"
+                  className={cn(
+                    "bg-white pl-8 text-sm",
+                    searchResults && "pr-8",
+                  )}
                 />
+                {searchResults && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      setSearchResults(null);
+                    }}
+                    className="absolute top-1/2 right-1.5 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    aria-label="清除搜索"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
               </div>
               <Button size="sm" type="submit" disabled={searchLoading}>
                 {searchLoading ? (
@@ -204,36 +257,30 @@ export function WikiWorkspace({
               )}
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500">
-            <span>{listLabel}</span>
-            {revisionId && (
-              <span
-                className="font-mono text-[10px] text-slate-400"
-                title={revisionId}
-              >
-                {mode === "published"
-                  ? `revision ${revisionId}`
-                  : `staging ${revisionId}`}
-              </span>
-            )}
-            {searchResults && (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => {
-                  setQuery("");
-                  setSearchResults(null);
-                }}
-              >
-                清除搜索
-              </Button>
-            )}
-          </div>
-          {generatedAt && (
-            <p className="text-[11px] text-slate-400">
-              {mode === "published" ? "发布" : "更新"}于{" "}
-              {formatTime(generatedAt)}
+          {mode === "published" ? (
+            <p className="truncate text-xs text-slate-500">
+              共 {pages.length} 个 Wiki 页面
+              {generatedAt && ` · 发布于 ${formatTime(generatedAt)}`}
             </p>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500">
+                <span>{listLabel}</span>
+                {revisionId && (
+                  <span
+                    className="font-mono text-[10px] text-slate-400"
+                    title={revisionId}
+                  >
+                    staging {revisionId}
+                  </span>
+                )}
+              </div>
+              {generatedAt && (
+                <p className="text-[11px] text-slate-400">
+                  更新于 {formatTime(generatedAt)}
+                </p>
+              )}
+            </>
           )}
         </div>
         <div className="min-h-0 overflow-auto p-2">
@@ -260,18 +307,19 @@ export function WikiWorkspace({
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {page.title}
                     </span>
-                    {page.score !== undefined && (
-                      <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
-                        {page.score}
-                      </span>
-                    )}
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-4 text-slate-500">
                     {page.goal}
                   </p>
-                  <p className="mt-1.5 truncate font-mono text-[10px] text-slate-400">
-                    {page.pageKey}
-                  </p>
+                  {mode === "published" ? (
+                    <p className="mt-1.5 text-[11px] font-medium tabular-nums text-slate-400">
+                      {page.factCount || 0} Facts
+                    </p>
+                  ) : (
+                    <p className="mt-1.5 truncate font-mono text-[10px] text-slate-400">
+                      {page.pageKey}
+                    </p>
+                  )}
                 </button>
               ))}
             </div>
@@ -296,15 +344,46 @@ export function WikiWorkspace({
         ) : detail ? (
           <div className="mx-auto max-w-4xl px-5 py-5 lg:px-7">
             <header className="border-b border-slate-200 pb-4">
-              <p className="font-mono text-[11px] text-slate-400">
-                {detail.pageKey}
-              </p>
-              <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
-                {detail.title}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                {detail.goal}
-              </p>
+              <div className="flex items-start gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[11px] text-slate-400">
+                    {detail.pageKey}
+                  </p>
+                  <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
+                    {detail.title}
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {detail.goal}
+                  </p>
+                </div>
+                {mode === "published" && onRequestDelete && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="shrink-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                    onClick={() =>
+                      onRequestDelete({
+                        pageKey: detail.pageKey,
+                        revisionId: revisionId || "",
+                        title: detail.title,
+                        factCount: detail.keyFacts.length,
+                        affectedPageCount: pages.filter(
+                          (page) =>
+                            page.pageKey !== detail.pageKey &&
+                            page.relatedPageKeys.includes(detail.pageKey),
+                        ).length,
+                        stagingRetainsPage: stagingPageKeySet.has(
+                          detail.pageKey,
+                        ),
+                      })
+                    }
+                  >
+                    <Trash2 />
+                    删除页面
+                  </Button>
+                )}
+              </div>
               <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
                 {detail.sourceIds.map((sourceId) => (
                   <button
