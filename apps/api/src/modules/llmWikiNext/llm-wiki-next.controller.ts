@@ -13,6 +13,7 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiConsumes, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { LlmWikiNextService } from "./llm-wiki-next.service";
+import { LlmWikiNextToolsService } from "./llm-wiki-next-tools.service";
 import { CompileRequest } from "./llm-wiki-next.types";
 
 interface UploadedSourceFile {
@@ -23,7 +24,10 @@ interface UploadedSourceFile {
 @ApiTags("LLM Wiki Next")
 @Controller("api/llm-wiki-next")
 export class LlmWikiNextController {
-  constructor(private readonly wiki: LlmWikiNextService) {}
+  constructor(
+    private readonly wiki: LlmWikiNextService,
+    private readonly tools: LlmWikiNextToolsService,
+  ) {}
 
   @ApiConsumes("multipart/form-data")
   @ApiOperation({ summary: "上传不可变 Markdown/Text Source" })
@@ -120,6 +124,34 @@ export class LlmWikiNextController {
   @Get("wiki/search")
   searchPublished(@Query("q") query = "", @Query("limit") limit = "20") {
     return this.wiki.searchPublished(query, Number(limit));
+  }
+
+  @Get("tools/catalog")
+  getToolsCatalog() {
+    return this.tools.getCatalog();
+  }
+
+  @Get("tools/pages/:pageKey")
+  readToolsPage(@Param("pageKey") pageKey: string) {
+    return this.tools.readPage(pageKey);
+  }
+
+  @Get("tools/sources/:sourceId")
+  readToolsSource(
+    @Param("sourceId") sourceId: string,
+    @Query("startLine") startLine?: string,
+    @Query("endLine") endLine?: string,
+  ) {
+    return this.tools.readSource(
+      sourceId,
+      startLine === undefined ? undefined : Number(startLine),
+      endLine === undefined ? undefined : Number(endLine),
+    );
+  }
+
+  @Get("tools/search")
+  searchToolsWiki(@Query("q") query = "") {
+    return this.tools.searchWiki(query);
   }
 }
 

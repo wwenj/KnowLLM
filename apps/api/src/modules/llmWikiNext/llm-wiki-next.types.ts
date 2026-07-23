@@ -349,6 +349,84 @@ export interface WikiSnapshot {
   searchIndex: WikiSearchIndex;
 }
 
+export interface ToolsPageSummary {
+  pageKey: string;
+  title: string;
+  goal: string;
+  sourceIds: string[];
+  factCount: number;
+}
+
+export interface ToolsCatalogPage extends ToolsPageSummary {
+  relatedPageKeys: string[];
+}
+
+export interface ToolsSourceSummary {
+  sourceId: string;
+  filename: string;
+  contentHash: string;
+  charCount: number;
+  lineCount: number;
+  pageKeys: string[];
+}
+
+export interface ToolsCatalog {
+  stats: {
+    pageCount: number;
+    factCount: number;
+    sourceCount: number;
+  };
+  pages: ToolsCatalogPage[];
+  sources: ToolsSourceSummary[];
+}
+
+export interface ToolsPageDetail {
+  page: ToolsCatalogPage & {
+    bodyMarkdown: string;
+    keyFacts: KeyFact[];
+  };
+  relations: {
+    outgoing: ToolsPageSummary[];
+    incoming: ToolsPageSummary[];
+    sameSource: ToolsPageSummary[];
+  };
+  sources: ToolsSourceSummary[];
+}
+
+export interface ToolsSourceFactRef {
+  pageKey: string;
+  fact: string;
+  sourceLine: number;
+}
+
+export interface ToolsSourceDetail {
+  source: ToolsSourceSummary;
+  range: {
+    startLine: number;
+    endLine: number;
+    totalLines: number;
+    hasMore: boolean;
+    nextStartLine: number | null;
+  };
+  content: string;
+  pages: ToolsPageSummary[];
+  factRefs: ToolsSourceFactRef[];
+}
+
+export type ToolsSearchMatchedField = "title" | "goal" | "fact" | "body";
+
+export interface ToolsSearchItem extends ToolsPageSummary {
+  score: number;
+  matchedFields: ToolsSearchMatchedField[];
+  matchedFacts: string[];
+  snippet: string;
+}
+
+export interface ToolsSearchResult {
+  query: string;
+  items: ToolsSearchItem[];
+}
+
 export interface StagingState {
   workspaceId: string;
   status: "open" | "publishing";

@@ -341,6 +341,82 @@ export interface SearchResult {
   items: SearchDocument[];
 }
 
+export interface ToolsPageSummary {
+  pageKey: string;
+  title: string;
+  goal: string;
+  sourceIds: string[];
+  factCount: number;
+}
+
+export interface ToolsCatalogPage extends ToolsPageSummary {
+  relatedPageKeys: string[];
+}
+
+export interface ToolsSourceSummary {
+  sourceId: string;
+  filename: string;
+  contentHash: string;
+  charCount: number;
+  lineCount: number;
+  pageKeys: string[];
+}
+
+export interface ToolsCatalog {
+  stats: {
+    pageCount: number;
+    factCount: number;
+    sourceCount: number;
+  };
+  pages: ToolsCatalogPage[];
+  sources: ToolsSourceSummary[];
+}
+
+export interface ToolsPageDetail {
+  page: ToolsCatalogPage & {
+    bodyMarkdown: string;
+    keyFacts: KeyFact[];
+  };
+  relations: {
+    outgoing: ToolsPageSummary[];
+    incoming: ToolsPageSummary[];
+    sameSource: ToolsPageSummary[];
+  };
+  sources: ToolsSourceSummary[];
+}
+
+export interface ToolsSourceDetail {
+  source: ToolsSourceSummary;
+  range: {
+    startLine: number;
+    endLine: number;
+    totalLines: number;
+    hasMore: boolean;
+    nextStartLine: number | null;
+  };
+  content: string;
+  pages: ToolsPageSummary[];
+  factRefs: Array<{
+    pageKey: string;
+    fact: string;
+    sourceLine: number;
+  }>;
+}
+
+export type ToolsSearchMatchedField = "title" | "goal" | "fact" | "body";
+
+export interface ToolsSearchItem extends ToolsPageSummary {
+  score: number;
+  matchedFields: ToolsSearchMatchedField[];
+  matchedFacts: string[];
+  snippet: string;
+}
+
+export interface ToolsSearchResult {
+  query: string;
+  items: ToolsSearchItem[];
+}
+
 function pathId(value: string): string {
   return encodeURIComponent(value);
 }
@@ -394,4 +470,26 @@ export const llmWikiNextApi = {
     ),
   searchPublished: (query: string, limit = 20) =>
     http.get<SearchResult>(`${ROOT}/wiki/search`, { q: query, limit }),
+  getToolsCatalog: () =>
+    http.get<ToolsCatalog>(`${ROOT}/tools/catalog`, undefined, {
+      silent: true,
+    }),
+  readToolsPage: (pageKey: string) =>
+    http.get<ToolsPageDetail>(
+      `${ROOT}/tools/pages/${pathId(pageKey)}`,
+      undefined,
+      { silent: true },
+    ),
+  readToolsSource: (sourceId: string, startLine?: number, endLine?: number) =>
+    http.get<ToolsSourceDetail>(
+      `${ROOT}/tools/sources/${pathId(sourceId)}`,
+      { startLine, endLine },
+      { silent: true },
+    ),
+  searchToolsWiki: (query: string) =>
+    http.get<ToolsSearchResult>(
+      `${ROOT}/tools/search`,
+      { q: query },
+      { silent: true },
+    ),
 };
