@@ -38,6 +38,7 @@ import {
   WikiWorkspace,
   type WikiPageDeleteTarget,
 } from "./components/WikiWorkspace";
+import { ToolsWorkspace } from "./components/ToolsWorkspace";
 
 const MODEL_STORAGE_KEY = "knowllm.llmWikiNext.model";
 const CONCURRENCY_STORAGE_KEY = "knowllm.llmWikiNext.concurrency";
@@ -533,6 +534,12 @@ export function LlmWikiNext() {
             >
               正式 Wiki
             </TabsTrigger>
+            <TabsTrigger
+              value="tools"
+              className="h-10 px-3 text-xs after:bottom-0"
+            >
+              查询工具
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -675,6 +682,13 @@ export function LlmWikiNext() {
             }
             onPageOpened={() => setWikiTarget(null)}
           />
+        </TabsContent>
+
+        <TabsContent
+          value="tools"
+          className="min-h-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden"
+        >
+          <ToolsWorkspace />
         </TabsContent>
       </Tabs>
 
