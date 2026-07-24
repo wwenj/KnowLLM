@@ -19,7 +19,7 @@ export function AppLayout() {
       <header className="zspace-topbar">
         <div className="zspace-topbar-inner">
           <div className="zspace-brand">
-            <img src="/logo.png" alt="KnowLLM" className="zspace-logo" />
+            <img src="/logo.webp" alt="KnowLLM" className="zspace-logo" />
             <div className="zspace-brand-text">
               <span className="zspace-brand-title">KnowLLM</span>
               <span className="zspace-brand-subtitle">LLM Wiki · Agent · Workspace</span>

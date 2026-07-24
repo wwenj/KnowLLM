@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="KnowLLM logo" width="180" />
+  <img src="assets/logo.webp" alt="KnowLLM logo" width="180" />
 </p>
 
 <h1 align="center">KnowLLM</h1>
