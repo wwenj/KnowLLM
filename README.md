@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">KnowLLM</h1>
-<p align="center">面向 Agent 的 LLM Wiki 开源框架</p>
+<p align="center">面向 Agent 的 LLM Wiki 开源设计方案</p>
 
 ## 项目简介
 
