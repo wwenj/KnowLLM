@@ -1,39 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { LlmWikiRetrievalService } from "../../../llmWiki/services/llm-wiki-retrieval.service";
+import type { LlmWikiNextToolsService } from "../../../llmWikiNext/llm-wiki-next-tools.service";
 import { LlmWikiAgentTools } from "./llm-wiki-agent.tools";
 
-test("agent tools only delegate to the llmWiki retrieval contract", () => {
+test("agent tools only delegate to llmWikiNext published Tool contract", () => {
   const calls: string[] = [];
-  const retrieval = {
-    getManifest: () => {
-      calls.push("manifest");
-      return { kind: "manifest" };
+  const service = {
+    getCatalog: () => {
+      calls.push("catalog");
+      return { stats: {}, pages: [], sources: [] };
     },
-    search: (query: string, limit?: number) => {
-      calls.push(`search:${query}:${limit}`);
-      return { query, hits: [], returned: 0 };
+    searchWiki: (query: string) => {
+      calls.push(`search:${query}`);
+      return { query, items: [] };
     },
-    readPage: (path: string) => {
-      calls.push(`page:${path}`);
-      return { path };
+    readPage: (pageKey: string) => {
+      calls.push(`page:${pageKey}`);
+      return { page: { pageKey }, relations: {}, sources: [] };
     },
-    readSource: (sourceId: string) => {
-      calls.push(`source:${sourceId}`);
-      return { source_id: sourceId };
+    readSource: (sourceId: string, startLine?: number, endLine?: number) => {
+      calls.push(`source:${sourceId}:${startLine}-${endLine}`);
+      return { source: { sourceId }, range: {}, content: "", pages: [], factRefs: [] };
     },
   };
-  const tools = new LlmWikiAgentTools(retrieval as unknown as LlmWikiRetrievalService);
+  const tools = new LlmWikiAgentTools(service as unknown as LlmWikiNextToolsService);
 
-  tools.getManifest();
-  tools.searchWiki("agent", 5);
-  tools.readWikiPage("concepts/agent.md");
-  tools.readRawSource("a".repeat(32));
+  tools.getCatalog();
+  tools.searchWiki("agent");
+  tools.readPage("agent-overview");
+  tools.readSource("a".repeat(32), 10, 20);
 
-  assert.deepEqual(calls, [
-    "manifest",
-    "search:agent:5",
-    "page:concepts/agent.md",
-    `source:${"a".repeat(32)}`,
-  ]);
+  assert.deepEqual(calls, ["catalog", "search:agent", "page:agent-overview", `source:${"a".repeat(32)}:10-20`]);
 });

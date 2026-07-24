@@ -94,6 +94,8 @@ test("model service routes chat requests to the selected provider", async () => 
         auth: string;
         body: Record<string, unknown>;
       }> = [];
+      const debugRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+      const debugResponses: unknown[] = [];
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async (
         input: string | URL | Request,
@@ -120,6 +122,8 @@ test("model service routes chat requests to the selected provider", async () => 
         await service.chat({
           model: "provider-b:model-b",
           messages: [{ role: "user", content: "hello" }],
+          onRequest: (request) => { debugRequests.push(request); },
+          onResponse: (response) => { debugResponses.push(response); },
         });
       } finally {
         globalThis.fetch = originalFetch;
@@ -129,6 +133,10 @@ test("model service routes chat requests to the selected provider", async () => 
       assert.equal(calls[0].url, "https://b.test/api/chat/completions");
       assert.equal(calls[0].auth, "Bearer secret-b");
       assert.equal(calls[0].body.model, "model-b");
+      assert.equal(debugRequests[0]?.url, "https://b.test/api/chat/completions");
+      assert.equal(debugRequests[0]?.body.model, "model-b");
+      assert.equal(JSON.stringify(debugRequests).includes("secret-b"), false);
+      assert.equal((debugResponses[0] as { choices?: unknown[] }).choices?.length, 1);
     },
   );
 });

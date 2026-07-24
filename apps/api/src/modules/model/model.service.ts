@@ -28,6 +28,8 @@ export interface RawChatOptions {
   response_format?: RawChatResponseFormat;
   maxTokens?: number;
   signal?: AbortSignal;
+  onRequest?: (request: { url: string; body: Record<string, unknown> }) => void;
+  onResponse?: (response: unknown) => void;
 }
 
 interface ChatCompletionResponse {
@@ -125,9 +127,11 @@ export class ModelService {
 
   async chat(options: RawChatOptions): Promise<ChatCompletionResponse> {
     const response = await this.request(options);
-    return normalizeChatCompletionResponse(
+    const result = normalizeChatCompletionResponse(
       (await response.json()) as ChatCompletionResponse,
     );
+    options.onResponse?.(result);
+    return result;
   }
 
   private async request(options: RawChatOptions): Promise<Response> {
@@ -165,6 +169,7 @@ export class ModelService {
 
     let response: Response;
     const url = chatCompletionsUrl(resolved, options);
+    options.onRequest?.({ url: safeUrlForError(url), body });
     try {
       response = await fetch(url, {
         method: "POST",

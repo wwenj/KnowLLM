@@ -6,7 +6,8 @@ export type StatusKey = "idle" | AgentRunStatus;
 export interface LlmWikiConfig {
   query: string;
   limit: number;
-  model: string;
+  fastModel: string;
+  qualityModel: string;
 }
 
 export const TERMINAL: AgentRunStatus[] = [

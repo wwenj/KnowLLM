@@ -1,16 +1,29 @@
+import { useState } from "react";
 import {
+  AlertCircle,
+  Bot,
+  Braces,
   CheckCircle2,
   Copy,
   Download,
+  ListTree,
   Loader2,
   Search,
   StopCircle,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import type { AgentRunDetail, AgentRunEvent } from "@/api/agent";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AgentType, StatusKey } from "../types";
@@ -18,6 +31,7 @@ import {
   eventDetail,
   eventMeta,
   formatDuration,
+  formatMetric,
   formatTime,
   statusText,
 } from "../utils";
@@ -35,6 +49,13 @@ interface RunOutputPanelProps {
   onDownload: () => void;
 }
 
+interface SelectedEventDetail {
+  title: string;
+  description: string;
+  label: string;
+  text: string;
+}
+
 export function RunOutputPanel({
   events,
   detail,
@@ -47,9 +68,14 @@ export function RunOutputPanel({
   onCopy,
   onDownload,
 }: RunOutputPanelProps) {
+  const [selectedDetail, setSelectedDetail] = useState<SelectedEventDetail | null>(null);
   const isRunning = status === "running";
+  const modelRounds = detail?.tokens?.modelCalls
+    ?? detail?.tokens?.rounds
+    ?? detail?.stats?.modelCalls;
   return (
-    <Card className="flex min-h-0 min-w-0 max-w-full flex-col gap-0 overflow-hidden border border-slate-200/70 bg-white/90 py-0 shadow-sm">
+    <>
+      <Card className="flex min-h-0 min-w-0 max-w-full flex-col gap-0 overflow-hidden border border-slate-200/70 bg-white/90 py-0 shadow-sm">
       <Tabs
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
         value={activeTab}
@@ -103,34 +129,52 @@ export function RunOutputPanel({
                 <div className="space-y-2 bg-slate-50/70 p-3">
                   {events.map((event, index) => {
                     const meta = eventMeta(event);
-                    const detailText = eventDetail(event);
+                    const codeDetail = eventDetail(event);
+                    const EventIcon = eventIcon(event.type);
                     return (
-                      <div
+                      <button
+                        type="button"
+                        disabled={!codeDetail}
                         key={`${event.ts || index}-${index}`}
-                        className="grid min-w-0 grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm"
+                        className={`grid w-full min-w-0 grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left shadow-sm outline-none transition-colors ${
+                          codeDetail
+                            ? "cursor-pointer hover:border-sky-200 hover:bg-sky-50/40 focus-visible:ring-2 focus-visible:ring-sky-500/60"
+                            : "cursor-default"
+                        }`}
+                        onClick={() => {
+                          if (!codeDetail) return;
+                          setSelectedDetail({
+                            title: event.msg || event.type,
+                            description: meta,
+                            label: codeDetail.label,
+                            text: codeDetail.text,
+                          });
+                        }}
                       >
-                        <Search className="mt-0.5 size-4 text-sky-600" />
+                        <EventIcon className={`mt-0.5 size-4 ${eventIconClass(event)}`} />
                         <div className="min-w-0">
                           <div className="flex min-w-0 items-center justify-between gap-2">
-                            <div className="truncate text-sm font-medium text-slate-800">
+                            <div className="min-w-0 truncate text-sm font-medium text-slate-800">
                               {event.msg || event.type}
                             </div>
-                            <span className="shrink-0 text-xs text-slate-400">
-                              {formatTime(event.ts)}
-                            </span>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              {codeDetail && (
+                                <span className="text-[11px] text-slate-400">
+                                  点击查看详情
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400">
+                                {formatTime(event.ts)}
+                              </span>
+                            </div>
                           </div>
                           {meta && (
-                            <div className="mt-1 truncate text-xs text-slate-500">
+                            <div className="mt-1 line-clamp-2 break-words text-xs leading-5 text-slate-500">
                               {meta}
                             </div>
                           )}
-                          {detailText && (
-                            <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950 p-2 text-xs leading-relaxed text-slate-100">
-                              {detailText}
-                            </pre>
-                          )}
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                   <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700">
@@ -154,20 +198,32 @@ export function RunOutputPanel({
               </div>
             ) : (
               <div className="h-full overflow-y-auto bg-slate-50/70 p-4">
-                <div className="mb-3 grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-xs text-slate-400">状态</div>
-                    <div className="mt-0.5 text-sm font-medium text-slate-800">
+                <dl className="mb-3 grid grid-cols-2 overflow-hidden rounded-lg border border-slate-200 bg-white sm:grid-cols-4">
+                  <div className="border-b border-r border-slate-200 px-3 py-2 sm:border-b-0">
+                    <dt className="text-xs text-slate-500">状态</dt>
+                    <dd className="mt-0.5 text-sm font-medium text-slate-800">
                       {statusText(detail.status)}
-                    </div>
+                    </dd>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-xs text-slate-400">耗时</div>
-                    <div className="mt-0.5 text-sm font-medium text-slate-800">
+                  <div className="border-b border-slate-200 px-3 py-2 sm:border-b-0 sm:border-r">
+                    <dt className="text-xs text-slate-500">耗时</dt>
+                    <dd className="mt-0.5 text-sm font-medium text-slate-800">
                       {formatDuration(detail.startedAt, detail.endedAt)}
-                    </div>
+                    </dd>
                   </div>
-                </div>
+                  <div className="border-r border-slate-200 px-3 py-2">
+                    <dt className="text-xs text-slate-500">Token 总数</dt>
+                    <dd className="mt-0.5 font-mono text-sm font-medium tabular-nums text-slate-800">
+                      {formatMetric(detail.tokens?.totalTokens)}
+                    </dd>
+                  </div>
+                  <div className="px-3 py-2">
+                    <dt className="text-xs text-slate-500">模型轮次</dt>
+                    <dd className="mt-0.5 font-mono text-sm font-medium tabular-nums text-slate-800">
+                      {modelRounds === undefined ? "-" : `${formatMetric(modelRounds)} 次`}
+                    </dd>
+                  </div>
+                </dl>
                 <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <MarkdownRenderer
                     content={detail.resultMd || "暂无结果。"}
@@ -179,6 +235,44 @@ export function RunOutputPanel({
           </TabsContent>
         </CardContent>
       </Tabs>
-    </Card>
+      </Card>
+      <Dialog
+        open={Boolean(selectedDetail)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedDetail(null);
+        }}
+      >
+        <DialogContent className="flex max-h-[86vh] min-h-[420px] flex-col gap-0 overflow-hidden p-0 sm:max-w-[960px]">
+          <DialogHeader className="shrink-0 border-b border-slate-200 px-5 py-4 pr-12">
+            <DialogTitle className="leading-5">
+              {selectedDetail?.title || "执行详情"}
+            </DialogTitle>
+            <DialogDescription className="line-clamp-2 leading-5">
+              {[selectedDetail?.label, selectedDetail?.description].filter(Boolean).join(" · ")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-auto bg-slate-950 p-4">
+            <pre className="min-w-full w-max font-mono text-xs leading-5 text-slate-100">
+              {selectedDetail?.text || ""}
+            </pre>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
+}
+
+function eventIcon(type: string) {
+  if (type.startsWith("model_")) return Bot;
+  if (type.startsWith("tool_")) return type === "tool_response" ? Braces : Wrench;
+  if (type === "plan_created") return ListTree;
+  if (type.includes("error")) return AlertCircle;
+  return Search;
+}
+
+function eventIconClass(event: AgentRunEvent): string {
+  if (event.type.includes("error") || event.status === "failed" || event.status === "rejected") return "text-rose-600";
+  if (event.type === "model_response" || event.type === "tool_response") return "text-emerald-600";
+  if (event.type === "model_request" || event.type === "tool_request") return "text-sky-600";
+  return "text-slate-500";
 }
