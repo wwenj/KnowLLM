@@ -1,205 +1,129 @@
-import type {
-  KnowledgeSnippet,
-  LlmWikiAgentState,
-  RetrievedPage,
-  SourceReview,
-} from "./llm-wiki-agent.types";
+import type { ToolsPageDetail, ToolsSourceDetail } from "../../../llmWikiNext/llm-wiki-next.types";
+import type { FinalAnswer, LlmWikiAgentState, VerifiedEvidence } from "./llm-wiki-agent.types";
 
-export function pagesForKept(state: LlmWikiAgentState): RetrievedPage[] {
-  const kept = new Set(state.keptPages.map((page) => page.path));
-  return state.pages.filter((page) => kept.has(page.path));
-}
-
-export function defaultSourceReviewForPath(state: LlmWikiAgentState, path: string): SourceReview {
-  return {
-    path,
-    sourceSupport: state.sourcePolicy === "wiki-only" ? "wiki-only" : "unknown",
-    supportSummary:
-      state.sourcePolicy === "wiki-only"
-        ? "本次策略只读取 Wiki 页面，未核验 raw source。"
-        : "未获得 reviewer 的 raw source 支持判断。",
-  };
-}
-
-export function buildKnowledgeSnippets(state: LlmWikiAgentState): KnowledgeSnippet[] {
-  return state.keptPages
-    .map((kept) => {
-      const page = state.pages.find((item) => item.path === kept.path);
-      if (!page) return null;
-      const sourceReview =
-        state.sourceReviews.find((review) => review.path === page.path) ||
-        defaultSourceReviewForPath(state, page.path);
-      return {
-        path: page.path,
-        title: page.title,
-        type: normalizePageType(page.type),
-        tags: page.tags,
-        sources: page.sources,
-        content: stripFrontmatter(page.content),
-        taskGoals: kept.taskGoals.length ? kept.taskGoals : [page.taskGoal].filter(Boolean),
-        relevanceScore: kept.relevanceScore,
-        evidenceScore: kept.evidenceScore,
-        selectedInRound: kept.selectedInRound,
-        whyKept: kept.whyKept,
-        sourceSupport: sourceReview.sourceSupport,
-      };
-    })
-    .filter((item): item is KnowledgeSnippet => Boolean(item));
-}
-
-export function resultJsonFromState(
+export function buildResultJson(
   state: LlmWikiAgentState,
-  answerMarkdown: string,
-  knowledgeSnippets: KnowledgeSnippet[],
+  final: FinalAnswer,
 ): Record<string, unknown> {
-  const keptPages = pagesForKept(state);
+  const evidenceById = new Map(state.evidence.map((item) => [item.evidenceId, item]));
+  const citations = final.citations
+    .map((id) => evidenceById.get(id))
+    .filter((item): item is VerifiedEvidence => Boolean(item))
+    .map(toCitation);
+  const pages = [...state.pages.values()];
+  const sources = [...state.sources.values()];
+  const gaps = unique(final.gaps.length ? final.gaps : state.gaps);
+  const coverageSummary = coverageSummaryFromState(state);
+
+  // 保留旧结果面板、历史和导出已消费的字段；新字段均为补充。
   return {
-    answerMarkdown,
-    knowledgeSnippets,
-    discardedPages: state.discardedPages,
+    answerMarkdown: final.answerMarkdown,
+    knowledgeSnippets: pages.map(toKnowledgeSnippet),
+    rawSources: sources.map(toRawSource),
+    citations,
+    gaps: gaps.length ? gaps : state.stopReason === "complete" ? [] : ["未获得足够可核验证据。"],
+    coverageSummary,
+    stopReason: state.stopReason || "insufficient_evidence",
     retrievalRounds: state.retrievalRounds,
-    rawSources: state.sources.map((source) => ({
-      source_id: source.source_id,
-      filename: source.filename,
-      pagePaths: source.pagePaths,
-      supportSummary: source.supportSummary,
-    })),
-    citations: citationsFromPages(keptPages),
-    gaps: state.gaps.length ? state.gaps : keptPages.length ? [] : ["未在当前 LLM Wiki 中检索到足够证据。"],
-    coverageSummary: state.coverageSummary || coverageSummaryFromState(state),
-    stopReason: state.stopReason || "complete",
     plan: state.plan,
-    sourcePolicy: state.sourcePolicy,
-    pageCount: state.pages.length,
-    keptPageCount: keptPages.length,
-    sourceCount: state.sources.length,
+    verifiedEvidence: state.evidence.map(toCitation),
+    catalogFingerprint: state.catalogFingerprint,
   };
-}
-
-export function normalizeSynthesis(value: Record<string, unknown>, state: LlmWikiAgentState): Record<string, unknown> {
-  const answerMarkdown = stringField(value.answerMarkdown) || fallbackMarkdown(state);
-  const base = resultJsonFromState(state, answerMarkdown, state.knowledgeSnippets);
-  return {
-    ...base,
-    citations: Array.isArray(value.citations) ? value.citations : base.citations,
-    gaps: Array.isArray(value.gaps) ? value.gaps : base.gaps,
-    coverageSummary: stringField(value.coverageSummary) || base.coverageSummary,
-  };
-}
-
-export function renderSnippetsMarkdown(state: LlmWikiAgentState, snippets: KnowledgeSnippet[]): string {
-  if (!snippets.length) return "# LLM Wiki 知识片段\n\n未在当前 LLM Wiki 中检索到足够证据。\n";
-  const lines = [
-    "# LLM Wiki 知识片段",
-    "",
-    `- 查询：${state.query}`,
-    `- 片段数：${snippets.length}`,
-    `- 停止原因：${state.stopReason || "complete"}`,
-    `- 检索轮次：${state.round}`,
-    "",
-  ];
-  for (const snippet of snippets) {
-    lines.push(`## ${snippet.title}`, "");
-    lines.push(`- 路径：${snippet.path}`);
-    lines.push(`- Source 支持：${snippet.sourceSupport}`);
-    lines.push(`- 保留原因：${snippet.whyKept}`);
-    if (snippet.taskGoals.length) lines.push(`- 任务：${snippet.taskGoals.join("；")}`);
-    if (snippet.sources.length) lines.push(`- Sources：${snippet.sources.join(", ")}`);
-    if (snippet.tags.length) lines.push(`- Tags：${snippet.tags.join(", ")}`);
-    lines.push("", truncate(snippet.content, 12000).trim(), "");
-  }
-  lines.push("## 检索轨迹");
-  for (const round of state.retrievalRounds) {
-    lines.push(
-      `- Round ${round.round}: read=${round.readPages.length}, keep=${round.keptPages.length}, drop=${round.droppedPages.length}, stop=${round.stopReason || "-"}`,
-    );
-  }
-  lines.push("", "## 未覆盖/不确定点");
-  if (state.gaps.length) {
-    for (const gap of state.gaps.slice(0, 12)) lines.push(`- ${gap}`);
-  } else {
-    lines.push("- 当前 reviewer 未报告额外缺口。");
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 export function fallbackMarkdown(state: LlmWikiAgentState): string {
   const lines = ["# LLM Wiki 检索结果", ""];
-  if (state.knowledgeSnippets.length) {
-    for (const snippet of state.knowledgeSnippets) lines.push(`- ${snippet.title} (${snippet.path})`);
+  if (state.stopReason === "wiki_changed") {
+    lines.push("检索期间 Published Wiki 已变化。为避免混合两个版本的证据，本次结果已丢弃，请重新执行。\n");
   } else {
-    lines.push("未在当前 LLM Wiki 中检索到足够证据。");
+    lines.push("当前 Published Wiki 中未获得覆盖全部必答任务的可核验证据。\n");
   }
-  lines.push("", "## 未覆盖/不确定点");
-  for (const gap of state.gaps.length ? state.gaps : ["证据不足，未生成汇总答案。"]) lines.push(`- ${gap}`);
+  lines.push("## 未覆盖/不确定点");
+  for (const gap of unique(state.gaps).slice(0, 12)) lines.push(`- ${gap}`);
   return `${lines.join("\n")}\n`;
 }
 
-export function ensureAnswerMarkdownSections(
+export function appendVerifiedCitations(
   markdown: string,
-  resultJson: Record<string, unknown>,
   state: LlmWikiAgentState,
+  citationIds: string[],
 ): string {
-  const lines = [markdown.trim()];
-  if (!/##\s*依据/.test(markdown)) {
-    const citations = Array.isArray(resultJson.citations) ? resultJson.citations : citationsFromPages(pagesForKept(state));
-    lines.push("", "## 依据");
-    for (const citation of citations.slice(0, 12)) {
-      const item = citation && typeof citation === "object" ? (citation as Record<string, unknown>) : {};
-      const title = stringField(item.title) || stringField(item.path) || "未命名页面";
-      const path = stringField(item.path);
-      lines.push(`- ${path ? `${title} (${path})` : title}`);
-    }
+  const evidenceById = new Map(state.evidence.map((item) => [item.evidenceId, item]));
+  const citations = citationIds
+    .map((id) => evidenceById.get(id))
+    .filter((item): item is VerifiedEvidence => Boolean(item));
+  if (!citations.length) return markdown.trim();
+  const lines = [markdown.trim(), "", "## 已验证依据"];
+  for (const citation of citations) {
+    const location = citation.kind === "source"
+      ? `${citation.sourceFilename || citation.sourceId || "Source"} L${citation.range?.startLine ?? "?"}-L${citation.range?.endLine ?? "?"}`
+      : citation.pageKey || "Wiki 页面";
+    lines.push(`- [${citation.evidenceId}] ${location}：${truncate(citation.quote, 360)}`);
   }
-  if (!/未覆盖|不确定点/.test(markdown)) {
-    const gaps = Array.isArray(resultJson.gaps) ? stringArray(resultJson.gaps) : state.gaps;
-    lines.push("", "## 未覆盖/不确定点");
-    if (gaps.length > 0) {
-      for (const gap of gaps.slice(0, 8)) lines.push(`- ${gap}`);
-    } else {
-      lines.push("- 当前检索证据未报告额外缺口。");
-    }
-  }
-  return `${lines.join("\n")}\n`;
+  return lines.join("\n");
 }
 
 export function coverageSummaryFromState(state: LlmWikiAgentState): string {
-  const plan = state.plan;
-  if (!plan) return "未生成检索计划。";
-  const keptTaskGoals = new Set(state.keptPages.flatMap((page) => page.taskGoals));
-  return `完成 ${state.round} 轮证据审查，保留 ${state.keptPages.length} 个 Wiki 页面，读取 ${state.sources.length} 个 raw source，覆盖 ${keptTaskGoals.size}/${plan.tasks.length} 个规划任务。`;
+  const tasks = state.plan?.tasks || [];
+  const covered = tasks.filter((task) => hasEvidenceForTask(state, task.taskId));
+  return `已完成 ${state.round} 轮 ReAct，已验证 ${state.evidence.length} 条证据，覆盖 ${covered.length}/${tasks.length} 个必答任务。`;
 }
 
-function normalizePageType(value: string): KnowledgeSnippet["type"] {
-  return value === "summary" ||
-    value === "concept" ||
-    value === "entity" ||
-    value === "reference" ||
-    value === "procedure" ||
-    value === "changelog" ||
-    value === "troubleshooting" ||
-    value === "index"
-    ? value
-    : "concept";
+export function hasEvidenceForTask(state: LlmWikiAgentState, taskId: string): boolean {
+  return state.evidence.some((item) => item.taskId === taskId);
 }
 
-function citationsFromPages(pages: RetrievedPage[]) {
-  return pages.map((page) => ({ path: page.path, title: page.title, sources: page.sources }));
+function toKnowledgeSnippet(detail: ToolsPageDetail) {
+  return {
+    path: detail.page.pageKey,
+    pageKey: detail.page.pageKey,
+    title: detail.page.title,
+    type: "concept",
+    tags: [],
+    sources: detail.page.sourceIds,
+    content: detail.page.bodyMarkdown,
+    taskGoals: [],
+    relevanceScore: 0,
+    evidenceScore: detail.page.keyFacts.length,
+    selectedInRound: 0,
+    whyKept: "由 Planner/ReAct 调用 readPage 并进入已验证证据链。",
+    sourceSupport: "verified",
+  };
 }
 
-function stripFrontmatter(content: string): string {
-  return String(content || "").replace(/^---[\s\S]*?---\s*/m, "").trim();
+function toRawSource(detail: ToolsSourceDetail) {
+  return {
+    source_id: detail.source.sourceId,
+    sourceId: detail.source.sourceId,
+    filename: detail.source.filename,
+    pagePaths: detail.source.pageKeys,
+    startLine: detail.range.startLine,
+    endLine: detail.range.endLine,
+    supportSummary: "由 ReAct 读取并用于 Source 证据核验。",
+  };
 }
 
-function stringField(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function toCitation(evidence: VerifiedEvidence) {
+  return {
+    evidenceId: evidence.evidenceId,
+    taskId: evidence.taskId,
+    kind: evidence.kind,
+    pageKey: evidence.pageKey,
+    path: evidence.pageKey,
+    sourceId: evidence.sourceId,
+    filename: evidence.sourceFilename,
+    quote: evidence.quote,
+    claim: evidence.claim,
+    sourceLine: evidence.sourceLine,
+    startLine: evidence.range?.startLine,
+    endLine: evidence.range?.endLine,
+  };
 }
 
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(stringField).filter(Boolean) : [];
+function unique(values: string[]): string[] {
+  return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
 function truncate(value: string, limit: number): string {
-  const text = String(value || "");
-  return text.length <= limit ? text : `${text.slice(0, limit)}\n...[truncated]`;
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
 }

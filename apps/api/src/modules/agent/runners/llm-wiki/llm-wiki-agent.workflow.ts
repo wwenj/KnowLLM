@@ -1,80 +1,152 @@
 import { Injectable } from "@nestjs/common";
-import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
-import { ModelService } from "../../../model/model.service";
-import { LlmWikiPage, LlmWikiPageRef } from "../../../llmWiki/contracts/llm-wiki.types";
-import { agentConfig } from "../../agent.config";
-import {
-  AgentRunTokens,
-  AgentRunnerContext,
-  AgentRunnerResult,
-} from "../../agent.types";
+import { createHash } from "node:crypto";
+import type { ToolsCatalog } from "../../../llmWikiNext/llm-wiki-next.types";
+import { ModelService, type RawChatResponseFormat } from "../../../model/model.service";
+import type { AgentRunTokens, AgentRunnerContext, AgentRunnerResult } from "../../agent.types";
 import { LlmWikiAgentTools } from "./llm-wiki-agent.tools";
+import { appendVerifiedCitations, buildResultJson, fallbackMarkdown } from "./llm-wiki-agent-result";
 import {
-  buildKnowledgeSnippets,
-  coverageSummaryFromState,
-  defaultSourceReviewForPath,
-  ensureAnswerMarkdownSections,
-  fallbackMarkdown,
-  normalizeSynthesis,
-  pagesForKept,
-  renderSnippetsMarkdown,
-  resultJsonFromState,
-} from "./llm-wiki-agent-result";
-import {
-  LlmWikiAgentInput,
-  LlmWikiAgentState,
-  LlmWikiBudget,
-  DiscardedPage,
-  KeptPage,
-  KnowledgeSnippet,
-  LlmWikiModels,
-  LlmWikiSourcePolicy,
-  PageHitReason,
-  PlannedPageHit,
-  QueryCoverage,
-  QueryIntent,
-  QueryPlan,
-  QueryTask,
-  RetrievalAction,
-  RetrievedPage,
-  RetrievalRound,
-  SourceEvidence,
-  SourceReview,
-  SourceSupport,
-  StopReason,
-  WikiManifest,
+  DEFAULT_FAST_MODEL,
+  DEFAULT_LIMIT,
+  DEFAULT_QUALITY_MODEL,
+  FINAL_TOKEN_RESERVE,
+  MAX_ACTIONS_PER_ROUND,
+  MAX_LIMIT,
+  MAX_MODEL_ATTEMPTS,
+  MAX_MODEL_CALLS,
+  MAX_MODEL_RETRIES,
+  MAX_PLAN_TASKS,
+  MAX_REACT_ROUNDS,
+  MAX_SEARCHES,
+  MAX_SOURCE_READS,
+  TOKEN_LIMIT,
+  type EvidenceSelection,
+  type FinalAnswer,
+  type FinishAction,
+  type LlmWikiAgentInput,
+  type LlmWikiAgentState,
+  type PlannerAction,
+  type PlannerCatalogPage,
+  type QueryPlan,
+  type QueryTask,
+  type ReactAction,
+  type ReactDecision,
+  type RetrievalRound,
+  type VerifiedEvidence,
 } from "./llm-wiki-agent.types";
 
-const State = Annotation.Root({
-  query: Annotation<string>(),
-  sourcePolicy: Annotation<LlmWikiSourcePolicy>(),
-  budget: Annotation<LlmWikiBudget>(),
-  models: Annotation<LlmWikiModels>(),
-  manifest: Annotation<WikiManifest | null>(),
-  plan: Annotation<QueryPlan | null>(),
-  round: Annotation<number>(),
-  candidatePages: Annotation<PlannedPageHit[]>(),
-  pendingActions: Annotation<RetrievalAction[]>(),
-  requestedSourceIds: Annotation<string[]>(),
-  pages: Annotation<RetrievedPage[]>(),
-  lastReadPages: Annotation<string[]>(),
-  keptPages: Annotation<KeptPage[]>(),
-  discardedPages: Annotation<DiscardedPage[]>(),
-  retrievalRounds: Annotation<RetrievalRound[]>(),
-  sources: Annotation<SourceEvidence[]>(),
-  sourceReviews: Annotation<SourceReview[]>(),
-  knowledgeSnippets: Annotation<KnowledgeSnippet[]>(),
-  answerMarkdown: Annotation<string>(),
-  resultJson: Annotation<Record<string, unknown>>(),
-  stopReason: Annotation<StopReason | null>(),
-  gaps: Annotation<string[]>(),
-  coverageSummary: Annotation<string>(),
-  tokens: Annotation<AgentRunTokens>(),
+const PLANNER_SCHEMA = jsonSchema("wiki_query_plan", {
+  type: "object",
+  additionalProperties: false,
+  required: ["relevant", "tasks", "actions"],
+  properties: {
+    relevant: { type: "boolean" },
+    tasks: {
+      type: "array",
+      minItems: 0,
+      maxItems: MAX_PLAN_TASKS,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "question", "evidence"],
+        properties: {
+          id: { type: "string", pattern: "^[A-Za-z0-9_-]{1,32}$" },
+          question: { type: "string", minLength: 1, maxLength: 300 },
+          evidence: { type: "string", enum: ["page", "fact", "source"] },
+        },
+      },
+    },
+    actions: {
+      type: "array",
+      minItems: 0,
+      maxItems: MAX_ACTIONS_PER_ROUND,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tool", "value"],
+        properties: {
+          tool: { type: "string", enum: ["searchWiki", "readPage"] },
+          value: { type: "string", minLength: 1, maxLength: 300 },
+        },
+      },
+    },
+  },
 });
 
-const DEFAULT_MAX_ROUNDS = 4;
-const DEFAULT_MAX_EVIDENCE_PAGES = 48;
-const DEFAULT_MAX_RAW_SOURCES = 12;
+const REACT_SCHEMA = jsonSchema("wiki_react_decision", {
+  type: "object",
+  additionalProperties: false,
+  required: ["coverage", "evidence", "actions", "conflicts", "gaps", "finish", "finishReason", "escalateToQuality"],
+  properties: {
+    coverage: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["taskId", "status", "note"],
+        properties: {
+          taskId: { type: "string", maxLength: 48 },
+          status: { type: "string", enum: ["covered", "partial", "missing"] },
+          note: { type: "string", maxLength: 500 },
+        },
+      },
+    },
+    evidence: {
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["taskId", "kind", "quote", "claim"],
+        properties: {
+          taskId: { type: "string", maxLength: 48 },
+          kind: { type: "string", enum: ["page", "fact", "source"] },
+          pageKey: { type: "string", maxLength: 200 },
+          sourceId: { type: "string", maxLength: 64 },
+          quote: { type: "string", minLength: 1, maxLength: 1500 },
+          claim: { type: "string", minLength: 1, maxLength: 1500 },
+          sourceLine: { type: "integer", minimum: 1 },
+        },
+      },
+    },
+    actions: {
+      type: "array",
+      maxItems: MAX_ACTIONS_PER_ROUND,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["tool"],
+        properties: {
+          tool: { type: "string", enum: ["searchWiki", "readPage", "readSource", "finish"] },
+          query: { type: "string", maxLength: 300 },
+          pageKey: { type: "string", maxLength: 200 },
+          sourceId: { type: "string", maxLength: 64 },
+          startLine: { type: "integer", minimum: 1 },
+          endLine: { type: "integer", minimum: 1 },
+          reason: { type: "string", maxLength: 500 },
+        },
+      },
+    },
+    conflicts: { type: "array", maxItems: 12, items: { type: "string", maxLength: 500 } },
+    gaps: { type: "array", maxItems: 12, items: { type: "string", maxLength: 500 } },
+    finish: { type: "boolean" },
+    finishReason: { type: "string", maxLength: 500 },
+    escalateToQuality: { type: "boolean" },
+  },
+});
+
+const FINAL_SCHEMA = jsonSchema("wiki_final_answer", {
+  type: "object",
+  additionalProperties: false,
+  required: ["answerable", "answerMarkdown", "citations", "gaps"],
+  properties: {
+    answerable: { type: "boolean" },
+    answerMarkdown: { type: "string", minLength: 1, maxLength: 30_000 },
+    citations: { type: "array", maxItems: 24, items: { type: "string", maxLength: 80 } },
+    gaps: { type: "array", maxItems: 12, items: { type: "string", maxLength: 500 } },
+  },
+});
 
 @Injectable()
 export class LlmWikiAgentWorkflow {
@@ -89,41 +161,36 @@ export class LlmWikiAgentWorkflow {
     return {
       agentType: this.agentType,
       label: "LLM Wiki Agent",
-      description: "基于 LLM Wiki 的多轮证据驱动研究型查询 Agent",
+      description: "基于 Published LLM Wiki 的 Planner + ReAct 证据查询 Agent",
     };
   }
 
   getDefaults(): Record<string, unknown> {
     return {
-      sourcePolicy: "auto",
-      budget: defaultBudget(),
-      models: this.defaultModels(),
+      limit: DEFAULT_LIMIT,
+      fastModel: DEFAULT_FAST_MODEL,
+      qualityModel: DEFAULT_QUALITY_MODEL,
       modelOptions: this.model.listModels(),
     };
   }
 
   validateInput(input: unknown): LlmWikiAgentInput {
-    const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-    const query = stringField(raw.query);
+    if (!isRecord(input)) throw new Error("请求体必须是对象");
+    const allowed = new Set(["query", "limit", "fastModel", "qualityModel"]);
+    const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+    if (unknown.length) throw new Error(`不支持旧 Agent 输入字段: ${unknown.join(", ")}`);
+    const query = string(input.query);
+    const fastModel = string(input.fastModel);
+    const qualityModel = string(input.qualityModel);
+    const limit = Number(input.limit);
     if (!query) throw new Error("query 不能为空");
-    const sourcePolicy = normalizeInputSourcePolicy(raw.sourcePolicy);
-    const legacyLimit = Number(raw.limit);
-    const budgetInput =
-      Number.isFinite(legacyLimit) && legacyLimit > 0
-        ? { ...(isRecord(raw.budget) ? raw.budget : {}), maxEvidencePages: legacyLimit }
-        : raw.budget;
-    const budget = resolveBudget(budgetInput);
-    const modelsInput =
-      !raw.models && typeof raw.model === "string"
-        ? {
-            plannerModel: raw.model,
-            reviewerModel: raw.model,
-            synthesizerModel: raw.model,
-          }
-        : raw.models;
-    const models = resolveModels(modelsInput, this.defaultModels());
-    this.assertModelsAvailable(models);
-    return { query, sourcePolicy, budget, models };
+    if (!fastModel || !qualityModel) throw new Error("fastModel 和 qualityModel 不能为空");
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+      throw new Error(`limit 必须是 1 到 ${MAX_LIMIT} 的整数`);
+    }
+    if (!this.model.findModel(fastModel)) throw new Error(`fastModel 不存在或未配置: ${fastModel}`);
+    if (!this.model.findModel(qualityModel)) throw new Error(`qualityModel 不存在或未配置: ${qualityModel}`);
+    return { query, limit, fastModel, qualityModel };
   }
 
   title(input: LlmWikiAgentInput): string {
@@ -131,1556 +198,955 @@ export class LlmWikiAgentWorkflow {
   }
 
   async start(ctx: AgentRunnerContext<LlmWikiAgentInput>): Promise<AgentRunnerResult> {
-    const tokens = emptyTokens(ctx.input.budget.tokenLimit);
-    const graph = this.buildGraph(ctx);
-    const initial: LlmWikiAgentState = {
-      query: ctx.input.query,
-      sourcePolicy: ctx.input.sourcePolicy,
-      budget: ctx.input.budget,
-      models: ctx.input.models,
-      manifest: null,
-      plan: null,
-      round: 0,
-      candidatePages: [],
-      pendingActions: [],
-      requestedSourceIds: [],
-      pages: [],
-      lastReadPages: [],
-      keptPages: [],
-      discardedPages: [],
-      retrievalRounds: [],
-      sources: [],
-      sourceReviews: [],
-      knowledgeSnippets: [],
-      answerMarkdown: "",
-      resultJson: {},
-      stopReason: null,
-      gaps: [],
-      coverageSummary: "",
-      tokens,
-    };
+    const state = emptyState(ctx.input);
     ctx.appendEvent({
       type: "start",
-      msg: "开始执行 LLM Wiki Agent",
+      msg: "开始执行新版 LLM Wiki Planner + ReAct",
       query: ctx.input.query,
-      sourcePolicy: ctx.input.sourcePolicy,
-      budget: ctx.input.budget,
-      models: ctx.input.models,
+      limit: ctx.input.limit,
+      fastModel: ctx.input.fastModel,
+      qualityModel: ctx.input.qualityModel,
     });
-    const finalState = (await graph.invoke(initial)) as LlmWikiAgentState;
-    const status = finalState.stopReason === "insufficient_evidence" ? "insufficient" : "success";
-    return {
-      status,
-      content: finalState.answerMarkdown || "未生成有效结果。",
-      resultJson: finalState.resultJson,
-      runnerMeta: {
-        sourcePolicy: ctx.input.sourcePolicy,
-        budget: ctx.input.budget,
-        pageCount: finalState.pages.length,
-        keptPageCount: finalState.keptPages.length,
-        sourceCount: finalState.sources.length,
-        rounds: finalState.round,
-        stopReason: finalState.stopReason,
-        models: ctx.input.models,
-      },
-      tokens: finalState.tokens,
-      stats: {
-        modelCalls: finalState.tokens.modelCalls,
-        toolRounds: finalState.pages.length + finalState.sources.length + finalState.retrievalRounds.length,
-      },
-    };
-  }
 
-  private buildGraph(ctx: AgentRunnerContext<LlmWikiAgentInput>) {
-    return new StateGraph(State)
-      .addNode("load_manifest", async (state) => this.loadManifest(ctx, state))
-      .addNode("plan_query", async (state) => this.planQuery(ctx, state))
-      .addNode("collect_initial_candidates", async (state) => this.collectInitialCandidates(ctx, state))
-      .addNode("read_page_batch", async (state) => this.readPageBatch(ctx, state))
-      .addNode("review_evidence", async (state) => this.reviewEvidence(ctx, state))
-      .addNode("execute_next_actions", async (state) => this.executeNextActions(ctx, state))
-      .addNode("read_raw_sources", async (state) => this.readRawSources(ctx, state))
-      .addNode("review_sources", async (state) => this.reviewSources(ctx, state))
-      .addNode("build_final_snippets", async (state) => this.buildFinalSnippets(ctx, state))
-      .addNode("maybe_synthesize", async (state) => this.maybeSynthesize(ctx, state))
-      .addNode("finish", async (state) => this.finish(ctx, state))
-      .addEdge(START, "load_manifest")
-      .addEdge("load_manifest", "plan_query")
-      .addConditionalEdges(
-        "plan_query",
-        (state: LlmWikiAgentState) => (state.stopReason ? "finalize" : "collect"),
-        {
-          collect: "collect_initial_candidates",
-          finalize: "read_raw_sources",
-        },
-      )
-      .addEdge("collect_initial_candidates", "read_page_batch")
-      .addEdge("read_page_batch", "review_evidence")
-      .addConditionalEdges(
-        "review_evidence",
-        (state: LlmWikiAgentState) => (state.stopReason ? "finalize" : "continue"),
-        {
-          continue: "execute_next_actions",
-          finalize: "read_raw_sources",
-        },
-      )
-      .addConditionalEdges(
-        "execute_next_actions",
-        (state: LlmWikiAgentState) => (state.stopReason ? "finalize" : "read"),
-        {
-          read: "read_page_batch",
-          finalize: "read_raw_sources",
-        },
-      )
-      .addEdge("read_raw_sources", "review_sources")
-      .addEdge("review_sources", "build_final_snippets")
-      .addEdge("build_final_snippets", "maybe_synthesize")
-      .addEdge("maybe_synthesize", "finish")
-      .addEdge("finish", END)
-      .compile();
-  }
-
-  private async loadManifest(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
     this.assertActive(ctx);
-    const loaded = this.tools.getManifest();
-    const manifest: WikiManifest = { ...loaded, index: truncate(loaded.index, 8000) };
+    const catalog = this.tools.getCatalog();
+    state.catalog = catalog;
+    state.catalogFingerprint = catalogFingerprint(catalog);
+    state.plannerCatalog = plannerCatalog(catalog);
+    ctx.appendEvent({ type: "catalog_loaded", msg: "已加载 Published Wiki 目录", stats: catalog.stats });
+
+    state.plan = await this.createPlan(ctx, state);
     ctx.appendEvent({
-      type: "manifest_loaded",
-      msg: "已加载 LLM Wiki 导航索引",
-      stats: manifest.stats,
-      pages: manifest.pages.slice(0, 80),
+      type: "plan_created",
+      msg: state.plan.relevant ? "查询计划已生成" : "Planner 判定当前 Wiki 无相关信息",
+      plan: state.plan,
+      model: ctx.input.fastModel,
     });
-    return { manifest };
-  }
 
-  private async planQuery(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const payload = compactPayloadForBudget(state, {
-      output_schema: {
-        queryIntent: "overview | specific | compare | howto | debug",
-        keywords: "string[]",
-        entities: "string[]",
-        tasks:
-          "array of {goal:string, requiredPaths:string[], optionalPaths:string[], searchQueries:string[], expectedContribution:string}",
-        coverage: "{coreTopics:string[], optionalTopics:string[], excludedTopics:string[]}",
-        candidatePaths: "string[]",
-        searchQueries: "string[]",
-        reason: "string",
-      },
-      query: state.query,
-      sourcePolicy: state.sourcePolicy,
-      budget: state.budget,
-      manifest: manifestForPrompt(state.manifest),
-    });
-    if (!payload) {
+    if (!state.stopReason && !state.plan.relevant) {
+      state.stopReason = "no_relevant_wiki";
+      state.gaps = ["用户问题与当前 Published Wiki 目录完全无关。"];
       ctx.appendEvent({
-        type: "plan_skipped",
-        msg: "Token 预算不足，无法构造初始检索计划输入",
-        status: "failed",
+        type: "planner_no_match",
+        msg: "当前 Wiki 无相关信息，已跳过 Tool、ReAct 和 Final",
+        model: ctx.input.fastModel,
       });
-      return {
-        stopReason: "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算不足，无法构造初始检索计划输入。"]),
-      };
+      return this.finishResult(ctx, state, {
+        answerable: false,
+        answerMarkdown: "当前 Wiki 无相关信息。",
+        citations: [],
+        gaps: state.gaps,
+      });
     }
-    const { value, tokens } = await this.callJsonWithRetry(ctx, state, {
-      model: state.models.plannerModel,
-      phase: "plan_query",
-      temperature: 0,
-      system: [
-        "你是 LLM Wiki 查询规划器。只输出 JSON,不要输出 Markdown。",
-        "你只负责初始任务拆解和第一批候选页面,不是最终裁判。",
-        "requiredPaths 代表第一轮必须读取的候选页面,后续 reviewer 可以移除。",
-        "optionalPaths 和 searchQueries 用来扩大第一轮召回。",
-        "不要编造 wiki path; path 必须来自 manifest.pages 或 index 中明确出现的页面。",
-        "页面类型语义：reference 查命令/配置/API，procedure 查操作流程，changelog 查版本变更，troubleshooting 查错误排障，concept/entity 查解释和关系，summary 查 source 总览。",
-      ].join("\n"),
-      payload,
+
+    const initialActions = state.plan.actions.map(toReactAction);
+    const initial = await this.executeActions(ctx, state, initialActions, 0);
+    state.newObservations = observationPayload(state, initial.observations);
+    ctx.appendEvent({
+      type: "initial_tools_completed",
+      msg: "已执行 Planner 初始 Tool 调用",
+      observations: initial.observations,
+      rejectedActions: initial.rejected,
     });
-    const plan = normalizePlan(value, state.query);
-    ctx.appendEvent({ type: "plan_created", msg: "已生成初始检索计划", plan });
-    return { plan, tokens };
-  }
 
-  private async collectInitialCandidates(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const plan = state.plan || fallbackPlan(state.query);
-    const byPath = new Map<string, PlannedPageHit>();
-    const queries: string[] = [];
-    let order = 0;
-
-    const upsert = (hit: PlannedPageHit) => {
-      const prev = byPath.get(hit.path);
-      if (!prev || compareHits(hit, prev) < 0) byPath.set(hit.path, hit);
-    };
-
-    const addPath = (task: QueryTask, taskIndex: number, path: string, why: PageHitReason) => {
-      if (!isKnownWikiPath(state.manifest, path)) {
-        ctx.appendEvent({
-          type: "candidate_skipped",
-          msg: `跳过非法或不存在的 wiki 页面: ${path}`,
-          status: "failed",
-          path,
-          taskGoal: task.goal,
-        });
-        return;
+    for (let round = 1; round <= MAX_REACT_ROUNDS && !state.stopReason; round += 1) {
+      this.assertActive(ctx);
+      state.round = round;
+      const useQuality = state.qualityReactNext || state.conflicts.length > 0 || !state.lastRoundProgress;
+      const decision = await this.react(ctx, state, useQuality ? "quality" : "fast");
+      if (!decision) {
+        state.lastRoundProgress = false;
+        state.qualityReactNext = true;
+        state.gaps.push("本轮 ReAct 未返回可解析 JSON，下一轮已升级质量模型。");
+        continue;
       }
-      const ref = pageRef(state.manifest, path);
-      upsert({
-        path,
-        title: ref?.title || path,
-        type: ref?.type || "concept",
-        tags: ref?.tags || [],
-        sources: ref?.sources || [],
-        snippet: "",
-        score: scorePlannedPage({ baseScore: 0, pageType: ref?.type || "", reason: why, taskIndex }),
-        taskIndex,
-        taskGoal: task.goal,
-        taskContribution: task.expectedContribution,
-        why,
-        required: why === "required_path",
-        order: order++,
-      });
-    };
 
-    plan.tasks.forEach((task, taskIndex) => {
-      for (const path of task.requiredPaths) addPath(task, taskIndex, path, "required_path");
-      for (const query of task.searchQueries.slice(0, 4)) {
-        queries.push(query);
-        const res = this.tools.searchWiki(query, Math.min(Math.max(state.budget.maxEvidencePages, 12), 60));
-        for (const hit of res.hits) {
-          if (!isKnownWikiPath(state.manifest, hit.path)) continue;
-          upsert({
-            ...hit,
-            score: scorePlannedPage({
-              baseScore: hit.score,
-              pageType: hit.type,
-              reason: "search_hit",
-              taskIndex,
-            }),
-            taskIndex,
-            taskGoal: task.goal,
-            taskContribution: task.expectedContribution,
-            why: "search_hit",
-            required: false,
-            order: order++,
-          });
+      const acceptedEvidence = this.acceptEvidence(state, decision.evidence);
+      const actionResult = await this.executeActions(ctx, state, decision.actions, round);
+      state.newObservations = observationPayload(state, actionResult.observations);
+      state.coverage = decision.coverage;
+      // conflicts 是当前仍未解决的冲突；质量轮可通过返回空数组明确关闭已核验的冲突。
+      state.conflicts = unique(decision.conflicts);
+      state.gaps = unique([...state.gaps, ...decision.gaps, ...actionResult.rejected]);
+      state.lastRoundProgress = acceptedEvidence > 0 || actionResult.fresh > 0;
+      state.qualityReactNext = decision.escalateToQuality || state.conflicts.length > 0 || !state.lastRoundProgress;
+
+      const record: RetrievalRound = {
+        round,
+        model: useQuality ? ctx.input.qualityModel : ctx.input.fastModel,
+        actions: decision.actions,
+        observations: actionResult.observations,
+        evidenceIds: state.evidence.slice(-acceptedEvidence).map((item) => item.evidenceId),
+        coverage: decision.coverage,
+        conflicts: decision.conflicts,
+        gaps: decision.gaps,
+        finish: decision.finish || decision.actions.some((item) => item.tool === "finish"),
+      };
+      state.retrievalRounds.push(record);
+      ctx.appendEvent({
+        type: "react_round",
+        msg: `完成 ReAct 第 ${round} 轮`,
+        round,
+        model: record.model,
+        observations: record.observations,
+        evidenceCount: state.evidence.length,
+        rejectedActions: actionResult.rejected,
+      });
+
+      if (record.finish) {
+        const gate = this.evidenceGate(state);
+        if (gate.ok) {
+          state.stopReason = "complete";
+        } else {
+          state.gaps = unique([...state.gaps, ...gate.gaps]);
+          state.qualityReactNext = true;
         }
       }
-    });
-
-    plan.tasks.forEach((task, taskIndex) => {
-      for (const path of task.optionalPaths) addPath(task, taskIndex, path, "optional_path");
-    });
-    const defaultTask = plan.tasks[0] || fallbackPlan(state.query).tasks[0];
-    for (const path of plan.candidatePaths) {
-      addPath(defaultTask, 0, path, "optional_path");
     }
 
-    const candidatePages = [...byPath.values()]
-      .sort(compareHits)
-      .slice(0, state.budget.maxEvidencePages);
-    const pendingActions = candidatePages.map(pageHitToAction);
-    ctx.appendEvent({
-      type: "candidates_collected",
-      msg: `已收集第一轮候选页面 ${candidatePages.length} 个`,
-      queries: uniqueStrings(queries.length ? queries : plan.searchQueries),
-      hits: candidatePages,
-    });
-    return { candidatePages, pendingActions };
-  }
-
-  private async readPageBatch(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const pages = [...state.pages];
-    const seen = new Set(pages.map((page) => page.path));
-    const lastReadPages: string[] = [];
-    const remaining = Math.max(0, state.budget.maxEvidencePages - pages.length);
-    const readActions = state.pendingActions
-      .filter((action) => action.type === "read_page" || action.type === "follow_link")
-      .filter((action) => action.path && !seen.has(action.path))
-      .slice(0, remaining);
-
-    for (const action of readActions) {
-      const path = String(action.path || "");
-      if (!isKnownWikiPath(state.manifest, path)) {
-        ctx.appendEvent({
-          type: "page_read",
-          msg: `跳过非法或不存在的 wiki 页面: ${path}`,
-          status: "failed",
-          path,
-        });
-        continue;
-      }
-      try {
-        const page = this.tools.readWikiPage(path);
-        const retrieved = toRetrievedPage(page, action, state.round + 1);
-        pages.push(retrieved);
-        seen.add(page.path);
-        lastReadPages.push(page.path);
-        ctx.appendEvent({
-          type: "page_read",
-          msg: `读取 wiki 页面: ${page.path}`,
-          path: page.path,
-          title: page.title,
-          sources: page.sources,
-          taskGoal: retrieved.taskGoal,
-          why: retrieved.why,
-          round: state.round + 1,
-        });
-      } catch (err) {
-        ctx.appendEvent({
-          type: "page_read",
-          msg: `读取 wiki 页面失败: ${path}`,
-          status: "failed",
-          path,
-          error: formatError(err),
-        });
+    if (!state.stopReason) {
+      const gate = this.evidenceGate(state);
+      if (gate.ok) state.stopReason = "complete";
+      else {
+        state.stopReason = state.tokens.totalTokens >= TOKEN_LIMIT - FINAL_TOKEN_RESERVE
+          ? "token_limit"
+          : state.lastRoundProgress
+            ? "max_rounds"
+            : "no_new_evidence";
+        state.gaps = unique([...state.gaps, ...gate.gaps]);
       }
     }
-    return { pages, lastReadPages, pendingActions: [] };
+
+    this.assertActive(ctx);
+    const finalCatalog = this.tools.getCatalog();
+    if (catalogFingerprint(finalCatalog) !== state.catalogFingerprint) {
+      state.stopReason = "wiki_changed";
+      state.gaps = unique([...state.gaps, "检索期间 Published Wiki 已变化，不能混合版本证据。"]);
+      state.evidence = [];
+    }
+
+    let final: FinalAnswer;
+    if (state.stopReason === "complete") {
+      final = await this.summarize(ctx, state);
+      if (!final.answerable) {
+        state.stopReason = "insufficient_evidence";
+        state.gaps = unique([...state.gaps, ...final.gaps, "质量模型判断当前证据不足以作答。"]);
+        final = { ...final, answerMarkdown: fallbackMarkdown(state) };
+      } else {
+        final = {
+          ...final,
+          answerMarkdown: appendVerifiedCitations(final.answerMarkdown, state, final.citations),
+        };
+      }
+    } else {
+      final = { answerable: false, answerMarkdown: fallbackMarkdown(state), citations: [], gaps: state.gaps };
+    }
+
+    return this.finishResult(ctx, state, final);
   }
 
-  private async reviewEvidence(
+  private async createPlan(
     ctx: AgentRunnerContext<LlmWikiAgentInput>,
     state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const round = state.round + 1;
-    if (!hasRemainingTokenBudget(state.tokens, 256)) {
-      const retrievalRound = makeRetrievalRound(round, state.lastReadPages, state.keptPages, [], [], null, "token_limit");
-      return {
-        round,
-        retrievalRounds: [...state.retrievalRounds, retrievalRound],
-        stopReason: "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算已用尽，无法继续证据审查。"]),
-      };
-    }
-
-    const payload = compactPayloadForBudget(state, {
-      output_schema: {
-        keepPages:
-          "array of {path:string, taskGoals:string[], relevanceScore:number, evidenceScore:number, whyKept:string}",
-        dropPages: "array of {path:string, reason:string}",
-        coverage: "object describing per-task coverage and missing evidence",
-        gaps: "string[]",
-        nextActions:
-          "array of {type:'read_page'|'search_wiki'|'follow_link'|'read_source'|'stop', path?:string, query?:string, fromPath?:string, sourceId?:string, reason?:string}",
-        stop: "boolean",
-        stopReason: "complete | insufficient_evidence | null",
-      },
-      query: state.query,
-      round,
-      maxRounds: state.budget.maxRounds,
-      plan: state.plan,
-      schema: schemaForPrompt(state.manifest),
-      readPages: state.pages.map((page) => pageForReviewPrompt(page)),
-      previousKeptPages: state.keptPages,
-      previousRounds: state.retrievalRounds,
-      allowedActions: ["read_page", "search_wiki", "follow_link", "read_source", "stop"],
-    });
-
-    if (!payload) {
-      const retrievalRound = makeRetrievalRound(round, state.lastReadPages, state.keptPages, [], [], null, "token_limit");
-      return {
-        round,
-        retrievalRounds: [...state.retrievalRounds, retrievalRound],
-        stopReason: "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算不足，无法构造 evidence review 输入。"]),
-      };
-    }
-
-    const { value, tokens } = await this.callJsonWithRetry(ctx, state, {
-      model: state.models.reviewerModel,
-      phase: "review_evidence",
-      temperature: 0,
+  ): Promise<QueryPlan> {
+    const value = await this.callJson(ctx, state, {
+      stage: "planner",
+      model: ctx.input.fastModel,
       system: [
-        "你是 LLM Wiki evidence reviewer。只输出 JSON,不要输出 Markdown。",
-        "你必须基于已读取 Wiki 页面判断 keep/drop、覆盖度、缺口和下一步动作。",
-        "planner 的 requiredPaths 只是初始候选,你可以丢弃无关页面。",
-        "如果证据足够,输出 stop=true 和 stopReason=complete。",
-        "如果还缺证据,只能使用允许动作继续检索; 不要编造 path/sourceId。",
-        "如果 Wiki 没有足够材料,输出 stop=true 和 stopReason=insufficient_evidence。",
-        "优先把 Wiki 页面当作语义知识层阅读，不要把页面当 facts 碎片重新拼接。",
+        "你是 Wiki 查询规划器，只判断相关性并规划检索，不回答知识问题。",
+        "输入 query 是用户问题；pages 每项为 [pageKey,title,goal]，分别表示页面ID、标题、内容目标。目录不是事实证据。",
+        "仅当 query 与所有 pages 的 title/goal 完全没有语义关联时，返回 {\"relevant\":false,\"tasks\":[],\"actions\":[]}；只要存在可能相关页面，就必须 relevant=true 并继续规划。",
+        "relevant=true 时，将 query 拆成 1-6 个必须回答且互不重复的 tasks，并给出 1-6 个首轮 actions。",
+        "evidence：page=页面正文；fact=页面 keyFacts；source=带行号的原文。命令、配置、数字、安全或精确步骤必须用 source。",
+        "首轮调用：可确定页面时使用 readPage，value 必须是目录中的 pageKey；否则使用 searchWiki，value 使用 2-4 个空格分隔的核心词。",
+        "相关时唯一输出结构：{\"relevant\":true,\"tasks\":[{\"id\":\"t1\",\"question\":\"必须回答的问题\",\"evidence\":\"page\"}],\"actions\":[{\"tool\":\"readPage\",\"value\":\"页面ID\"}]}。",
+        "tasks 每项只能有 id/question/evidence；actions 每项只能有 tool/value。不得使用 task、mustAnswer、priority、action 等字段名。",
+        "禁止编造 pageKey，禁止输出答案、解释、Markdown 或额外字段；只返回 JSON。",
       ].join("\n"),
-      payload,
+      payload: { query: state.query, pages: state.plannerCatalog },
+      format: PLANNER_SCHEMA,
+      maxTokens: 1200,
+      final: false,
+      retry: true,
+      parse: (raw) => normalizePlan(raw, state.catalog),
     });
-
-    const review = normalizeEvidenceReview(value, state, round);
-    const nextActions = review.stop ? [] : review.nextActions;
-    const stopReason = decideStopReason(review, round, state.budget.maxRounds);
-    const requestedSourceIds = mergeRequestedSourceIds(state.requestedSourceIds, review.nextActions, state.manifest);
-    const retrievalRound = makeRetrievalRound(
-      round,
-      state.lastReadPages,
-      review.keepPages,
-      review.dropPages,
-      nextActions,
-      review.coverage,
-      stopReason,
-    );
-    ctx.appendEvent({
-      type: "evidence_reviewed",
-      msg: `第 ${round} 轮证据审查完成`,
-      round,
-      keptPages: review.keepPages.map((page) => page.path),
-      droppedPages: review.dropPages.map((page) => page.path),
-      nextActions,
-      stopReason,
-      coverage: review.coverage,
-    });
-    return {
-      round,
-      keptPages: review.keepPages,
-      discardedPages: mergeDiscardedPages(state.discardedPages, review.dropPages),
-      retrievalRounds: [...state.retrievalRounds, retrievalRound],
-      pendingActions: nextActions,
-      requestedSourceIds,
-      stopReason,
-      gaps: uniqueStrings([...state.gaps, ...review.gaps]),
-      tokens,
-    };
+    if (!value) {
+      if (state.stopReason) return emptyPlan();
+      throw new Error("Planner 未返回有效 JSON 计划");
+    }
+    return value;
   }
 
-  private async executeNextActions(
+  private async react(
     ctx: AgentRunnerContext<LlmWikiAgentInput>,
     state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const nextPageActions: RetrievalAction[] = [];
-    const requestedSourceIds = new Set(state.requestedSourceIds);
-    const seen = new Set(state.pages.map((page) => page.path));
-    const remaining = Math.max(0, state.budget.maxEvidencePages - state.pages.length);
+    kind: "fast" | "quality",
+  ): Promise<ReactDecision | null> {
+    const system = [
+      "你是 LLM Wiki ReAct 决策器，只决定证据与下一步 Tool，不直接回答用户问题。",
+      "只返回 JSON 对象，不得返回答案、解释、Markdown 或代码块。唯一顶层结构：{\"coverage\":[],\"evidence\":[],\"actions\":[],\"conflicts\":[],\"gaps\":[],\"finish\":false,\"finishReason\":\"\",\"escalateToQuality\":false}。",
+      "coverage 项只能有 taskId/status/note，status 为 covered|partial|missing。evidence 项必须有 taskId/kind/quote/claim；page/fact 使用 pageKey，source 使用 sourceId/sourceLine。",
+      "actions 项按 Tool 只使用对应字段：searchWiki(tool/query/reason)、readPage(tool/pageKey/reason)、readSource(tool/sourceId/startLine/endLine/reason)、finish(tool/reason)。",
+      "只能从 Observation 中选择证据，禁止根据常识补充。所有数组无内容时返回 []，所有布尔值必须明确返回。",
+      "每轮最多 6 个 Action。searchWiki/readPage/readSource 会由服务端校验、去重和限额；需要结束时设置 finish=true 或加入 finish Action。",
+      "证据 quote 必须是 Observation 中逐字可查的片段。source 证据必须来自已读取 Source 的范围；fact 证据必须来自 page.keyFacts。",
+      "若任务还缺精确命令、配置、数字或安全信息，先 readSource 对应行号窗口。",
+      "不要重复请求已读内容；有冲突要报告 conflicts；无法推进时报告 gaps 并请求质量升级。",
+      kind === "fast" ? "你是快速模型，遇到冲突、多源交叉或本轮无进展应设置 escalateToQuality=true。" : "你是质量模型，负责解决冲突、补齐多源证据并作出结束判断。",
+    ].join("\n");
+    const value = await this.callJson(ctx, state, {
+      stage: `react_${state.round}`,
+      model: kind === "fast" ? ctx.input.fastModel : ctx.input.qualityModel,
+      system,
+      payload: reactPayload(state),
+      format: REACT_SCHEMA,
+      maxTokens: 1500,
+      final: false,
+      retry: true,
+    });
+    return value ? normalizeReact(value) : null;
+  }
 
-    for (const action of state.pendingActions) {
-      if (action.type === "stop") {
-        return { stopReason: "complete", pendingActions: [] };
-      }
-      if (action.type === "read_source") {
-        if (isKnownSourceId(state.manifest, action.sourceId)) requestedSourceIds.add(String(action.sourceId));
-        continue;
-      }
-      if (nextPageActions.length >= remaining) break;
-      if (action.type === "search_wiki") {
-        const query = stringField(action.query);
-        if (!query) continue;
-        const res = this.tools.searchWiki(query, Math.min(remaining + 8, 24));
-        ctx.appendEvent({
-          type: "action_search_done",
-          msg: `执行 reviewer 检索: ${query}`,
-          query,
-          hitCount: res.hits.length,
-          round: state.round,
-        });
-        for (const hit of res.hits) {
-          if (nextPageActions.length >= remaining) break;
-          if (seen.has(hit.path) || !isKnownWikiPath(state.manifest, hit.path)) continue;
-          nextPageActions.push({
-            type: "read_page",
-            path: hit.path,
-            reason: action.reason,
-            taskIndex: action.taskIndex ?? inferTaskIndexForPath(hit.path, state.plan),
-            taskGoal: action.taskGoal || inferTaskGoalForPath(hit.path, state.plan),
-            taskContribution: inferTaskContributionForPath(hit.path, state.plan),
-            why: "search_hit",
-            score: scorePlannedPage({
-              baseScore: hit.score,
-              pageType: hit.type,
-              reason: "search_hit",
-              taskIndex: action.taskIndex ?? inferTaskIndexForPath(hit.path, state.plan),
-            }),
-            required: false,
-          });
-          seen.add(hit.path);
-        }
-        continue;
-      }
-      if (action.type === "follow_link") {
-        const fromPath = stringField(action.fromPath);
-        const path = stringField(action.path);
-        const fromPage = state.pages.find((page) => page.path === fromPath);
-        if (!fromPage || !path || seen.has(path) || !isKnownWikiPath(state.manifest, path)) continue;
-        if (!fromPage.links.includes(path)) continue;
-        nextPageActions.push({
-          ...action,
-          type: "read_page",
-          taskIndex: fromPage.taskIndex,
-          taskGoal: fromPage.taskGoal,
-          taskContribution: fromPage.taskContribution,
-          why: "linked_page",
-          score: scorePlannedPage({
-            baseScore: Number(action.score || 0),
-            pageType: pageRef(state.manifest, path)?.type || "",
-            reason: "linked_page",
-            taskIndex: fromPage.taskIndex,
-          }),
-          required: false,
-        });
-        seen.add(path);
-        continue;
-      }
-      if (action.type === "read_page") {
-        const path = stringField(action.path);
-        if (!path || seen.has(path) || !isKnownWikiPath(state.manifest, path)) continue;
-        nextPageActions.push({
-          ...action,
-          taskIndex: action.taskIndex ?? inferTaskIndexForPath(path, state.plan),
-          taskGoal: action.taskGoal || inferTaskGoalForPath(path, state.plan),
-          taskContribution: action.taskContribution || inferTaskContributionForPath(path, state.plan),
-          why: action.why || "search_hit",
-          score:
-            typeof action.score === "number"
-              ? action.score
-              : scorePlannedPage({
-                  baseScore: 0,
-                  pageType: pageRef(state.manifest, path)?.type || "",
-                  reason: action.why || "search_hit",
-                  taskIndex: action.taskIndex ?? inferTaskIndexForPath(path, state.plan),
-                }),
-          required: Boolean(action.required),
-        });
-        seen.add(path);
-      }
-    }
+  private async summarize(
+    ctx: AgentRunnerContext<LlmWikiAgentInput>,
+    state: LlmWikiAgentState,
+  ): Promise<FinalAnswer> {
+    const value = await this.callJson(ctx, state, {
+      stage: "final",
+      model: ctx.input.qualityModel,
+      system: [
+        "你是 LLM Wiki 最终汇总模型。只能基于输入中的已验证证据回答；不能引用未列出的页面、目录或搜索结果。",
+        "引用只使用 evidenceId，写入 citations 数组；若证据无法回答问题，answerable=false，并明确 gaps。",
+        "答案用中文，简洁、直接。对命令、配置、数字和安全结论仅在 Source 证据存在时陈述。",
+        "只返回 JSON 对象，不得在 JSON 外输出解释或 Markdown。唯一结构：{\"answerable\":true,\"answerMarkdown\":\"答案正文\",\"citations\":[\"E1\"],\"gaps\":[]}。",
+      ].join("\n"),
+      payload: {
+        query: state.query,
+        tasks: state.plan?.tasks || [],
+        evidence: state.evidence,
+        coverage: state.coverage,
+        conflicts: state.conflicts,
+        gaps: state.gaps,
+      },
+      format: FINAL_SCHEMA,
+      maxTokens: 4000,
+      final: true,
+      retry: true,
+    });
+    if (!value) return { answerable: false, answerMarkdown: fallbackMarkdown(state), citations: [], gaps: ["最终汇总模型未返回有效 JSON。"] };
+    const parsed = normalizeFinal(value);
+    const validIds = new Set(state.evidence.map((item) => item.evidenceId));
+    return { ...parsed, citations: parsed.citations.filter((id) => validIds.has(id)) };
+  }
 
-    if (nextPageActions.length === 0) {
+  private async executeActions(
+    ctx: AgentRunnerContext<LlmWikiAgentInput>,
+    state: LlmWikiAgentState,
+    actions: ReactAction[],
+    round: number,
+  ): Promise<{ observations: RetrievalRound["observations"]; rejected: string[]; fresh: number }> {
+    const observations: RetrievalRound["observations"] = [];
+    const rejected: string[] = [];
+    let fresh = 0;
+    const usable = actions.slice(0, MAX_ACTIONS_PER_ROUND);
+    const pageReadLimit = 4;
+    let pageReads = 0;
+    for (const action of usable) {
+      this.assertActive(ctx);
+      const request = toolRequest(action);
       ctx.appendEvent({
-        type: "next_actions_executed",
-        msg: "没有可继续执行的检索动作，进入最终核验",
-        requestedSourceIds: [...requestedSourceIds],
-        round: state.round,
+        type: "tool_request",
+        msg: `调用 Tool：${action.tool}`,
+        round,
+        tool: action.tool,
+        request,
       });
-      return {
-        pendingActions: [],
-        requestedSourceIds: [...requestedSourceIds],
-        stopReason: state.keptPages.length ? "no_new_actions" : "insufficient_evidence",
-      };
+      if (action.tool === "finish") {
+        ctx.appendEvent({
+          type: "tool_response",
+          msg: "Tool 返回：finish",
+          round,
+          tool: action.tool,
+          status: "success",
+          response: { finished: true, reason: action.reason || "" },
+        });
+        continue;
+      }
+      const result = this.executeAction(state, action, pageReads, pageReadLimit);
+      if ("reject" in result) {
+        rejected.push(result.reject);
+        ctx.appendEvent({
+          type: "tool_response",
+          msg: `Tool 拒绝：${action.tool}`,
+          round,
+          tool: action.tool,
+          status: "rejected",
+          error: result.reject,
+        });
+        continue;
+      }
+      if (action.tool === "readPage") pageReads += 1;
+      observations.push(result.observation);
+      if (!result.observation.cached) fresh += 1;
+      ctx.appendEvent({
+        type: "tool_response",
+        msg: `Tool 返回：${action.tool}`,
+        round,
+        tool: action.tool,
+        status: "success",
+        cached: result.observation.cached,
+        response: result.response,
+      });
     }
-
-    ctx.appendEvent({
-      type: "next_actions_executed",
-      msg: `已生成下一轮读取动作 ${nextPageActions.length} 个`,
-      actions: nextPageActions,
-      requestedSourceIds: [...requestedSourceIds],
-      round: state.round,
-    });
-    return {
-      pendingActions: nextPageActions,
-      requestedSourceIds: [...requestedSourceIds],
-      stopReason: null,
-    };
+    return { observations, rejected: unique(rejected), fresh };
   }
 
-  private async readRawSources(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
+  private executeAction(
     state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    if (state.sourcePolicy === "wiki-only" || state.budget.maxRawSources <= 0) {
-      ctx.appendEvent({
-        type: "sources_skipped",
-        msg:
-          state.sourcePolicy === "wiki-only"
-            ? "sourcePolicy=wiki-only，跳过 raw source 读取"
-            : "maxRawSources=0，跳过 raw source 读取",
-        sourcePolicy: state.sourcePolicy,
-        maxRawSources: state.budget.maxRawSources,
-      });
-      return { sources: [] };
+    action: Exclude<ReactAction, FinishAction>,
+    pageReads: number,
+    pageReadLimit: number,
+  ): { observation: RetrievalRound["observations"][number]; response: unknown } | { reject: string } {
+    const catalog = state.catalog;
+    if (!catalog) return { reject: "Catalog 尚未加载。" };
+    const pageKeys = new Set(catalog.pages.map((item) => item.pageKey));
+    const sourceById = new Map(catalog.sources.map((item) => [item.sourceId, item]));
+    try {
+      if (action.tool === "searchWiki") {
+        const query = string(action.query);
+        if (!query) return { reject: "searchWiki.query 不能为空。" };
+        const cached = state.searches.get(query);
+        if (cached) return { observation: { tool: "searchWiki", key: query, cached: true, summary: `缓存命中 ${cached.items.length} 个结果` }, response: cached };
+        if (state.searches.size >= MAX_SEARCHES) return { reject: `已达到 ${MAX_SEARCHES} 次 searchWiki 上限。` };
+        const result = this.tools.searchWiki(query);
+        state.searches.set(query, result);
+        return { observation: { tool: "searchWiki", key: query, cached: false, summary: `返回 ${result.items.length} 个结果` }, response: result };
+      }
+      if (action.tool === "readPage") {
+        const pageKey = string(action.pageKey);
+        if (!pageKey || !pageKeys.has(pageKey)) return { reject: `readPage.pageKey 不在当前 Catalog: ${pageKey || "(空)"}` };
+        const cached = state.pages.get(pageKey);
+        if (cached) return { observation: { tool: "readPage", key: pageKey, cached: true, summary: `缓存命中：${cached.page.title}` }, response: cached };
+        if (pageReads >= pageReadLimit) return { reject: `本轮 readPage 最多 ${pageReadLimit} 次。` };
+        if (state.pages.size >= state.input.limit) return { reject: `已达到 limit=${state.input.limit} 的页面读取上限。` };
+        const result = this.tools.readPage(pageKey);
+        state.pages.set(pageKey, result);
+        return { observation: { tool: "readPage", key: pageKey, cached: false, summary: `读取 ${result.page.title}，含 ${result.page.keyFacts.length} 条 Facts` }, response: result };
+      }
+      const sourceId = string(action.sourceId);
+      const source = sourceById.get(sourceId);
+      if (!source) return { reject: `readSource.sourceId 不在当前 Catalog: ${sourceId || "(空)"}` };
+      const range = resolveSourceRange(state, sourceId, source.lineCount, action.startLine, action.endLine);
+      if (!range) return { reject: `readSource 需要已知 Fact 行号；仅行数不超过 200 的 Source 可不带行号整篇读取。` };
+      const cacheKey = `${sourceId}:${range.startLine}-${range.endLine}`;
+      const cached = state.sources.get(cacheKey);
+      if (cached) return { observation: { tool: "readSource", key: cacheKey, cached: true, summary: `缓存命中 ${source.filename} L${range.startLine}-L${range.endLine}` }, response: cached };
+      if (state.sources.size >= MAX_SOURCE_READS) return { reject: `已达到 ${MAX_SOURCE_READS} 次 readSource 上限。` };
+      const result = this.tools.readSource(sourceId, range.startLine, range.endLine);
+      state.sources.set(cacheKey, result);
+      return { observation: { tool: "readSource", key: cacheKey, cached: false, summary: `读取 ${result.source.filename} L${result.range.startLine}-L${result.range.endLine}` }, response: result };
+    } catch (error) {
+      return { reject: `${action.tool} 执行失败: ${errorMessage(error)}` };
     }
-    const keptPages = pagesForKept(state);
-    const selected = selectSourceRefs(
-      keptPages,
-      state.sourcePolicy,
-      state.requestedSourceIds,
-      state.budget.maxRawSources,
-    );
-    const sources: SourceEvidence[] = [];
-    for (const source of selected) {
-      try {
-        const raw = this.tools.readRawSource(source.source_id);
-        sources.push({
-          source_id: raw.source_id,
-          filename: raw.filename,
-          content: truncate(raw.content, 10000),
-          taskGoals: source.taskGoals,
-          pagePaths: source.pagePaths,
-          supportSummary: "",
-        });
-        ctx.appendEvent({
-          type: "source_verified",
-          msg: `读取 raw source: ${raw.filename}`,
-          source_id: raw.source_id,
-          filename: raw.filename,
-          taskGoals: source.taskGoals,
-          pagePaths: source.pagePaths,
-        });
-      } catch (err) {
-        ctx.appendEvent({
-          type: "source_verified",
-          msg: `读取 raw source 失败: ${source.source_id}`,
-          status: "failed",
-          source_id: source.source_id,
-          error: formatError(err),
-        });
+  }
+
+  private acceptEvidence(state: LlmWikiAgentState, selected: EvidenceSelection[]): number {
+    const tasks = new Map((state.plan?.tasks || []).map((task) => [task.taskId, task]));
+    let accepted = 0;
+    for (const candidate of selected) {
+      const task = tasks.get(string(candidate.taskId));
+      const evidence = validateEvidence(state, task, candidate);
+      if (!evidence) continue;
+      const exists = state.evidence.some((item) => sameEvidence(item, evidence));
+      if (!exists) {
+        state.evidence.push({ ...evidence, evidenceId: `E${state.evidence.length + 1}` });
+        accepted += 1;
       }
     }
-    return { sources };
+    return accepted;
   }
 
-  private async reviewSources(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    if (!state.keptPages.length) {
-      return {
-        sourceReviews: [],
-        coverageSummary: "未保留足够 Wiki 页面，无法完成 source 核验。",
-        stopReason: state.stopReason || "insufficient_evidence",
-      };
+  private evidenceGate(state: LlmWikiAgentState): { ok: boolean; gaps: string[] } {
+    const gaps: string[] = [];
+    if (state.conflicts.length) gaps.push(...state.conflicts.map((item) => `未解决冲突：${item}`));
+    for (const task of state.plan?.tasks || []) {
+      const evidence = state.evidence.filter((item) => item.taskId === task.taskId);
+      if (!evidence.length) {
+        gaps.push(`必答任务未覆盖：${task.question}`);
+        continue;
+      }
+      if (task.evidenceRequirement === "fact" && !evidence.some((item) => item.kind === "fact")) {
+        gaps.push(`任务需要 Page Fact 证据：${task.question}`);
+      }
+      if (task.evidenceRequirement === "source" && !evidence.some((item) => item.kind === "source" && item.range)) {
+        gaps.push(`任务需要 Source 行号证据：${task.question}`);
+      }
     }
-    if (!hasRemainingTokenBudget(state.tokens, 256)) {
-      return {
-        sourceReviews: defaultSourceReviews(state),
-        coverageSummary: "Token 预算已用尽，source support 使用未核验状态。",
-        stopReason: state.stopReason || "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算已用尽，无法完成 raw source 核验。"]),
-      };
-    }
-    const payload = compactPayloadForBudget(state, {
-      output_schema: {
-        sourceReviews: "array of {path:string, sourceSupport:'verified'|'wiki-only'|'partial'|'conflict'|'unknown', supportSummary:string}",
-        gaps: "string[]",
-        coverageSummary: "string",
-      },
-      query: state.query,
-      sourcePolicy: state.sourcePolicy,
-      keptPages: pagesForKept(state).map((page) => pageForReviewPrompt(page)),
-      rawSources: state.sources.map((source) => ({
-        source_id: source.source_id,
-        filename: source.filename,
-        pagePaths: source.pagePaths,
-        content: truncate(source.content, 5000),
-      })),
-    });
-    if (!payload) {
-      return {
-        sourceReviews: defaultSourceReviews(state),
-        coverageSummary: "Token 预算不足，source support 使用未核验状态。",
-        stopReason: state.stopReason || "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算不足，无法构造 source review 输入。"]),
-      };
-    }
-    const { value, tokens } = await this.callJsonWithRetry(ctx, state, {
-      model: state.models.reviewerModel,
-      phase: "review_sources",
-      temperature: 0,
-      system: [
-        "你是 LLM Wiki source reviewer。只输出 JSON,不要输出 Markdown。",
-        "你必须判断最终保留的 Wiki 页面是否被 raw source 支撑。",
-        "wiki-only 策略下 sourceSupport 必须是 wiki-only。",
-        "发现冲突或证据不足时必须明确写入 gaps。",
-      ].join("\n"),
-      payload,
-    });
-    const normalized = normalizeSourceReview(value, state);
-    ctx.appendEvent({
-      type: "sources_reviewed",
-      msg: "raw source 核验完成",
-      sourceReviews: normalized.sourceReviews,
-      coverageSummary: normalized.coverageSummary,
-    });
-    return {
-      sourceReviews: normalized.sourceReviews,
-      coverageSummary: normalized.coverageSummary,
-      gaps: uniqueStrings([...state.gaps, ...normalized.gaps]),
-      sources: state.sources.map((source) => ({
-        ...source,
-        supportSummary: normalized.sourceReviews
-          .filter((review) => source.pagePaths.includes(review.path))
-          .map((review) => review.supportSummary)
-          .filter(Boolean)
-          .join("\n"),
-      })),
-      tokens,
-    };
+    return { ok: gaps.length === 0, gaps: unique(gaps) };
   }
 
-  private async buildFinalSnippets(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    const knowledgeSnippets = buildKnowledgeSnippets(state);
-    const answerMarkdown = renderSnippetsMarkdown(state, knowledgeSnippets);
-    const resultJson = resultJsonFromState(state, answerMarkdown, knowledgeSnippets);
-    ctx.appendEvent({
-      type: "snippets_built",
-      msg: `已生成最终知识片段 ${knowledgeSnippets.length} 个`,
-      snippets: knowledgeSnippets.map((snippet) => ({
-        path: snippet.path,
-        title: snippet.title,
-        sourceSupport: snippet.sourceSupport,
-        selectedInRound: snippet.selectedInRound,
-      })),
-    });
-    return { knowledgeSnippets, answerMarkdown, resultJson };
-  }
-
-  private async maybeSynthesize(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    this.assertActive(ctx);
-    if (!state.knowledgeSnippets.length) {
-      const answerMarkdown = fallbackMarkdown(state);
-      return {
-        answerMarkdown,
-        resultJson: resultJsonFromState(state, answerMarkdown, state.knowledgeSnippets),
-        stopReason: state.stopReason || "insufficient_evidence",
-      };
-    }
-    if (!hasRemainingTokenBudget(state.tokens, 512)) {
-      const answerMarkdown = renderSnippetsMarkdown(state, state.knowledgeSnippets);
-      return {
-        answerMarkdown,
-        resultJson: resultJsonFromState(state, answerMarkdown, state.knowledgeSnippets),
-        stopReason: state.stopReason || "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算已用尽，未执行自然语言合成。"]),
-      };
-    }
-    const payload = compactPayloadForBudget(state, {
-      output_schema: {
-        answerMarkdown: "string",
-        citations: "array of {path,title,sources}",
-        gaps: "string[]",
-        coverageSummary: "string",
-      },
-      query: state.query,
-      plan: state.plan,
-      retrievalRounds: state.retrievalRounds,
-      knowledgeSnippets: state.knowledgeSnippets.map((snippet) => ({
-        ...snippet,
-        content: truncate(snippet.content, 5000),
-      })),
-      rawSources: state.sources.map((source) => ({
-        source_id: source.source_id,
-        filename: source.filename,
-        pagePaths: source.pagePaths,
-        supportSummary: source.supportSummary,
-      })),
-      gaps: state.gaps,
-      coverageSummary: state.coverageSummary,
-      stopReason: state.stopReason,
-    });
-    if (!payload) {
-      const answerMarkdown = renderSnippetsMarkdown(state, state.knowledgeSnippets);
-      return {
-        answerMarkdown,
-        resultJson: resultJsonFromState(state, answerMarkdown, state.knowledgeSnippets),
-        stopReason: state.stopReason || "token_limit",
-        gaps: uniqueStrings([...state.gaps, "Token 预算不足，未执行自然语言合成。"]),
-      };
-    }
-    const { value, tokens } = await this.callJsonWithRetry(ctx, state, {
-      model: state.models.synthesizerModel,
-      phase: "synthesize",
-      temperature: 0.2,
-      system: [
-        "你是 LLM Wiki Knowledge Agent。只基于最终知识片段和 source review 生成答案。",
-        "不能使用未保留页面或外部常识补事实。",
-        "answerMarkdown 必须包含“依据”和“未覆盖/不确定点”。",
-        "只输出 JSON,不要输出 Markdown 代码块。",
-      ].join("\n"),
-      payload,
-    });
-    const resultJson = normalizeSynthesis(value, state);
-    const answerMarkdown = ensureAnswerMarkdownSections(
-      String(resultJson.answerMarkdown || fallbackMarkdown(state)),
-      resultJson,
-      state,
-    );
-    resultJson.answerMarkdown = answerMarkdown;
-    return { answerMarkdown, resultJson, tokens };
-  }
-
-  private async finish(
-    ctx: AgentRunnerContext<LlmWikiAgentInput>,
-    state: LlmWikiAgentState,
-  ): Promise<Partial<LlmWikiAgentState>> {
-    ctx.appendEvent({
-      type: "result",
-      msg: "LLM Wiki Agent 多轮证据检索完成",
-      status: "success",
-      stopReason: state.stopReason,
-      rounds: state.round,
-      pageCount: state.pages.length,
-      keptPageCount: state.keptPages.length,
-      sourceCount: state.sources.length,
-    });
-    return {};
-  }
-
-  private async callJsonWithRetry(
+  private async callJson<T = Record<string, unknown>>(
     ctx: AgentRunnerContext<LlmWikiAgentInput>,
     state: LlmWikiAgentState,
     args: {
+      stage: string;
       model: string;
-      phase: string;
-      temperature: number;
       system: string;
       payload: unknown;
+      format: RawChatResponseFormat;
+      maxTokens: number;
+      final: boolean;
+      retry: boolean;
+      parse?: (value: Record<string, unknown>) => T;
     },
-  ): Promise<{ value: Record<string, unknown>; tokens: AgentRunTokens }> {
-    let tokens = state.tokens;
+  ): Promise<T | null> {
+    const prompt = JSON.stringify(args.payload);
+    const estimatedInput = estimateTokens(args.system) + estimateTokens(prompt);
+    const available = args.final ? TOKEN_LIMIT : TOKEN_LIMIT - FINAL_TOKEN_RESERVE;
+    if (state.tokens.totalTokens + estimatedInput + args.maxTokens > available) {
+      state.stopReason = "token_limit";
+      state.gaps.push("已达到 Agent Token 预算，保留最终汇总额度。");
+      return null;
+    }
+    if (state.baseModelCalls >= MAX_MODEL_CALLS) {
+      state.stopReason = "token_limit";
+      state.gaps.push("已达到 6 个模型逻辑阶段上限。");
+      return null;
+    }
+    state.baseModelCalls += 1;
+    const attempts = args.retry ? 2 : 1;
     let lastError = "";
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    let lastContent = "";
+    for (let index = 0; index < attempts; index += 1) {
       this.assertActive(ctx);
-      ctx.appendEvent({
-        type: "model_start",
-        msg: `模型调用开始: ${args.phase}`,
-        model: args.model,
-        phase: args.phase,
-        attempt,
-      });
-      try {
-        const res = await this.model.chat({
-          model: args.model,
-          temperature: args.temperature,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: args.system },
-            { role: "user", content: JSON.stringify(args.payload, null, 2) },
-          ],
+      if (state.modelAttempts >= MAX_MODEL_ATTEMPTS) {
+        state.stopReason = "token_limit";
+        state.gaps.push("已达到模型调用上限。");
+        return null;
+      }
+      if (index > 0 && state.retries >= MAX_MODEL_RETRIES) break;
+      const messages: Array<{ role: string; content: string }> = [
+        { role: "system", content: args.system },
+        { role: "user", content: prompt },
+      ];
+      if (index > 0) {
+        if (lastContent) messages.push({ role: "assistant", content: lastContent });
+        messages.push({
+          role: "user",
+          content: `上次输出未通过校验：${truncate(lastError.replace(/\s+/g, " "), 300)}。请严格按 system 指定的 JSON 字段修正，只返回 JSON。`,
         });
-        const usage = extractUsage(res);
-        tokens = accumulateUsage(tokens, usage);
-        const parsed = parseJsonObject(extractContent(res));
-        if (!parsed) throw new Error("模型未返回合法 JSON");
+      }
+      const attemptInput = messages.reduce((sum, message) => sum + estimateTokens(message.content), 0);
+      if (state.tokens.totalTokens + attemptInput + args.maxTokens > available) {
+        state.stopReason = "token_limit";
+        state.gaps.push("模型调用会超过 Agent Token 预算。");
+        return null;
+      }
+      if (index > 0) {
         ctx.appendEvent({
-          type: "model_end",
-          msg: `模型调用完成: ${args.phase}`,
-          status: "success",
+          type: "model_json_retry",
+          msg: `${args.stage} 正在纠正无效 JSON`,
           model: args.model,
-          phase: args.phase,
-          attempt,
-          usage,
-          tokens,
-        });
-        return { value: parsed, tokens };
-      } catch (err) {
-        lastError = formatError(err);
-        ctx.appendEvent({
-          type: "model_end",
-          msg: `模型调用失败: ${args.phase}`,
-          status: "failed",
-          model: args.model,
-          phase: args.phase,
-          attempt,
           error: lastError,
         });
       }
+      state.modelAttempts += 1;
+      state.tokens.modelCalls += 1;
+      state.tokens.rounds = state.tokens.modelCalls;
+      let responseReceived = false;
+      try {
+        const response = await this.model.chat({
+          model: args.model,
+          messages,
+          temperature: 0,
+          response_format: args.format,
+          maxTokens: args.maxTokens,
+          signal: ctx.signal,
+          onRequest: (request) => ctx.appendEvent({
+            type: "model_request",
+            msg: `请求模型：${args.stage}`,
+            stage: args.stage,
+            attempt: index + 1,
+            model: args.model,
+            request,
+          }),
+          onResponse: (modelResponse) => {
+            responseReceived = true;
+            ctx.appendEvent({
+              type: "model_response",
+              msg: `模型返回：${args.stage}`,
+              stage: args.stage,
+              attempt: index + 1,
+              model: args.model,
+              response: modelResponse,
+            });
+          },
+        });
+        const content = responseContent(response);
+        lastContent = content;
+        state.tokens.inputTokens += attemptInput;
+        state.tokens.outputTokens += estimateTokens(content);
+        state.tokens.totalTokens = state.tokens.inputTokens + state.tokens.outputTokens;
+        const value = parseJsonObject(content);
+        return args.parse ? args.parse(value) : value as T;
+      } catch (error) {
+        if (ctx.signal.aborted) throw error;
+        lastError = errorMessage(error);
+        ctx.appendEvent({
+          type: responseReceived ? "model_validation_error" : "model_error",
+          msg: responseReceived ? `模型返回校验失败：${args.stage}` : `模型请求失败：${args.stage}`,
+          stage: args.stage,
+          attempt: index + 1,
+          model: args.model,
+          error: lastError,
+        });
+      }
+      if (index + 1 < attempts && state.retries < MAX_MODEL_RETRIES) state.retries += 1;
     }
-    throw new Error(`${args.phase} 失败: ${lastError}`);
+    ctx.appendEvent({ type: "model_json_error", msg: `${args.stage} 未返回有效 JSON`, model: args.model, error: lastError });
+    return null;
   }
 
-  private assertModelsAvailable(models: LlmWikiModels): void {
-    const missing = [models.plannerModel, models.reviewerModel, models.synthesizerModel]
-      .filter((model, index, all) => all.indexOf(model) === index)
-      .filter((model) => !this.model.findModel(model));
-    if (missing.length > 0 || !this.model.hasConfiguredModel()) {
-      throw new Error(`未配置可用模型: ${missing.join(", ") || "OPENAI_API_KEY / 模型名称"}`);
-    }
+  private runnerMeta(state: LlmWikiAgentState): Record<string, unknown> {
+    return {
+      models: { fastModel: state.input.fastModel, qualityModel: state.input.qualityModel },
+      catalogFingerprint: state.catalogFingerprint,
+      rounds: state.round,
+      modelAttempts: state.modelAttempts,
+      baseModelCalls: state.baseModelCalls,
+      retries: state.retries,
+      searches: state.searches.size,
+      pages: state.pages.size,
+      sourceReads: state.sources.size,
+      evidenceCount: state.evidence.length,
+      stopReason: state.stopReason,
+    };
+  }
+
+  private finishResult(
+    ctx: AgentRunnerContext<LlmWikiAgentInput>,
+    state: LlmWikiAgentState,
+    final: FinalAnswer,
+  ): AgentRunnerResult {
+    const runnerMeta = this.runnerMeta(state);
+    ctx.updateRunnerMeta(runnerMeta);
+    return {
+      status: state.stopReason === "complete" ? "success" : "insufficient",
+      content: final.answerMarkdown,
+      resultJson: buildResultJson(state, final),
+      runnerMeta,
+      tokens: state.tokens,
+      stats: {
+        modelCalls: state.tokens.modelCalls,
+        toolRounds: state.retrievalRounds.length,
+        searches: state.searches.size,
+        pages: state.pages.size,
+        sourceReads: state.sources.size,
+      },
+    };
   }
 
   private assertActive(ctx: AgentRunnerContext<LlmWikiAgentInput>): void {
-    if (ctx.signal.aborted) throw new Error("aborted");
+    if (ctx.signal.aborted) throw new Error("任务被用户取消");
   }
+}
 
-  private defaultModels(): LlmWikiModels {
-    const fastModel = this.model.resolveModel(agentConfig.defaultFastModel);
-    const mainModel = this.model.resolveModel(agentConfig.defaultMainModel || agentConfig.defaultFastModel);
+function emptyState(input: LlmWikiAgentInput): LlmWikiAgentState {
+  return {
+    query: input.query,
+    input,
+    catalog: null,
+    plannerCatalog: null,
+    catalogFingerprint: "",
+    plan: null,
+    round: 0,
+    pages: new Map(),
+    searches: new Map(),
+    sources: new Map(),
+    evidence: [],
+    coverage: [],
+    gaps: [],
+    conflicts: [],
+    retrievalRounds: [],
+    stopReason: null,
+    tokens: { inputTokens: 0, outputTokens: 0, totalTokens: 0, rounds: 0, modelCalls: 0, tokenLimit: TOKEN_LIMIT },
+    modelAttempts: 0,
+    retries: 0,
+    baseModelCalls: 0,
+    lastRoundProgress: true,
+    qualityReactNext: false,
+    newObservations: {},
+  };
+}
+
+function emptyPlan(): QueryPlan {
+  return { relevant: true, tasks: [], actions: [] };
+}
+
+function plannerCatalog(catalog: ToolsCatalog): PlannerCatalogPage[] {
+  return catalog.pages
+    .map((page): PlannerCatalogPage => [page.pageKey, page.title, page.goal])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function catalogFingerprint(catalog: ToolsCatalog): string {
+  const value = {
+    stats: catalog.stats,
+    pages: catalog.pages
+      .map((page) => ({
+        ...page,
+        sourceIds: [...page.sourceIds].sort(),
+        relatedPageKeys: [...page.relatedPageKeys].sort(),
+      }))
+      .sort((a, b) => a.pageKey.localeCompare(b.pageKey)),
+    sources: catalog.sources
+      .map((source) => ({ ...source, pageKeys: [...source.pageKeys].sort() }))
+      .sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
+  };
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function toReactAction(action: PlannerAction): ReactAction {
+  return action.tool === "searchWiki"
+    ? { tool: "searchWiki", query: action.value }
+    : { tool: "readPage", pageKey: action.value };
+}
+
+function toolRequest(action: ReactAction): Record<string, unknown> {
+  if (action.tool === "searchWiki") return { query: action.query, reason: action.reason || undefined };
+  if (action.tool === "readPage") return { pageKey: action.pageKey, reason: action.reason || undefined };
+  if (action.tool === "readSource") {
     return {
-      plannerModel: fastModel,
-      reviewerModel: fastModel,
-      synthesizerModel: mainModel || fastModel,
+      sourceId: action.sourceId,
+      startLine: action.startLine,
+      endLine: action.endLine,
+      reason: action.reason || undefined,
     };
   }
+  return { reason: action.reason || undefined };
 }
 
-function defaultBudget(): LlmWikiBudget {
-  return {
-    maxRounds: DEFAULT_MAX_ROUNDS,
-    maxEvidencePages: DEFAULT_MAX_EVIDENCE_PAGES,
-    maxRawSources: DEFAULT_MAX_RAW_SOURCES,
-    tokenLimit: null,
-  };
-}
-
-function resolveBudget(value: unknown): LlmWikiBudget {
-  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  return {
-    maxRounds: clampInt(raw.maxRounds, 1, 8, DEFAULT_MAX_ROUNDS),
-    maxEvidencePages: clampInt(raw.maxEvidencePages, 8, 96, DEFAULT_MAX_EVIDENCE_PAGES),
-    maxRawSources: clampInt(raw.maxRawSources, 0, 24, DEFAULT_MAX_RAW_SOURCES),
-    tokenLimit: positiveIntOrNull(raw.tokenLimit),
-  };
-}
-
-function resolveModels(value: unknown, defaults: LlmWikiModels): LlmWikiModels {
-  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  return {
-    plannerModel: stringField(raw.plannerModel) || defaults.plannerModel,
-    reviewerModel: stringField(raw.reviewerModel) || defaults.reviewerModel,
-    synthesizerModel: stringField(raw.synthesizerModel) || defaults.synthesizerModel,
-  };
-}
-
-function normalizeInputSourcePolicy(value: unknown): LlmWikiSourcePolicy {
-  if (value === "wiki-only" || value === "key-sources" || value === "exhaustive" || value === "auto") {
-    return value;
+function normalizePlan(value: Record<string, unknown>, catalog: ToolsCatalog | null): QueryPlan {
+  assertOnlyKeys(value, ["relevant", "tasks", "actions"], "Planner 输出");
+  if (!catalog) throw new Error("Planner 校验失败：Catalog 未加载");
+  const rawTasks = array(value.tasks);
+  const rawActions = array(value.actions);
+  if (typeof value.relevant !== "boolean") {
+    throw new Error("Planner 校验失败：relevant 必须是 boolean");
   }
-  return "auto";
-}
-
-function manifestForPrompt(manifest: WikiManifest | null) {
-  if (!manifest) return null;
-  return {
-    stats: manifest.stats,
-    schema: schemaForPrompt(manifest),
-    pageTypeGuide: pageTypeGuide(),
-    index: truncate(manifest.index, 7000),
-    pages: manifest.pages.slice(0, 260).map((page) => ({
-      path: page.path,
-      title: page.title,
-      type: page.type,
-      tags: page.tags,
-      sources: page.sources,
-    })),
-    sources: manifest.sources.slice(0, 120),
-  };
-}
-
-function schemaForPrompt(manifest: WikiManifest | null) {
-  if (!manifest) return null;
-  return {
-    sha256: manifest.schema.sha256,
-    content: truncate(manifest.schema.content, 4000),
-  };
-}
-
-function pageTypeGuide() {
-  return {
-    summary: "source 的整体理解、边界和入口链接",
-    reference: "命令、配置、参数、默认值、字段、API 示例",
-    procedure: "安装、校准、操作等连续步骤",
-    changelog: "版本、日期、配置变更和行为变化",
-    troubleshooting: "错误、异常、现象、原因和处理方式",
-    concept: "概念解释、机制和适用边界",
-    entity: "实体、模块、对象、系统或组件说明",
-  };
-}
-
-function normalizePlan(value: Record<string, unknown> | null, query: string): QueryPlan {
-  const tasks = normalizeTasks(value?.tasks, query);
-  const searchQueries = uniqueStrings([...tasks.flatMap((task) => task.searchQueries), ...stringArray(value?.searchQueries), query]).slice(
-    0,
-    16,
-  );
-  const candidatePaths = uniqueStrings([
-    ...tasks.flatMap((task) => [...task.requiredPaths, ...task.optionalPaths]),
-    ...stringArray(value?.candidatePaths),
-  ]).slice(0, 64);
-  return {
-    queryIntent: normalizeQueryIntent(value?.queryIntent),
-    keywords: stringArray(value?.keywords).slice(0, 16),
-    entities: stringArray(value?.entities).slice(0, 16),
-    tasks,
-    coverage: normalizeCoverage(value?.coverage),
-    candidatePaths,
-    searchQueries,
-    reason: stringField(value?.reason).slice(0, 800),
-  };
-}
-
-function fallbackPlan(query: string): QueryPlan {
-  return {
-    queryIntent: "overview",
-    keywords: splitSearchTerms(query).slice(0, 8),
-    entities: [],
-    tasks: [
-      {
-        goal: query,
-        requiredPaths: [],
-        optionalPaths: [],
-        searchQueries: [query],
-        expectedContribution: "围绕用户问题检索 Wiki 页面，并由 reviewer 判断证据是否足够。",
-      },
-    ],
-    coverage: {
-      coreTopics: [],
-      optionalTopics: [],
-      excludedTopics: [],
-    },
-    candidatePaths: [],
-    searchQueries: [query],
-    reason: "fallback plan",
-  };
-}
-
-function normalizeTasks(value: unknown, query: string): QueryTask[] {
-  const rawTasks = Array.isArray(value) ? value : [];
-  const tasks = rawTasks
-    .map((item): QueryTask | null => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const goal = stringField(raw.goal);
-      const requiredPaths = stringArray(raw.requiredPaths).slice(0, 16);
-      const optionalPaths = stringArray(raw.optionalPaths)
-        .filter((path) => !requiredPaths.includes(path))
-        .slice(0, 16);
-      const searchQueries = uniqueStrings([...stringArray(raw.searchQueries), goal || query]).slice(0, 8);
-      if (!goal && requiredPaths.length === 0 && optionalPaths.length === 0 && searchQueries.length === 0) {
-        return null;
-      }
-      return {
-        goal: goal || query,
-        requiredPaths,
-        optionalPaths,
-        searchQueries,
-        expectedContribution: stringField(raw.expectedContribution) || "补充回答所需的 Wiki 证据。",
-      };
-    })
-    .filter((item): item is QueryTask => Boolean(item))
-    .slice(0, 8);
-  return tasks.length ? tasks : fallbackPlan(query).tasks;
-}
-
-function normalizeCoverage(value: unknown): QueryCoverage {
-  const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  return {
-    coreTopics: stringArray(raw.coreTopics).slice(0, 16),
-    optionalTopics: stringArray(raw.optionalTopics).slice(0, 16),
-    excludedTopics: stringArray(raw.excludedTopics).slice(0, 16),
-  };
-}
-
-function normalizeQueryIntent(value: unknown): QueryIntent {
-  return ["overview", "specific", "compare", "howto", "debug"].includes(String(value))
-    ? (value as QueryIntent)
-    : "overview";
-}
-
-function normalizeEvidenceReview(value: Record<string, unknown>, state: LlmWikiAgentState, round: number) {
-  const readPaths = new Set(state.pages.map((page) => page.path));
-  const keepPages = normalizeKeptPages(value.keepPages, state, round).filter((item) => readPaths.has(item.path));
-  const dropped = normalizeDroppedPages(value.dropPages, state, round).filter((item) => readPaths.has(item.path));
-  const keepPaths = new Set(keepPages.map((page) => page.path));
-  const dropPages = dropped.filter((page) => !keepPaths.has(page.path));
-  return {
-    keepPages,
-    dropPages,
-    coverage: value.coverage && typeof value.coverage === "object" ? value.coverage : {},
-    gaps: stringArray(value.gaps).slice(0, 16),
-    nextActions: normalizeActions(value.nextActions, state).slice(0, 24),
-    stop: value.stop === true,
-    stopReason: normalizeRequestedStopReason(value.stopReason),
-  };
-}
-
-function normalizeKeptPages(value: unknown, state: LlmWikiAgentState, round: number): KeptPage[] {
-  const rawItems = Array.isArray(value) ? value : [];
-  return rawItems
-    .map((item): KeptPage | null => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const path = stringField(raw.path);
-      if (!path) return null;
-      const page = state.pages.find((candidate) => candidate.path === path);
-      return {
-        path,
-        taskGoals: stringArray(raw.taskGoals).length ? stringArray(raw.taskGoals).slice(0, 8) : page ? [page.taskGoal] : [],
-        relevanceScore: clampNumber(raw.relevanceScore, 0, 100, page ? Math.min(Math.max(page.score / 4, 0), 100) : 0),
-        evidenceScore: clampNumber(raw.evidenceScore, 0, 100, page ? Math.min(Math.max(page.score / 4, 0), 100) : 0),
-        selectedInRound: round,
-        whyKept: stringField(raw.whyKept) || "reviewer 保留该页面作为相关证据。",
-      };
-    })
-    .filter((item): item is KeptPage => Boolean(item));
-}
-
-function normalizeDroppedPages(value: unknown, state: LlmWikiAgentState, round: number): DiscardedPage[] {
-  const rawItems = Array.isArray(value) ? value : [];
-  return rawItems
-    .map((item): DiscardedPage | null => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const path = stringField(raw.path);
-      if (!path) return null;
-      const page = state.pages.find((candidate) => candidate.path === path);
-      return {
-        path,
-        title: page?.title || path,
-        reason: stringField(raw.reason) || "reviewer 判定该页面不进入最终证据集。",
-        round,
-      };
-    })
-    .filter((item): item is DiscardedPage => Boolean(item));
-}
-
-function normalizeActions(value: unknown, state: LlmWikiAgentState): RetrievalAction[] {
-  const rawItems = Array.isArray(value) ? value : [];
-  return rawItems
-    .map((item): RetrievalAction | null => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const type = normalizeActionType(raw.type || raw.kind);
-      if (!type) return null;
-      if (type === "stop") return { type, reason: stringField(raw.reason) };
-      if (type === "read_source") {
-        const sourceId = stringField(raw.sourceId || raw.source_id);
-        return sourceId ? { type, sourceId, reason: stringField(raw.reason) } : null;
-      }
-      if (type === "search_wiki") {
-        const query = stringField(raw.query);
-        return query ? { type, query, reason: stringField(raw.reason) } : null;
-      }
-      const path = stringField(raw.path);
-      if (!path) return null;
-      return {
-        type,
-        path,
-        fromPath: stringField(raw.fromPath),
-        reason: stringField(raw.reason),
-        taskIndex: inferTaskIndexForPath(path, state.plan),
-        taskGoal: inferTaskGoalForPath(path, state.plan),
-        taskContribution: inferTaskContributionForPath(path, state.plan),
-        why: type === "follow_link" ? "linked_page" : "search_hit",
-      };
-    })
-    .filter((item): item is RetrievalAction => Boolean(item));
-}
-
-function normalizeActionType(value: unknown): RetrievalAction["type"] | null {
-  if (
-    value === "read_page" ||
-    value === "search_wiki" ||
-    value === "follow_link" ||
-    value === "read_source" ||
-    value === "stop"
-  ) {
-    return value;
-  }
-  return null;
-}
-
-function normalizeRequestedStopReason(value: unknown): StopReason | null {
-  return value === "complete" || value === "insufficient_evidence" ? value : null;
-}
-
-function decideStopReason(
-  review: ReturnType<typeof normalizeEvidenceReview>,
-  round: number,
-  maxRounds: number,
-): StopReason | null {
-  if (review.stop) return review.stopReason || (review.keepPages.length ? "complete" : "insufficient_evidence");
-  if (round >= maxRounds) return "max_rounds";
-  if (!review.nextActions.length) return review.keepPages.length ? "no_new_actions" : "insufficient_evidence";
-  return null;
-}
-
-function normalizeSourceReview(value: Record<string, unknown>, state: LlmWikiAgentState) {
-  const keptPaths = new Set(state.keptPages.map((page) => page.path));
-  const rawItems = Array.isArray(value.sourceReviews) ? value.sourceReviews : [];
-  const fromModel = rawItems
-    .map((item): SourceReview | null => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const path = stringField(raw.path);
-      if (!path || !keptPaths.has(path)) return null;
-      return {
-        path,
-        sourceSupport: state.sourcePolicy === "wiki-only" ? "wiki-only" : normalizeSourceSupport(raw.sourceSupport),
-        supportSummary: stringField(raw.supportSummary).slice(0, 1000),
-      };
-    })
-    .filter((item): item is SourceReview => Boolean(item));
-  const byPath = new Map(fromModel.map((item) => [item.path, item]));
-  const sourceReviews = state.keptPages.map((kept) => byPath.get(kept.path) || defaultSourceReviewForPath(state, kept.path));
-  return {
-    sourceReviews,
-    gaps: stringArray(value.gaps).slice(0, 16),
-    coverageSummary: stringField(value.coverageSummary) || coverageSummaryFromState(state),
-  };
-}
-
-function mergeRequestedSourceIds(
-  prev: string[],
-  actions: RetrievalAction[],
-  manifest: WikiManifest | null,
-): string[] {
-  const requested = new Set(prev);
-  for (const action of actions) {
-    if (action.type === "read_source" && isKnownSourceId(manifest, action.sourceId)) {
-      requested.add(String(action.sourceId));
+  if (!value.relevant) {
+    if (rawTasks.length || rawActions.length) {
+      throw new Error("Planner 校验失败：relevant=false 时 tasks/actions 必须为空数组");
     }
+    return { relevant: false, tasks: [], actions: [] };
   }
-  return [...requested];
-}
-
-function normalizeSourceSupport(value: unknown): SourceSupport {
-  if (value === "verified" || value === "wiki-only" || value === "partial" || value === "conflict" || value === "unknown") {
-    return value;
+  if (rawTasks.length < 1 || rawTasks.length > MAX_PLAN_TASKS) {
+    throw new Error(`Planner 校验失败：tasks 必须为 1-${MAX_PLAN_TASKS} 项`);
   }
-  return "unknown";
-}
-
-function makeRetrievalRound(
-  round: number,
-  readPages: string[],
-  keptPages: KeptPage[],
-  droppedPages: DiscardedPage[],
-  nextActions: RetrievalAction[],
-  coverage: unknown,
-  stopReason: string | null,
-): RetrievalRound {
-  return {
-    round,
-    readPages,
-    keptPages: keptPages.map((page) => page.path),
-    droppedPages: droppedPages.map((page) => page.path),
-    nextActions,
-    coverage,
-    stopReason,
-  };
-}
-
-function mergeDiscardedPages(prev: DiscardedPage[], next: DiscardedPage[]): DiscardedPage[] {
-  const byKey = new Map(prev.map((page) => [`${page.round}:${page.path}`, page]));
-  for (const page of next) byKey.set(`${page.round}:${page.path}`, page);
-  return [...byKey.values()];
-}
-
-function pageHitToAction(hit: PlannedPageHit): RetrievalAction {
-  return {
-    type: "read_page",
-    path: hit.path,
-    taskIndex: hit.taskIndex,
-    taskGoal: hit.taskGoal,
-    taskContribution: hit.taskContribution,
-    why: hit.why,
-    score: hit.score,
-    required: hit.required,
-  };
-}
-
-function toRetrievedPage(page: LlmWikiPage & { links: string[] }, action: RetrievalAction, readInRound: number): RetrievedPage {
-  return {
-    path: page.path,
-    title: page.title,
-    type: page.type,
-    tags: page.tags,
-    sources: page.sources,
-    content: page.content,
-    score: typeof action.score === "number" ? action.score : 0,
-    why: action.why || "search_hit",
-    taskIndex: action.taskIndex || 0,
-    taskGoal: action.taskGoal || "",
-    taskContribution: action.taskContribution || "",
-    required: Boolean(action.required),
-    readInRound,
-    links: page.links,
-  };
-}
-
-function scorePlannedPage(args: {
-  baseScore: number;
-  pageType: string;
-  reason: PageHitReason;
-  taskIndex: number;
-}): number {
-  const reasonScore: Record<PageHitReason, number> = {
-    required_path: 320,
-    linked_page: 240,
-    search_hit: 190,
-    optional_path: 120,
-  };
-  const pageTypeScore =
-    args.pageType === "summary" ? 35 : args.pageType === "concept" ? 25 : args.pageType === "entity" ? 15 : 0;
-  return reasonScore[args.reason] + Math.min(Math.max(args.baseScore, 0), 140) + pageTypeScore - args.taskIndex * 8;
-}
-
-function compareHits(a: PlannedPageHit, b: PlannedPageHit): number {
-  return b.score - a.score || a.order - b.order || a.path.localeCompare(b.path);
-}
-
-function isKnownWikiPath(manifest: WikiManifest | null, path: unknown): path is string {
-  const value = stringField(path);
-  return Boolean(value && manifest?.pages.some((page) => page.path === value));
-}
-
-function isKnownSourceId(manifest: WikiManifest | null, sourceId: unknown): sourceId is string {
-  const value = stringField(sourceId);
-  return Boolean(value && manifest?.sources.some((source) => source.source_id === value));
-}
-
-function pageRef(manifest: WikiManifest | null, path: string): LlmWikiPageRef | undefined {
-  return manifest?.pages.find((page) => page.path === path);
-}
-
-function inferTaskIndexForPath(path: string, plan: QueryPlan | null): number {
-  const tasks = plan?.tasks || [];
-  const index = tasks.findIndex((task) => task.requiredPaths.includes(path) || task.optionalPaths.includes(path));
-  return index >= 0 ? index : 0;
-}
-
-function inferTaskGoalForPath(path: string, plan: QueryPlan | null): string {
-  const task = plan?.tasks[inferTaskIndexForPath(path, plan)];
-  return task?.goal || plan?.tasks[0]?.goal || "";
-}
-
-function inferTaskContributionForPath(path: string, plan: QueryPlan | null): string {
-  const task = plan?.tasks[inferTaskIndexForPath(path, plan)];
-  return task?.expectedContribution || plan?.tasks[0]?.expectedContribution || "";
-}
-
-function pageForReviewPrompt(page: RetrievedPage) {
-  return {
-    path: page.path,
-    title: page.title,
-    type: page.type,
-    tags: page.tags,
-    sources: page.sources,
-    why: page.why,
-    taskGoal: page.taskGoal,
-    taskContribution: page.taskContribution,
-    score: page.score,
-    readInRound: page.readInRound,
-    links: page.links.slice(0, 24),
-    content: truncate(stripFrontmatter(page.content), 4500),
-  };
-}
-
-function rankSourceRefs(pages: RetrievedPage[]): Array<{
-  source_id: string;
-  taskGoals: string[];
-  pagePaths: string[];
-  score: number;
-}> {
-  const bySource = new Map<string, { source_id: string; taskGoals: string[]; pagePaths: string[]; score: number }>();
-  for (const page of pages) {
-    for (const sourceId of page.sources) {
-      const prev = bySource.get(sourceId) || { source_id: sourceId, taskGoals: [], pagePaths: [], score: 0 };
-      prev.score += 1 + (page.required ? 4 : 0) + Math.max(page.score, 0) / 100;
-      prev.taskGoals = uniqueStrings([...prev.taskGoals, page.taskGoal]);
-      prev.pagePaths = uniqueStrings([...prev.pagePaths, page.path]);
-      bySource.set(sourceId, prev);
+  const taskIds = new Set<string>();
+  const taskQuestions = new Set<string>();
+  const tasks = rawTasks.map((item): QueryTask => {
+    const raw = record(item);
+    assertOnlyKeys(raw, ["id", "question", "evidence"], "Planner task");
+    const taskId = string(raw.id);
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(taskId)) {
+      throw new Error("Planner 校验失败：task.id 非法");
     }
-  }
-  return [...bySource.values()].sort(
-    (a, b) => b.score - a.score || b.pagePaths.length - a.pagePaths.length || a.source_id.localeCompare(b.source_id),
-  );
-}
-
-function selectSourceRefs(
-  keptPages: RetrievedPage[],
-  policy: LlmWikiSourcePolicy,
-  requestedSourceIds: string[],
-  maxRawSources: number,
-): Array<{
-  source_id: string;
-  taskGoals: string[];
-  pagePaths: string[];
-  score: number;
-}> {
-  const ranked = rankSourceRefs(keptPages);
-  const requested = new Set(requestedSourceIds);
-  const requestedRefs = ranked.filter((source) => requested.has(source.source_id));
-  if (policy === "exhaustive") return uniqueSourceRefs([...requestedRefs, ...ranked]).slice(0, maxRawSources);
-  if (policy === "auto" && requestedRefs.length) return requestedRefs.slice(0, maxRawSources);
-  const keyPagePaths = selectKeySourcePagePaths(keptPages);
-  const keyRefs = ranked
-    .map((source) => ({
-      ...source,
-      pagePaths: source.pagePaths.filter((path) => keyPagePaths.has(path)),
-    }))
-    .filter((source) => source.pagePaths.length > 0);
-  return uniqueSourceRefs([...requestedRefs, ...keyRefs, ...ranked.slice(0, 1)]).slice(0, maxRawSources);
-}
-
-function uniqueSourceRefs<T extends { source_id: string }>(refs: T[]): T[] {
-  const seen = new Set<string>();
-  return refs.filter((ref) => {
-    if (seen.has(ref.source_id)) return false;
-    seen.add(ref.source_id);
-    return true;
+    if (taskIds.has(taskId)) throw new Error(`Planner 校验失败：task.id 重复 ${taskId}`);
+    taskIds.add(taskId);
+    const question = string(raw.question);
+    if (!question || question.length > 300) throw new Error(`Planner 校验失败：task ${taskId} 的 question 非法`);
+    const questionKey = question.toLocaleLowerCase().replace(/\s+/g, " ");
+    if (taskQuestions.has(questionKey)) throw new Error(`Planner 校验失败：task 问题重复 ${question}`);
+    taskQuestions.add(questionKey);
+    const evidence = raw.evidence;
+    if (evidence !== "page" && evidence !== "fact" && evidence !== "source") {
+      throw new Error(`Planner 校验失败：task ${taskId} 的 evidence 非法`);
+    }
+    return {
+      taskId,
+      question,
+      evidenceRequirement: evidence,
+    };
   });
-}
 
-function selectKeySourcePagePaths(pages: RetrievedPage[]): Set<string> {
-  const topScore = Math.max(0, ...pages.map((page) => page.score));
-  const threshold = topScore * 0.75;
-  return new Set(
-    pages
-      .filter((page) => page.required || page.score >= threshold)
-      .map((page) => page.path),
-  );
-}
-
-function defaultSourceReviews(state: LlmWikiAgentState): SourceReview[] {
-  return state.keptPages.map((kept) => defaultSourceReviewForPath(state, kept.path));
-}
-
-function compactPayloadForBudget(state: LlmWikiAgentState, payload: Record<string, unknown>): Record<string, unknown> | null {
-  if (!state.tokens.tokenLimit) return payload;
-  const remaining = state.tokens.tokenLimit - state.tokens.totalTokens;
-  if (remaining <= 256) return null;
-  if (estimateTokens(payload) <= remaining) return payload;
-  const compacted = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
-  compactPageCollections(compacted, 1600);
-  if (estimateTokens(compacted) <= remaining) return compacted;
-  compactPageCollections(compacted, 600);
-  return estimateTokens(compacted) <= remaining ? compacted : null;
-}
-
-function compactPageCollections(value: unknown, contentLimit: number): void {
-  if (Array.isArray(value)) {
-    for (const item of value) compactPageCollections(item, contentLimit);
-    return;
+  if (rawActions.length < 1 || rawActions.length > MAX_ACTIONS_PER_ROUND) {
+    throw new Error(`Planner 校验失败：actions 必须为 1-${MAX_ACTIONS_PER_ROUND} 项`);
   }
-  if (!value || typeof value !== "object") return;
-  const record = value as Record<string, unknown>;
-  if (typeof record.content === "string") record.content = truncate(record.content, contentLimit);
-  for (const child of Object.values(record)) compactPageCollections(child, contentLimit);
+  const pageKeys = new Set(catalog.pages.map((page) => page.pageKey));
+  const seenActions = new Set<string>();
+  const actions = rawActions.map((item): PlannerAction | null => {
+    const raw = record(item);
+    assertOnlyKeys(raw, ["tool", "value"], "Planner action");
+    const tool = string(raw.tool);
+    const actionValue = string(raw.value).replace(/\s+/g, " ");
+    if (!actionValue || actionValue.length > 300) throw new Error("Planner 校验失败：action.value 非法");
+    if (tool !== "searchWiki" && tool !== "readPage") throw new Error(`Planner 校验失败：未知 action ${tool}`);
+    if (tool === "readPage" && !pageKeys.has(actionValue)) {
+      throw new Error(`Planner 校验失败：pageKey 不在 Catalog ${actionValue}`);
+    }
+    const key = `${tool}:${actionValue}`;
+    if (seenActions.has(key)) return null;
+    seenActions.add(key);
+    return { tool, value: actionValue };
+  }).filter((item): item is PlannerAction => Boolean(item));
+  if (!actions.length) throw new Error("Planner 校验失败：没有可执行 action");
+  return { relevant: true, tasks, actions };
 }
 
-function hasRemainingTokenBudget(tokens: AgentRunTokens, reserve: number): boolean {
-  return !tokens.tokenLimit || tokens.totalTokens + reserve < tokens.tokenLimit;
+function normalizeReact(value: Record<string, unknown>): ReactDecision {
+  const coverage = array(value.coverage).map((item): ReactDecision["coverage"][number] => {
+    const raw = record(item);
+    const status: "covered" | "partial" | "missing" = raw.status === "covered" || raw.status === "partial" ? raw.status : "missing";
+    return { taskId: string(raw.taskId), status, note: string(raw.note) };
+  }).filter((item) => item.taskId);
+  const evidence = array(value.evidence).map((item): EvidenceSelection | null => {
+    const raw = record(item);
+    const kind = raw.kind;
+    if (kind !== "page" && kind !== "fact" && kind !== "source") return null;
+    const quote = string(raw.quote);
+    const claim = string(raw.claim);
+    const taskId = string(raw.taskId);
+    if (!taskId || !quote || !claim) return null;
+    return {
+      taskId,
+      kind,
+      pageKey: string(raw.pageKey) || undefined,
+      sourceId: string(raw.sourceId) || undefined,
+      quote,
+      claim,
+      sourceLine: integer(raw.sourceLine),
+    };
+  }).filter((item): item is EvidenceSelection => Boolean(item));
+  const actions = array(value.actions).map(normalizeAction).filter((item): item is ReactAction => Boolean(item)).slice(0, MAX_ACTIONS_PER_ROUND);
+  return {
+    coverage,
+    evidence,
+    actions,
+    conflicts: stringArray(value.conflicts),
+    gaps: stringArray(value.gaps),
+    finish: value.finish === true,
+    finishReason: string(value.finishReason),
+    escalateToQuality: value.escalateToQuality === true,
+  };
 }
 
-function estimateTokens(value: unknown): number {
-  return Math.ceil(JSON.stringify(value).length / 4);
+function normalizeAction(value: unknown): ReactAction | null {
+  const raw = record(value);
+  const tool = string(raw.tool);
+  const reason = string(raw.reason) || undefined;
+  if (tool === "searchWiki") return { tool, query: string(raw.query), reason };
+  if (tool === "readPage") return { tool, pageKey: string(raw.pageKey), reason };
+  if (tool === "readSource") return { tool, sourceId: string(raw.sourceId), startLine: integer(raw.startLine), endLine: integer(raw.endLine), reason };
+  if (tool === "finish") return { tool, reason };
+  return null;
 }
 
-function extractContent(res: unknown): string {
-  const body = res as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> };
-  const content = body.choices?.[0]?.message?.content ?? body.choices?.[0]?.text;
+function normalizeFinal(value: Record<string, unknown>): FinalAnswer {
+  return {
+    answerable: value.answerable === true,
+    answerMarkdown: string(value.answerMarkdown),
+    citations: stringArray(value.citations),
+    gaps: stringArray(value.gaps),
+  };
+}
+
+function reactPayload(state: LlmWikiAgentState) {
+  return {
+    query: state.query,
+    plan: state.plan,
+    round: state.round,
+    budget: {
+      maxRounds: MAX_REACT_ROUNDS,
+      searchesRemaining: MAX_SEARCHES - state.searches.size,
+      pageReadsRemaining: state.input.limit - state.pages.size,
+      sourceReadsRemaining: MAX_SOURCE_READS - state.sources.size,
+      actionsPerRound: MAX_ACTIONS_PER_ROUND,
+    },
+    previousCoverage: state.coverage,
+    verifiedEvidence: state.evidence,
+    gaps: state.gaps,
+    conflicts: state.conflicts,
+    observations: state.newObservations,
+  };
+}
+
+function observationPayload(
+  state: LlmWikiAgentState,
+  observations: RetrievalRound["observations"],
+): Record<string, unknown> {
+  const searches: unknown[] = [];
+  const pages: unknown[] = [];
+  const sources: unknown[] = [];
+  for (const observation of observations) {
+    if (observation.cached) continue;
+    if (observation.tool === "searchWiki") {
+      const result = state.searches.get(observation.key);
+      if (result) searches.push({
+        query: result.query,
+        items: result.items.map((item) => ({ pageKey: item.pageKey, title: item.title, goal: item.goal, matchedFacts: item.matchedFacts, snippet: item.snippet })),
+      });
+      continue;
+    }
+    if (observation.tool === "readPage") {
+      const detail = state.pages.get(observation.key);
+      if (detail) pages.push({
+        page: { pageKey: detail.page.pageKey, title: detail.page.title, goal: detail.page.goal, bodyMarkdown: truncate(detail.page.bodyMarkdown, 16_000), keyFacts: detail.page.keyFacts },
+        relations: detail.relations,
+        sources: detail.sources,
+      });
+      continue;
+    }
+    if (observation.tool === "readSource") {
+      const detail = state.sources.get(observation.key);
+      if (detail) sources.push({
+        source: detail.source,
+        range: detail.range,
+        content: truncate(detail.content, 16_000),
+        factRefs: detail.factRefs,
+      });
+    }
+  }
+  return { searches, pages, sources };
+}
+
+function validateEvidence(state: LlmWikiAgentState, task: QueryTask | undefined, candidate: EvidenceSelection): Omit<VerifiedEvidence, "evidenceId"> | null {
+  if (!task || !candidate.quote || candidate.quote.length > 1500) return null;
+  if (candidate.kind === "page") {
+    const page = state.pages.get(string(candidate.pageKey));
+    if (!page || !containsQuote(page.page.bodyMarkdown, candidate.quote)) return null;
+    return { ...candidate, pageKey: page.page.pageKey, sourceId: candidate.sourceId, sourceFilename: sourceFilename(state, candidate.sourceId) };
+  }
+  if (candidate.kind === "fact") {
+    const page = state.pages.get(string(candidate.pageKey));
+    const fact = page?.page.keyFacts.find((item) => containsQuote(item.fact, candidate.quote));
+    if (!page || !fact) return null;
+    return {
+      ...candidate,
+      pageKey: page.page.pageKey,
+      sourceId: fact.sourceId,
+      sourceLine: fact.sourceLine ?? undefined,
+      sourceFilename: sourceFilename(state, fact.sourceId),
+    };
+  }
+  const sourceId = string(candidate.sourceId);
+  const source = [...state.sources.values()].find((item) => item.source.sourceId === sourceId && containsQuote(item.content, candidate.quote));
+  if (!source) return null;
+  const sourceLine = candidate.sourceLine;
+  if (sourceLine && (sourceLine < source.range.startLine || sourceLine > source.range.endLine)) return null;
+  return {
+    ...candidate,
+    sourceId,
+    pageKey: candidate.pageKey,
+    sourceFilename: source.source.filename,
+    range: { startLine: source.range.startLine, endLine: source.range.endLine },
+  };
+}
+
+function resolveSourceRange(
+  state: LlmWikiAgentState,
+  sourceId: string,
+  lineCount: number,
+  startLine?: number,
+  endLine?: number,
+): { startLine: number; endLine: number } | null {
+  if (Number.isInteger(startLine) || Number.isInteger(endLine)) {
+    const start = Number.isInteger(startLine) ? Number(startLine) : 1;
+    const end = Number.isInteger(endLine) ? Number(endLine) : Math.min(lineCount, start + 20);
+    if (start < 1 || end < start || end > lineCount || end - start + 1 > 80) return null;
+    return { startLine: start, endLine: end };
+  }
+  const facts = [...state.pages.values()].flatMap((page) => page.page.keyFacts).filter((fact) => fact.sourceId === sourceId && Number.isInteger(fact.sourceLine));
+  const sourceLine = facts[0]?.sourceLine;
+  if (sourceLine) return { startLine: Math.max(1, sourceLine - 10), endLine: Math.min(lineCount, sourceLine + 10) };
+  if (lineCount <= 200) return { startLine: 1, endLine: lineCount };
+  return null;
+}
+
+function sourceFilename(state: LlmWikiAgentState, sourceId?: string): string | undefined {
+  return state.catalog?.sources.find((item) => item.sourceId === sourceId)?.filename;
+}
+
+function sameEvidence(a: Omit<VerifiedEvidence, "evidenceId"> | VerifiedEvidence, b: Omit<VerifiedEvidence, "evidenceId">): boolean {
+  return a.taskId === b.taskId && a.kind === b.kind && a.pageKey === b.pageKey && a.sourceId === b.sourceId && a.quote === b.quote;
+}
+
+function jsonSchema(name: string, schema: Record<string, unknown>): RawChatResponseFormat {
+  return { type: "json_schema", json_schema: { name, strict: true, schema } };
+}
+
+function responseContent(response: unknown): string {
+  const raw = response as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> };
+  const choice = raw.choices?.[0];
+  const content = choice?.message?.content ?? choice?.text;
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((part) => (typeof part === "string" ? part : "")).join("");
+  if (Array.isArray(content)) return content.map((item) => typeof item === "string" ? item : record(item).text).join("");
   return "";
 }
 
-function parseJsonObject(content: string): Record<string, unknown> | null {
-  const raw = String(content || "").trim();
-  const candidates = [
-    raw,
-    raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim(),
-    raw.slice(Math.max(0, raw.indexOf("{")), raw.lastIndexOf("}") + 1),
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      // try next
-    }
+function parseJsonObject(value: string): Record<string, unknown> {
+  const text = String(value || "").trim().replace(/^```json\s*/i, "").replace(/\s*```$/, "");
+  if (!text) throw new Error("模型返回内容为空");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("模型返回不是合法 JSON");
   }
-  return null;
+  if (!isRecord(parsed)) {
+    const actual = Array.isArray(parsed) ? "array" : parsed === null ? "null" : typeof parsed;
+    throw new Error(`模型返回 JSON 顶层必须是对象，实际为 ${actual}`);
+  }
+  return parsed;
 }
 
-function extractUsage(res: unknown): unknown {
-  return res && typeof res === "object" ? (res as { usage?: unknown }).usage : null;
-}
-
-function accumulateUsage(tokens: AgentRunTokens, usage: unknown): AgentRunTokens {
-  const u = usage && typeof usage === "object" ? (usage as Record<string, unknown>) : {};
-  const input = pickNumber(u.input_tokens) ?? pickNumber(u.prompt_tokens) ?? 0;
-  const output = pickNumber(u.output_tokens) ?? pickNumber(u.completion_tokens) ?? 0;
-  const total = pickNumber(u.total_tokens) ?? input + output;
-  return {
-    inputTokens: tokens.inputTokens + input,
-    outputTokens: tokens.outputTokens + output,
-    totalTokens: tokens.totalTokens + total,
-    rounds: tokens.rounds + (input || output || total ? 1 : 0),
-    modelCalls: tokens.modelCalls + 1,
-    tokenLimit: tokens.tokenLimit,
-  };
-}
-
-function emptyTokens(tokenLimit: number | null): AgentRunTokens {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    rounds: 0,
-    modelCalls: 0,
-    tokenLimit,
-  };
-}
-
-function stringField(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function containsQuote(body: string, quote: string): boolean {
+  const normalizedQuote = String(quote || "").trim();
+  return normalizedQuote.length > 0 && String(body || "").includes(normalizedQuote);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: string[], label: string): void {
+  const allowedKeys = new Set(allowed);
+  const unknown = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  if (unknown.length) throw new Error(`${label}包含未知字段: ${unknown.join(", ")}`);
+}
+
+function array(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function string(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function integer(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function stringArray(value: unknown): string[] {
-  const arr = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
-  return arr.map((item) => String(item || "").trim()).filter(Boolean);
+  return array(value).map(string).filter(Boolean);
 }
 
-function splitSearchTerms(value: string): string[] {
-  return value
-    .split(/[\s,，。；;:：、/\\|()[\]{}"'“”‘’<>《》]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function unique(values: string[]): string[] {
+  return [...new Set(values.map(string).filter(Boolean))];
 }
 
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
+function estimateTokens(value: string): number {
+  return Math.ceil(String(value || "").length / 4);
 }
 
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  const n = Number(value);
-  return Number.isInteger(n) ? Math.min(Math.max(n, min), max) : fallback;
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max)}\n...[truncated]`;
 }
 
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
-}
-
-function positiveIntOrNull(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
-
-function pickNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function truncate(text: string, limit: number): string {
-  const value = String(text || "");
-  return value.length <= limit ? value : `${value.slice(0, limit)}\n\n[内容已截断 ${value.length - limit} 字符]`;
-}
-
-function stripFrontmatter(content: string): string {
-  return String(content || "").replace(/^---\n[\s\S]*?\n---\n?/, "");
-}
-
-function formatError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

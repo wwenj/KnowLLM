@@ -86,7 +86,8 @@ export function DeepAgent() {
         setWikiConfig((current) => ({
           ...current,
           limit: clamp(numberValue(defaultValues.limit, current.limit), 1, 20),
-          model: pickModel(current.model || stringValue(defaultValues.model), nextModels),
+          fastModel: pickModel(current.fastModel || stringValue(defaultValues.fastModel), nextModels),
+          qualityModel: pickModel(current.qualityModel || stringValue(defaultValues.qualityModel), nextModels),
         }));
         void refreshHistory(true);
       } catch {
@@ -235,7 +236,12 @@ export function DeepAgent() {
             modelOptions={modelOptions}
             loading={loadingConfig}
             submitting={submitting}
-            submitDisabled={activeAgent !== "llmWiki" || !wikiConfig.query.trim()}
+            submitDisabled={
+              activeAgent !== "llmWiki" ||
+              !wikiConfig.query.trim() ||
+              !wikiConfig.fastModel ||
+              !wikiConfig.qualityModel
+            }
             onAgentChange={setActiveAgent}
             onWikiChange={setWikiConfig}
             onSubmit={handleSubmit}

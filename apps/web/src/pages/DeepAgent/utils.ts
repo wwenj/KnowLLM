@@ -6,13 +6,14 @@ import type {
 import type { ModelOption } from "@/api/model";
 import type { LlmWikiConfig, StatusKey } from "./types";
 
-export const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v1";
+export const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v2";
 
 export function buildRunBody(config: LlmWikiConfig): Record<string, unknown> {
   return {
     query: config.query.trim(),
     limit: config.limit,
-    model: config.model || undefined,
+    fastModel: config.fastModel,
+    qualityModel: config.qualityModel,
   };
 }
 
@@ -74,29 +75,72 @@ export function formatDuration(start?: string, end?: string): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+export function formatMetric(value?: number): string {
+  if (!Number.isFinite(value)) return "-";
+  return Math.max(0, Math.round(Number(value))).toLocaleString("zh-CN");
+}
+
 export function buildLogPayload(detail: AgentRunDetail | null, events: AgentRunEvent[]) {
   return { detail, events, exportedAt: new Date().toISOString() };
 }
 
 export function eventMeta(event: AgentRunEvent): string {
   const parts = [
-    event.model ? `model ${String(event.model)}` : "",
-    event.status ? `status ${String(event.status)}` : "",
+    event.stage ? `阶段 ${String(event.stage)}` : "",
+    event.model ? `模型 ${String(event.model)}` : "",
+    event.attempt ? `第 ${String(event.attempt)} 次` : "",
+    event.tool ? `Tool ${String(event.tool)}` : "",
+    typeof event.round === "number" ? (event.round === 0 ? "初始调用" : `第 ${event.round} 轮`) : "",
+    event.cached === true ? "缓存命中" : "",
+    event.status ? `状态 ${String(event.status)}` : "",
   ].filter(Boolean);
   return parts.join(" · ");
 }
 
-export function eventDetail(event: AgentRunEvent): string | null {
-  const keys = ["query", "hits", "result", "resultJson", "error"];
+export interface EventDetail {
+  label: string;
+  text: string;
+}
+
+export function eventDetail(event: AgentRunEvent): EventDetail | null {
+  const focused = event.type === "model_request"
+    ? { label: "模型请求参数", value: event.request }
+    : event.type === "model_response"
+      ? { label: "模型返回结果", value: event.response }
+      : event.type === "tool_request"
+        ? { label: "Tool 请求参数", value: event.request }
+        : event.type === "tool_response"
+          ? { label: "Tool 返回结果", value: event.response ?? event.error }
+          : null;
+  if (focused && focused.value !== undefined) {
+    const text = stringifyDetail(focused.value);
+    return {
+      label: focused.label,
+      text,
+    };
+  }
+
+  const excluded = new Set([
+    "type", "msg", "ts", "runId", "agentType", "status", "model", "stage",
+    "phase", "tool", "attempt", "round", "cached",
+  ]);
   const payload: Record<string, unknown> = {};
-  for (const key of keys) {
-    if (event[key] !== undefined) payload[key] = event[key];
+  for (const [key, value] of Object.entries(event)) {
+    if (!excluded.has(key) && value !== undefined) payload[key] = value;
   }
   if (!Object.keys(payload).length) return null;
+  const text = stringifyDetail(payload);
+  return {
+    label: event.type === "plan_created" ? "规划结果" : event.type.includes("error") ? "错误详情" : "执行详情",
+    text,
+  };
+}
+
+function stringifyDetail(value: unknown): string {
   try {
-    return JSON.stringify(payload, null, 2);
+    return JSON.stringify(value, null, 2) ?? String(value);
   } catch {
-    return String(payload);
+    return String(value);
   }
 }
 
@@ -118,10 +162,11 @@ export function readStoredConfig(): LlmWikiConfig {
     return {
       query: stringValue(raw.query),
       limit: clamp(numberValue(raw.limit, 8), 1, 20),
-      model: stringValue(raw.model),
+      fastModel: stringValue(raw.fastModel),
+      qualityModel: stringValue(raw.qualityModel),
     };
   } catch {
-    return { query: "", limit: 8, model: "" };
+    return { query: "", limit: 8, fastModel: "", qualityModel: "" };
   }
 }
 

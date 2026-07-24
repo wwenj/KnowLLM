@@ -1,196 +1,163 @@
-import type { AgentRunTokens } from "../../agent.types";
 import type {
-  LlmWikiPageRef,
-  LlmWikiSchema,
-  LlmWikiSearchHit,
-  LlmWikiSourceMeta,
-} from "../../../llmWiki/contracts/llm-wiki.types";
+  ToolsCatalog,
+  ToolsPageDetail,
+  ToolsSearchResult,
+  ToolsSourceDetail,
+} from "../../../llmWikiNext/llm-wiki-next.types";
+import type { AgentRunTokens } from "../../agent.types";
 
-export type LlmWikiSourcePolicy = "auto" | "wiki-only" | "key-sources" | "exhaustive";
-export type StopReason = "complete" | "max_rounds" | "token_limit" | "no_new_actions" | "insufficient_evidence";
-export type QueryIntent = "overview" | "specific" | "compare" | "howto" | "debug";
-export type PageHitReason = "required_path" | "optional_path" | "search_hit" | "linked_page";
-export type SourceSupport = "verified" | "wiki-only" | "partial" | "conflict" | "unknown";
+export const DEFAULT_FAST_MODEL = "openapi-gpt:gpt-5.4-mini";
+export const DEFAULT_QUALITY_MODEL = "openapi-gpt:gpt-5.5";
+export const DEFAULT_LIMIT = 8;
+export const MAX_LIMIT = 20;
+export const MAX_PLAN_TASKS = 6;
+export const MAX_REACT_ROUNDS = 3;
+export const MAX_ACTIONS_PER_ROUND = 6;
+export const MAX_SEARCHES = 6;
+export const MAX_SOURCE_READS = 6;
+export const MAX_MODEL_CALLS = 6;
+export const MAX_MODEL_ATTEMPTS = 8;
+export const MAX_MODEL_RETRIES = 2;
+export const TOKEN_LIMIT = 48_000;
+export const FINAL_TOKEN_RESERVE = 12_000;
 
-export interface LlmWikiBudget {
-  maxRounds: number;
-  maxEvidencePages: number;
-  maxRawSources: number;
-  tokenLimit: number | null;
-}
-
-export interface LlmWikiModels {
-  plannerModel: string;
-  reviewerModel: string;
-  synthesizerModel: string;
-}
+export type EvidenceRequirement = "page" | "fact" | "source";
+export type ToolName = "searchWiki" | "readPage" | "readSource" | "finish";
+export type StopReason =
+  | "complete"
+  | "no_relevant_wiki"
+  | "insufficient_evidence"
+  | "max_rounds"
+  | "no_new_evidence"
+  | "token_limit"
+  | "cancelled"
+  | "wiki_changed";
 
 export interface LlmWikiAgentInput extends Record<string, unknown> {
   query: string;
-  sourcePolicy: LlmWikiSourcePolicy;
-  budget: LlmWikiBudget;
-  models: LlmWikiModels;
+  limit: number;
+  fastModel: string;
+  qualityModel: string;
 }
 
-export interface WikiManifest {
-  stats: {
-    sourceCount: number;
-    pageCount: number;
-    readySources: number;
-    factCount?: number;
-    pageClaimCount?: number;
-  };
-  schema: LlmWikiSchema;
-  index: string;
-  pages: LlmWikiPageRef[];
-  sources: Array<Pick<LlmWikiSourceMeta, "source_id" | "filename" | "status" | "touched_pages">>;
-}
+/**
+ * Planner 从 getCatalog.pages 中消费的最小页面元组：
+ * pageKey = readPage 的页面 ID；title = 页面主题；goal = 页面覆盖范围。
+ */
+export type PlannerCatalogPage = [pageKey: string, title: string, goal: string];
 
 export interface QueryTask {
-  goal: string;
-  requiredPaths: string[];
-  optionalPaths: string[];
-  searchQueries: string[];
-  expectedContribution: string;
+  taskId: string;
+  question: string;
+  evidenceRequirement: EvidenceRequirement;
 }
 
-export interface QueryCoverage {
-  coreTopics: string[];
-  optionalTopics: string[];
-  excludedTopics: string[];
+export interface PlannerAction {
+  tool: "searchWiki" | "readPage";
+  value: string;
 }
 
 export interface QueryPlan {
-  queryIntent: QueryIntent;
-  keywords: string[];
-  entities: string[];
+  relevant: boolean;
   tasks: QueryTask[];
-  coverage: QueryCoverage;
-  candidatePaths: string[];
-  searchQueries: string[];
-  reason: string;
+  actions: PlannerAction[];
 }
 
-export interface PlannedPageHit extends LlmWikiSearchHit {
-  taskIndex: number;
-  taskGoal: string;
-  taskContribution: string;
-  why: PageHitReason;
-  required: boolean;
-  order: number;
-}
-
-export interface RetrievedPage {
-  path: string;
-  title: string;
-  type: string;
-  tags: string[];
-  sources: string[];
-  content: string;
-  score: number;
-  why: PageHitReason | string;
-  taskIndex: number;
-  taskGoal: string;
-  taskContribution: string;
-  required: boolean;
-  readInRound: number;
-  links: string[];
-}
-
-export interface RetrievalAction {
-  type: "read_page" | "search_wiki" | "follow_link" | "read_source" | "stop";
-  path?: string;
-  query?: string;
-  fromPath?: string;
-  sourceId?: string;
+export interface SearchAction {
+  tool: "searchWiki";
+  query: string;
   reason?: string;
-  taskIndex?: number;
-  taskGoal?: string;
-  taskContribution?: string;
-  why?: PageHitReason;
-  score?: number;
-  required?: boolean;
 }
 
-export interface KeptPage {
-  path: string;
-  taskGoals: string[];
-  relevanceScore: number;
-  evidenceScore: number;
-  selectedInRound: number;
-  whyKept: string;
+export interface ReadPageAction {
+  tool: "readPage";
+  pageKey: string;
+  reason?: string;
 }
 
-export interface DiscardedPage {
-  path: string;
-  title: string;
-  reason: string;
-  round: number;
+export interface ReadSourceAction {
+  tool: "readSource";
+  sourceId: string;
+  startLine?: number;
+  endLine?: number;
+  reason?: string;
+}
+
+export interface FinishAction {
+  tool: "finish";
+  reason?: string;
+}
+
+export type ReactAction = SearchAction | ReadPageAction | ReadSourceAction | FinishAction;
+
+export interface EvidenceSelection {
+  taskId: string;
+  kind: "page" | "fact" | "source";
+  pageKey?: string;
+  sourceId?: string;
+  quote: string;
+  claim: string;
+  sourceLine?: number;
+}
+
+export interface VerifiedEvidence extends EvidenceSelection {
+  evidenceId: string;
+  sourceFilename?: string;
+  range?: { startLine: number; endLine: number };
+}
+
+export interface ReactDecision {
+  coverage: Array<{ taskId: string; status: "covered" | "partial" | "missing"; note: string }>;
+  evidence: EvidenceSelection[];
+  actions: ReactAction[];
+  conflicts: string[];
+  gaps: string[];
+  finish: boolean;
+  finishReason: string;
+  escalateToQuality: boolean;
 }
 
 export interface RetrievalRound {
   round: number;
-  readPages: string[];
-  keptPages: string[];
-  droppedPages: string[];
-  nextActions: RetrievalAction[];
-  coverage: unknown;
-  stopReason: string | null;
-}
-
-export interface SourceEvidence {
-  source_id: string;
-  filename: string;
-  content: string;
-  taskGoals: string[];
-  pagePaths: string[];
-  supportSummary: string;
-}
-
-export interface SourceReview {
-  path: string;
-  sourceSupport: SourceSupport;
-  supportSummary: string;
-}
-
-export interface KnowledgeSnippet {
-  path: string;
-  title: string;
-  type: "summary" | "concept" | "entity" | "reference" | "procedure" | "changelog" | "troubleshooting" | "index";
-  tags: string[];
-  sources: string[];
-  content: string;
-  taskGoals: string[];
-  relevanceScore: number;
-  evidenceScore: number;
-  selectedInRound: number;
-  whyKept: string;
-  sourceSupport: SourceSupport;
+  model: string;
+  actions: ReactAction[];
+  observations: Array<{ tool: ToolName; key: string; cached: boolean; summary: string }>;
+  evidenceIds: string[];
+  coverage: ReactDecision["coverage"];
+  conflicts: string[];
+  gaps: string[];
+  finish: boolean;
 }
 
 export interface LlmWikiAgentState {
   query: string;
-  sourcePolicy: LlmWikiSourcePolicy;
-  budget: LlmWikiBudget;
-  models: LlmWikiModels;
-  manifest: WikiManifest | null;
+  input: LlmWikiAgentInput;
+  catalog: ToolsCatalog | null;
+  plannerCatalog: PlannerCatalogPage[] | null;
+  catalogFingerprint: string;
   plan: QueryPlan | null;
   round: number;
-  candidatePages: PlannedPageHit[];
-  pendingActions: RetrievalAction[];
-  requestedSourceIds: string[];
-  pages: RetrievedPage[];
-  lastReadPages: string[];
-  keptPages: KeptPage[];
-  discardedPages: DiscardedPage[];
-  retrievalRounds: RetrievalRound[];
-  sources: SourceEvidence[];
-  sourceReviews: SourceReview[];
-  knowledgeSnippets: KnowledgeSnippet[];
-  answerMarkdown: string;
-  resultJson: Record<string, unknown>;
-  stopReason: StopReason | null;
+  pages: Map<string, ToolsPageDetail>;
+  searches: Map<string, ToolsSearchResult>;
+  sources: Map<string, ToolsSourceDetail>;
+  evidence: VerifiedEvidence[];
+  coverage: ReactDecision["coverage"];
   gaps: string[];
-  coverageSummary: string;
+  conflicts: string[];
+  retrievalRounds: RetrievalRound[];
+  stopReason: StopReason | null;
   tokens: AgentRunTokens;
+  modelAttempts: number;
+  retries: number;
+  baseModelCalls: number;
+  lastRoundProgress: boolean;
+  qualityReactNext: boolean;
+  newObservations: Record<string, unknown>;
+}
+
+export interface FinalAnswer {
+  answerable: boolean;
+  answerMarkdown: string;
+  citations: string[];
+  gaps: string[];
 }

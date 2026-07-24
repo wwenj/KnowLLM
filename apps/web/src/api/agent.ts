@@ -21,8 +21,15 @@ export interface AgentRunEvent {
   agentType?: string;
   status?: string;
   model?: string;
+  stage?: string;
+  attempt?: number;
+  round?: number;
   phase?: string;
   tool?: string;
+  cached?: boolean;
+  request?: unknown;
+  response?: unknown;
+  error?: unknown;
   result?: unknown;
   preview?: string;
   content?: string;
@@ -39,6 +46,21 @@ export interface AgentRunSummary {
   runnerMeta: Record<string, unknown>;
 }
 
+export interface AgentRunTokens {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  rounds: number;
+  modelCalls: number;
+  tokenLimit: number | null;
+}
+
+export interface AgentRunStats {
+  modelCalls: number;
+  toolRounds: number;
+  [key: string]: unknown;
+}
+
 export interface AgentRunDetail extends AgentRunSummary {
   input: Record<string, unknown>;
   errors: string[];
@@ -46,6 +68,8 @@ export interface AgentRunDetail extends AgentRunSummary {
   events: AgentRunEvent[];
   resultMd: string;
   resultJson: Record<string, unknown> | null;
+  tokens?: AgentRunTokens;
+  stats?: AgentRunStats;
 }
 
 export interface AgentCreateRunResp {

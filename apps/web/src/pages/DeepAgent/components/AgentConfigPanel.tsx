@@ -74,12 +74,31 @@ export function AgentConfigPanel({
       <div className="px-3 py-3">
         {supported ? (
           <div className="space-y-2.5">
-            <div className="grid grid-cols-[minmax(0,1fr)_80px] gap-2.5">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] gap-2.5">
               <label className="block min-w-0 space-y-1">
-                <span className="text-xs font-medium text-slate-600">模型</span>
+                <span className="text-xs font-medium text-slate-600">规划/快速模型</span>
                 <Select
-                  value={wikiConfig.model}
-                  onValueChange={(model) => onWikiChange({ ...wikiConfig, model })}
+                  value={wikiConfig.fastModel}
+                  onValueChange={(fastModel) => onWikiChange({ ...wikiConfig, fastModel })}
+                  disabled={loading || !modelOptions.length}
+                >
+                  <SelectTrigger className="w-full border-stone-300 bg-white">
+                    <SelectValue placeholder="选择模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {modelOptionLabel(option)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="block min-w-0 space-y-1">
+                <span className="text-xs font-medium text-slate-600">质量/回答模型</span>
+                <Select
+                  value={wikiConfig.qualityModel}
+                  onValueChange={(qualityModel) => onWikiChange({ ...wikiConfig, qualityModel })}
                   disabled={loading || !modelOptions.length}
                 >
                   <SelectTrigger className="w-full border-stone-300 bg-white">

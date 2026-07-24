@@ -1,23 +1,24 @@
 import { Injectable } from "@nestjs/common";
-import { LlmWikiRetrievalService } from "../../../llmWiki/services/llm-wiki-retrieval.service";
+import { LlmWikiNextToolsService } from "../../../llmWikiNext/llm-wiki-next-tools.service";
 
+/** Agent 只通过这一层访问已发布的新版 Wiki Tool 契约。 */
 @Injectable()
 export class LlmWikiAgentTools {
-  constructor(private readonly retrieval: LlmWikiRetrievalService) {}
+  constructor(private readonly tools: LlmWikiNextToolsService) {}
 
-  getManifest() {
-    return this.retrieval.getManifest();
+  getCatalog() {
+    return this.tools.getCatalog();
   }
 
-  searchWiki(query: string, limit?: number) {
-    return this.retrieval.search(query, limit);
+  searchWiki(query: string) {
+    return this.tools.searchWiki(query);
   }
 
-  readWikiPage(path: string) {
-    return this.retrieval.readPage(path);
+  readPage(pageKey: string) {
+    return this.tools.readPage(pageKey);
   }
 
-  readRawSource(sourceId: string) {
-    return this.retrieval.readSource(sourceId);
+  readSource(sourceId: string, startLine?: number, endLine?: number) {
+    return this.tools.readSource(sourceId, startLine, endLine);
   }
 }
