@@ -940,11 +940,10 @@ export class LlmWikiNextService implements OnModuleInit {
     });
     const timeoutSignal = AbortSignal.timeout(MODEL_TIMEOUT_MS);
     try {
-      const response = await this.model.chat({
+      const response = await this.model.respond({
         model: args.model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        maxTokens: args.maxTokens,
+        textFormat: { type: "json_object" },
+        maxOutputTokens: args.maxTokens,
         signal: AbortSignal.any([args.signal, timeoutSignal]),
         messages: [
           { role: "system", content: args.system },
@@ -1755,9 +1754,10 @@ function modelResponseMeta(response: unknown): {
   finishReason: string;
 } {
   const record = response && typeof response === "object"
-    ? (response as {
+      ? (response as {
         id?: unknown;
         model?: unknown;
+        status?: unknown;
         choices?: Array<{ finish_reason?: unknown }>;
       })
     : {};
@@ -1765,9 +1765,11 @@ function modelResponseMeta(response: unknown): {
     responseId: typeof record.id === "string" ? record.id : "",
     responseModel: typeof record.model === "string" ? record.model : "",
     finishReason:
-      typeof record.choices?.[0]?.finish_reason === "string"
-        ? record.choices[0].finish_reason
-        : "",
+      typeof record.status === "string"
+        ? record.status
+        : typeof record.choices?.[0]?.finish_reason === "string"
+          ? record.choices[0].finish_reason
+          : "",
   };
 }
 
@@ -2141,19 +2143,20 @@ function extractModelContent(response: unknown): string {
   const record = objectValue(response, "模型响应为空");
   const choices = Array.isArray(record.choices) ? record.choices : [];
   const first = choices[0];
-  if (!first || typeof first !== "object")
-    throw new Error("模型未返回 choices");
-  const choice = first as Record<string, unknown>;
-  const message =
-    choice.message && typeof choice.message === "object"
-      ? (choice.message as Record<string, unknown>)
-      : {};
+  const choice = first && typeof first === "object"
+    ? (first as Record<string, unknown>)
+    : {};
+  const message = choice.message && typeof choice.message === "object"
+    ? (choice.message as Record<string, unknown>)
+    : {};
   const content =
-    typeof message.content === "string"
-      ? message.content
-      : typeof choice.text === "string"
-        ? choice.text
-        : "";
+    typeof record.content === "string"
+      ? record.content
+      : typeof message.content === "string"
+        ? message.content
+        : typeof choice.text === "string"
+          ? choice.text
+          : "";
   if (!content.trim()) throw new Error("模型未返回文本内容");
   return content;
 }

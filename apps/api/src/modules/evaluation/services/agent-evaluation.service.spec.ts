@@ -168,7 +168,7 @@ test("agent evaluation starts a normal llmWiki agent run and judges its result",
   };
   const model = {
     resolveModel: () => "judge",
-    chat: async () => ({
+    respond: async () => ({
       choices: [
         {
           message: {

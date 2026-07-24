@@ -273,10 +273,9 @@ export class AgentEvaluationService {
     answerCorrectness: AgentEvaluationMetricResult;
     abstainCorrectness: AgentEvaluationMetricResult;
   }> {
-    const response = await this.model.chat({
+    const response = await this.model.respond({
       model: args.model,
-      temperature: 0,
-      response_format: { type: "json_object" },
+      textFormat: { type: "json_object" },
       messages: [
         {
           role: "system",
@@ -495,8 +494,14 @@ function parseJudgeOutput(content: string): AgentJudgeOutput {
 }
 
 function extractContent(response: unknown): string {
-  const body = response as { choices?: Array<{ message?: { content?: unknown }; text?: unknown }> };
-  const content = body.choices?.[0]?.message?.content ?? body.choices?.[0]?.text;
+  const body = response as {
+    content?: unknown;
+    choices?: Array<{ message?: { content?: unknown }; text?: unknown }>;
+  };
+  const content =
+    body.content ??
+    body.choices?.[0]?.message?.content ??
+    body.choices?.[0]?.text;
   if (typeof content === "string") return content;
   throw new Error("Judge 未返回内容");
 }

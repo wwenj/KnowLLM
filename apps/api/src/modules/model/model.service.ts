@@ -3,48 +3,42 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getApiRoot } from "../../config/env";
 
-export interface ChatMessage {
+export interface ModelMessage {
   role: "system" | "user" | "assistant" | string;
   content: unknown;
 }
 export type JsonSchema = Record<string, unknown>;
 
-export type RawChatResponseFormat =
+export type ResponseTextFormat =
   | { type: "json_object" }
   | {
       type: "json_schema";
-      json_schema: {
-        name: string;
-        strict?: boolean;
-        schema: JsonSchema;
-      };
+      name: string;
+      strict?: boolean;
+      schema: JsonSchema;
     };
 
-export interface RawChatOptions {
+export interface ResponseRequestOptions {
   model?: string;
-  messages: ChatMessage[];
-  temperature?: number;
-  response_format?: RawChatResponseFormat;
-  maxTokens?: number;
+  messages: ModelMessage[];
+  textFormat?: ResponseTextFormat;
+  maxOutputTokens?: number;
   signal?: AbortSignal;
   onRequest?: (request: { url: string; body: Record<string, unknown> }) => void;
   onResponse?: (response: unknown) => void;
 }
 
-interface ChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: unknown;
-      reasoning_content?: unknown;
-      tool_calls?: ChatToolCall[];
-    };
-    text?: unknown;
-  }>;
-}
-
-interface ChatToolCall {
-  function?: {
-    arguments?: unknown;
+export interface ModelResponse extends Record<string, unknown> {
+  id: string;
+  model: string;
+  status: string;
+  content: string;
+  output: unknown[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    [key: string]: unknown;
   };
 }
 
@@ -67,27 +61,19 @@ interface LocalModelProviderConfig {
   models?: unknown;
   enabled?: unknown;
   priority?: unknown;
-  unsupportedParameters?: unknown;
-  outputTokenParameter?: unknown;
 }
 
 interface LocalModelConfig {
   name?: unknown;
-  unsupportedParameters?: unknown;
-  outputTokenParameter?: unknown;
 }
 
 interface NormalizedLocalModel {
   name: string;
-  unsupportedParameters: string[];
-  outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
 }
 
 interface ResolvedModel extends ModelOption {
   baseUrl: string;
   apiKey: string;
-  unsupportedParameters: string[];
-  outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
 }
 
 @Injectable()
@@ -123,50 +109,36 @@ export class ModelService {
     return this.loadModels()[0]?.id || "";
   }
 
-  async chat(options: RawChatOptions): Promise<ChatCompletionResponse> {
-    const response = await this.request(options);
-    const result = normalizeChatCompletionResponse(
-      (await response.json()) as ChatCompletionResponse,
-    );
-    options.onResponse?.(result);
-    return result;
+  async respond(options: ResponseRequestOptions): Promise<ModelResponse> {
+    return this.requestResponses(options);
   }
 
-  private async request(options: RawChatOptions): Promise<Response> {
+  private async requestResponses(
+    options: ResponseRequestOptions,
+  ): Promise<ModelResponse> {
     const resolved = this.resolveModelForRequest(options.model);
     if (!resolved) throw new Error("未配置可用模型");
+    if (resolved.provider.toLowerCase() !== "openai") {
+      throw new Error(`模型 ${resolved.id} 不是 OpenAI Provider`);
+    }
 
+    const { instructions, input } = responseInput(options.messages);
     const body: Record<string, unknown> = {
       model: resolved.model,
-      messages: options.messages,
-      stream: false,
+      input,
+      store: false,
     };
-    if (!resolved.unsupportedParameters.includes("temperature")) {
-      body.temperature = options.temperature ?? 0.2;
+    if (instructions) body.instructions = instructions;
+    if (
+      Number.isInteger(options.maxOutputTokens) &&
+      Number(options.maxOutputTokens) > 0
+    ) {
+      body.max_output_tokens = Number(options.maxOutputTokens);
     }
-    if (Number.isInteger(options.maxTokens) && Number(options.maxTokens) > 0) {
-      if (resolved.outputTokenParameter === "max_completion_tokens") {
-        if (resolved.unsupportedParameters.includes("max_completion_tokens")) {
-          throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
-        }
-        body.max_completion_tokens = Number(options.maxTokens);
-      } else if (resolved.outputTokenParameter === "max_tokens") {
-        if (resolved.unsupportedParameters.includes("max_tokens")) {
-          throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
-        }
-        body.max_tokens = Number(options.maxTokens);
-      } else if (!resolved.unsupportedParameters.includes("max_tokens")) {
-        body.max_tokens = Number(options.maxTokens);
-      } else if (!resolved.unsupportedParameters.includes("max_completion_tokens")) {
-        body.max_completion_tokens = Number(options.maxTokens);
-      } else {
-        throw new Error(`模型 ${resolved.id} 不支持可执行的输出 token 硬上限`);
-      }
-    }
-    applyResponseFormat(body, resolved, options.response_format);
+    if (options.textFormat) body.text = { format: options.textFormat };
 
     let response: Response;
-    const url = chatCompletionsUrl(resolved, options);
+    const url = `${resolved.baseUrl}/responses`;
     options.onRequest?.({ url: safeUrlForError(url), body });
     try {
       response = await fetch(url, {
@@ -185,7 +157,18 @@ export class ModelService {
       const text = await response.text();
       throw new Error(`模型调用失败: ${response.status} ${text.slice(0, 300)}`);
     }
-    return response;
+    let raw: Record<string, unknown>;
+    try {
+      const value = (await response.json()) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("响应顶层不是对象");
+      }
+      raw = value as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(`Responses API 返回非法 JSON: ${errorMessage(error)}`);
+    }
+    options.onResponse?.(raw);
+    return normalizeResponse(raw);
   }
 
   private resolveModelForRequest(model?: string): ResolvedModel | null {
@@ -248,8 +231,6 @@ export class ModelService {
         model,
         priority: 100 + index,
         index,
-        unsupportedParameters: [],
-        outputTokenParameter: "",
       }),
     );
   }
@@ -265,16 +246,13 @@ export class ModelService {
     if (raw.enabled === false) return [];
     const providerName = stringField(raw.name) || `Provider ${index + 1}`;
     const provider = stringField(raw.provider) || "openai";
+    if (provider.toLowerCase() !== "openai") return [];
     const baseUrl = normalizeBaseUrl(stringField(raw.baseUrl));
     const apiKey =
       stringField(raw.apiKey) || envValue(stringField(raw.apiKeyEnv));
     const models = normalizeLocalModels(raw.models);
     if (!baseUrl || !apiKey || !models.length) return [];
     const priority = numberField(raw.priority, 0);
-    const providerUnsupportedParameters = normalizeUnsupportedParameters(
-      raw.unsupportedParameters,
-    );
-    const providerOutputTokenParameter = normalizeOutputTokenParameter(raw.outputTokenParameter);
     return models.map((model, modelIndex) =>
       this.toResolvedModel({
         providerName,
@@ -284,11 +262,6 @@ export class ModelService {
         model: model.name,
         priority,
         index: index * 1000 + modelIndex,
-        unsupportedParameters: unique([
-          ...providerUnsupportedParameters,
-          ...model.unsupportedParameters,
-        ]),
-        outputTokenParameter: model.outputTokenParameter || providerOutputTokenParameter,
       }),
     );
   }
@@ -301,8 +274,6 @@ export class ModelService {
     model: string;
     priority: number;
     index: number;
-    unsupportedParameters: string[];
-    outputTokenParameter: "max_tokens" | "max_completion_tokens" | "";
   }): ResolvedModel {
     const providerSlug = slug(args.providerName || args.provider);
     return {
@@ -321,8 +292,6 @@ export class ModelService {
       ],
       baseUrl: args.baseUrl,
       apiKey: args.apiKey,
-      unsupportedParameters: args.unsupportedParameters,
-      outputTokenParameter: args.outputTokenParameter,
     };
   }
 
@@ -334,15 +303,123 @@ export class ModelService {
   }
 }
 
-function chatCompletionsUrl(
-  model: ResolvedModel,
-  options: Pick<RawChatOptions, "response_format">,
-): string {
-  let baseUrl = model.baseUrl;
-  if (usesDeepSeekStrictToolCall(model, options.response_format)) {
-    baseUrl = baseUrl.endsWith("/beta") ? baseUrl : `${baseUrl}/beta`;
+function responseInput(messages: ModelMessage[]): {
+  instructions: string;
+  input: Array<{ role: "user" | "assistant"; content: string }>;
+} {
+  const instructions: string[] = [];
+  const input: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const message of messages) {
+    const content = messageContent(message.content);
+    if (!content) continue;
+    if (message.role === "system" || message.role === "developer") {
+      instructions.push(content);
+      continue;
+    }
+    input.push({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content,
+    });
   }
-  return `${baseUrl}/chat/completions`;
+  if (!input.length) throw new Error("Responses API input 不能为空");
+  return { instructions: instructions.join("\n\n"), input };
+}
+
+function messageContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  return JSON.stringify(value);
+}
+
+function normalizeResponse(raw: Record<string, unknown>): ModelResponse {
+  const error = responseError(raw.error);
+  if (error) throw new Error(`Responses API 返回错误: ${error}`);
+  const status = stringField(raw.status);
+  if (status && status !== "completed") {
+    const detail = responseError(raw.incomplete_details);
+    throw new Error(
+      `Responses API 未完成: ${status}${detail ? ` (${detail})` : ""}`,
+    );
+  }
+  const output = Array.isArray(raw.output) ? raw.output : [];
+  const content = outputText(output);
+  if (!content.trim()) {
+    const refusal = outputRefusal(output);
+    throw new Error(
+      refusal ? `模型拒绝回答: ${refusal}` : "Responses API 未返回文本内容",
+    );
+  }
+  return {
+    ...raw,
+    id: stringField(raw.id),
+    model: stringField(raw.model),
+    status: status || "completed",
+    content,
+    output,
+    usage: normalizeUsage(raw.usage),
+  };
+}
+
+function outputText(output: unknown[]): string {
+  const texts: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rawItem = item as Record<string, unknown>;
+    if (rawItem.type !== "message" || !Array.isArray(rawItem.content)) continue;
+    for (const part of rawItem.content) {
+      if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+      const rawPart = part as Record<string, unknown>;
+      if (rawPart.type === "output_text" && typeof rawPart.text === "string") {
+        texts.push(rawPart.text);
+      }
+    }
+  }
+  return texts.join("");
+}
+
+function outputRefusal(output: unknown[]): string {
+  for (const item of output) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+      const raw = part as Record<string, unknown>;
+      if (raw.type === "refusal" && typeof raw.refusal === "string") {
+        return raw.refusal;
+      }
+    }
+  }
+  return "";
+}
+
+function normalizeUsage(value: unknown): ModelResponse["usage"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  return {
+    ...raw,
+    input_tokens: nonNegativeInteger(raw.input_tokens),
+    output_tokens: nonNegativeInteger(raw.output_tokens),
+    total_tokens: nonNegativeInteger(raw.total_tokens),
+  };
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function responseError(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || Array.isArray(value)) return String(value);
+  const raw = value as Record<string, unknown>;
+  return stringField(raw.message) || stringField(raw.reason) || JSON.stringify(raw);
+}
+
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
 }
 
 function formatFetchFailure(err: unknown, url: string): string {
@@ -371,163 +448,9 @@ function safeUrlForError(url: string): string {
   }
 }
 
-function applyResponseFormat(
-  body: Record<string, unknown>,
-  model: ResolvedModel,
-  format?: RawChatResponseFormat,
-): void {
-  if (!format) return;
-  const provider = model.provider.toLowerCase();
-  if (provider === "anthropic" || provider === "claude") {
-    applyAnthropicResponseFormat(body, model, format);
-    return;
-  }
-  if (provider === "gemini" || provider === "google") {
-    applyGeminiResponseFormat(body, model, format);
-    return;
-  }
-  if (provider === "deepseek") {
-    applyDeepSeekResponseFormat(body, model, format);
-    return;
-  }
-  if (model.unsupportedParameters.includes("response_format")) return;
-  body.response_format = format;
-}
-
-function applyAnthropicResponseFormat(
-  body: Record<string, unknown>,
-  model: ResolvedModel,
-  format: RawChatResponseFormat,
-): void {
-  if (
-    model.unsupportedParameters.includes("output_config") ||
-    model.unsupportedParameters.includes("response_format")
-  ) {
-    return;
-  }
-  if (format.type === "json_schema") {
-    body.output_config = {
-      format: {
-        type: "json_schema",
-        schema: format.json_schema.schema,
-      },
-    };
-    return;
-  }
-  body.output_config = {
-    format: {
-      type: "json_schema",
-      schema: {
-        type: "object",
-        additionalProperties: true,
-      },
-    },
-  };
-}
-
-function applyGeminiResponseFormat(
-  body: Record<string, unknown>,
-  model: ResolvedModel,
-  format: RawChatResponseFormat,
-): void {
-  if (
-    model.unsupportedParameters.includes("response_format") ||
-    model.unsupportedParameters.includes("gemini_response_format")
-  ) {
-    return;
-  }
-  if (format.type === "json_schema") {
-    body.response_format = {
-      type: "text",
-      mime_type: "application/json",
-      schema: format.json_schema.schema,
-    };
-    return;
-  }
-  body.response_format = { type: "json_object" };
-}
-
-function applyDeepSeekResponseFormat(
-  body: Record<string, unknown>,
-  model: ResolvedModel,
-  format: RawChatResponseFormat,
-): void {
-  if (format.type === "json_schema") {
-    if (!canUseStrictToolCall(model)) return;
-    const name = normalizeToolName(format.json_schema.name);
-    body.tools = [
-      {
-        type: "function",
-        function: {
-          name,
-          description: "Return the response in the required JSON schema.",
-          strict: format.json_schema.strict !== false,
-          parameters: format.json_schema.schema,
-        },
-      },
-    ];
-    body.tool_choice = { type: "function", function: { name } };
-    return;
-  }
-  if (!model.unsupportedParameters.includes("response_format")) {
-    body.response_format = { type: "json_object" };
-  }
-}
-
-function usesDeepSeekStrictToolCall(
-  model: ResolvedModel,
-  format?: RawChatResponseFormat,
-): boolean {
-  return (
-    model.provider.toLowerCase() === "deepseek" &&
-    format?.type === "json_schema" &&
-    canUseStrictToolCall(model)
-  );
-}
-
-function canUseStrictToolCall(model: ResolvedModel): boolean {
-  return (
-    !model.unsupportedParameters.includes("tools") &&
-    !model.unsupportedParameters.includes("tool_choice")
-  );
-}
-
-function normalizeChatCompletionResponse(
-  body: ChatCompletionResponse,
-): ChatCompletionResponse {
-  for (const choice of body.choices || []) {
-    const message = choice.message;
-    if (!message) continue;
-    const existing = typeof message.content === "string" ? message.content : "";
-    if (existing.trim()) continue;
-    const toolArguments = firstToolCallArguments(message.tool_calls);
-    if (toolArguments) message.content = toolArguments;
-  }
-  return body;
-}
-
-function firstToolCallArguments(toolCalls?: ChatToolCall[]): string {
-  for (const call of toolCalls || []) {
-    const args = call.function?.arguments;
-    if (typeof args === "string" && args.trim()) return args;
-  }
-  return "";
-}
-
-function normalizeToolName(name: string): string {
-  const normalized = name
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 64);
-  return normalized || "structured_output";
-}
-
 function publicModel({
   baseUrl: _baseUrl,
   apiKey: _apiKey,
-  unsupportedParameters: _unsupportedParameters,
-  outputTokenParameter: _outputTokenParameter,
   ...model
 }: ResolvedModel): ModelOption {
   return model;
@@ -538,36 +461,15 @@ function normalizeLocalModels(value: unknown): NormalizedLocalModel[] {
   const models = value.flatMap((item): NormalizedLocalModel[] => {
     if (typeof item === "string") {
       const name = item.trim();
-      return name ? [{ name, unsupportedParameters: [], outputTokenParameter: "" }] : [];
+      return name ? [{ name }] : [];
     }
     const raw =
       item && typeof item === "object" ? (item as LocalModelConfig) : {};
     const name = stringField(raw.name);
     if (!name) return [];
-    return [
-      {
-        name,
-        unsupportedParameters: normalizeUnsupportedParameters(
-          raw.unsupportedParameters,
-        ),
-        outputTokenParameter: normalizeOutputTokenParameter(raw.outputTokenParameter),
-      },
-    ];
+    return [{ name }];
   });
   return [...new Map(models.map((model) => [model.name, model])).values()];
-}
-
-function normalizeOutputTokenParameter(value: unknown): "max_tokens" | "max_completion_tokens" | "" {
-  const parameter = stringField(value);
-  return parameter === "max_tokens" || parameter === "max_completion_tokens" ? parameter : "";
-}
-
-function normalizeUnsupportedParameters(value: unknown): string[] {
-  return unique(
-    Array.isArray(value)
-      ? value.map((parameter) => stringField(parameter))
-      : [],
-  );
 }
 
 function unique(values: Array<string | undefined>): string[] {

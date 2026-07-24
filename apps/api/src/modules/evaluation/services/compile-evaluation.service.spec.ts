@@ -127,7 +127,7 @@ test("compile evaluation freezes all pages but sends Judge only pages linked to 
   };
   const model = {
     resolveModel: () => "judge",
-    chat: async (request: { messages: Array<{ content: string }> }) => {
+    respond: async (request: { messages: Array<{ content: string }> }) => {
       const input = JSON.parse(request.messages[1].content) as { finalWikiPages: Array<{ path: string }> };
       judgedPaths = input.finalWikiPages.map((page) => page.path);
       return {
@@ -292,7 +292,7 @@ test("compile evaluation marks facts missing when source is not compiled", async
     readPage: () => {
       throw new Error("readPage should not be called");
     },
-    chat: async () => {
+    respond: async () => {
       chatCalled = true;
       return { choices: [] };
     },
@@ -339,7 +339,7 @@ test("compile evaluation records failed case when Judge JSON is invalid", async 
       content: "P1 TTL is 2 hours",
       links: [],
     }),
-    chat: async () => ({ choices: [{ message: { content: "not json" } }] }),
+    respond: async () => ({ choices: [{ message: { content: "not json" } }] }),
   });
 
   service.createRun({ datasetId: dataset.datasetId, judgeModel: "judge" });
@@ -382,7 +382,7 @@ test("compile evaluation does not count correct when Judge evidence is not in fi
       content: "P1 TTL is 2 hours",
       links: [],
     }),
-    chat: async () => ({
+    respond: async () => ({
       choices: [
         {
           message: {
@@ -445,7 +445,7 @@ test("compile evaluation uses configured worker concurrency and keeps all result
       content: "P1 TTL is 2 hours",
       links: [],
     }),
-    chat: async () => {
+    respond: async () => {
       activeCalls += 1;
       totalCalls += 1;
       maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
@@ -496,7 +496,7 @@ test("compile evaluation retries only infrastructure-failed cases in a new linke
       content: "P1 TTL is 2 hours",
       links: [],
     }),
-    chat: async () => {
+    respond: async () => {
       callCount += 1;
       if (callCount === 1) return { choices: [{ message: { content: "not json" } }] };
       return {
@@ -575,7 +575,7 @@ function createHarness(args: {
   readPage: (path: string) => unknown;
   readPageClaims?: (path: string) => unknown;
   listFacts?: (sourceIds?: string[]) => unknown[];
-  chat: () => Promise<unknown>;
+  respond: () => Promise<unknown>;
 }) {
   let run: CompileEvaluationRun | null = null;
   let snapshot: CompileEvaluationWikiSnapshot | null = null;
@@ -644,7 +644,7 @@ function createHarness(args: {
   };
   const model = {
     resolveModel: () => "judge",
-    chat: args.chat,
+    respond: args.respond,
   };
   return {
     service: new CompileEvaluationService(
