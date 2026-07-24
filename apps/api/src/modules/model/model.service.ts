@@ -7,7 +7,6 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant" | string;
   content: unknown;
 }
-
 export type JsonSchema = Record<string, unknown>;
 
 export type RawChatResponseFormat =
@@ -118,7 +117,6 @@ export class ModelService {
       firstNonEmpty([
         process.env.OPENAI_MODEL,
         process.env.MODEL,
-        process.env.LLM_WIKI_MODEL,
       ]),
     );
     if (envModel) return envModel.id;
@@ -236,7 +234,6 @@ export class ModelService {
     const models = unique([
       process.env.OPENAI_MODEL,
       process.env.MODEL,
-      process.env.LLM_WIKI_MODEL,
     ]);
     if (!apiKey || !models.length) return [];
     const baseUrl = normalizeBaseUrl(

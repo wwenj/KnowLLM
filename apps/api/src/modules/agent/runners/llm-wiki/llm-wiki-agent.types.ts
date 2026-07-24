@@ -14,14 +14,12 @@ export const MAX_PLAN_TASKS = 6;
 export const MAX_REACT_ROUNDS = 3;
 export const MAX_ACTIONS_PER_ROUND = 6;
 export const MAX_SEARCHES = 6;
-export const MAX_SOURCE_READS = 6;
 export const MAX_MODEL_CALLS = 6;
 export const MAX_MODEL_ATTEMPTS = 8;
 export const MAX_MODEL_RETRIES = 2;
 export const TOKEN_LIMIT = 48_000;
 export const FINAL_TOKEN_RESERVE = 12_000;
 
-export type EvidenceRequirement = "page" | "fact" | "source";
 export type ToolName = "searchWiki" | "readPage" | "readSource" | "finish";
 export type StopReason =
   | "complete"
@@ -49,7 +47,6 @@ export type PlannerCatalogPage = [pageKey: string, title: string, goal: string];
 export interface QueryTask {
   taskId: string;
   question: string;
-  evidenceRequirement: EvidenceRequirement;
 }
 
 export interface PlannerAction {
@@ -88,11 +85,11 @@ export interface FinishAction {
   reason?: string;
 }
 
-export type ReactAction = SearchAction | ReadPageAction | ReadSourceAction | FinishAction;
+export type ReactAction = SearchAction | ReadPageAction | FinishAction;
 
 export interface EvidenceSelection {
   taskId: string;
-  kind: "page" | "fact" | "source";
+  kind: "page" | "source";
   pageKey?: string;
   sourceId?: string;
   quote: string;
@@ -107,7 +104,11 @@ export interface VerifiedEvidence extends EvidenceSelection {
 }
 
 export interface ReactDecision {
-  coverage: Array<{ taskId: string; status: "covered" | "partial" | "missing"; note: string }>;
+  coverage: Array<{
+    taskId: string;
+    status: "covered" | "partial" | "missing";
+    note: string;
+  }>;
   evidence: EvidenceSelection[];
   actions: ReactAction[];
   conflicts: string[];
@@ -121,7 +122,12 @@ export interface RetrievalRound {
   round: number;
   model: string;
   actions: ReactAction[];
-  observations: Array<{ tool: ToolName; key: string; cached: boolean; summary: string }>;
+  observations: Array<{
+    tool: ToolName;
+    key: string;
+    cached: boolean;
+    summary: string;
+  }>;
   evidenceIds: string[];
   coverage: ReactDecision["coverage"];
   conflicts: string[];

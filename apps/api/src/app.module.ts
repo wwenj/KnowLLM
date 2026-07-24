@@ -5,10 +5,7 @@ import { ApiExceptionFilter } from "./common/api-exception.filter";
 import { ApiResponseInterceptor } from "./common/api-response.interceptor";
 import { getEnvFilePaths } from "./config/env";
 import { AgentModule } from "./modules/agent/agent.module";
-import { DebugModule } from "./modules/debug/debug.module";
-import { EvaluationModule } from "./modules/evaluation/evaluation.module";
 import { HealthModule } from "./modules/health/health.module";
-import { LlmWikiModule } from "./modules/llmWiki/llm-wiki.module";
 import { LlmWikiNextModule } from "./modules/llmWikiNext/llm-wiki-next.module";
 import { ModelModule } from "./modules/model/model.module";
 
@@ -20,11 +17,8 @@ import { ModelModule } from "./modules/model/model.module";
     }),
     HealthModule,
     ModelModule,
-    LlmWikiModule,
     LlmWikiNextModule,
-    AgentModule,
-    EvaluationModule,
-    DebugModule
+    AgentModule
   ],
   providers: [
     {

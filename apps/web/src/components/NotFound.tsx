@@ -42,7 +42,7 @@ export function NotFound() {
         </button>
         <button
           type="button"
-          onClick={() => navigate("/llm-wiki", { replace: true })}
+          onClick={() => navigate("/llm-wiki-next", { replace: true })}
           className="group relative inline-flex items-center gap-2 overflow-hidden rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_28px_rgba(99,102,241,0.4)] transition hover:shadow-[0_12px_36px_rgba(168,85,247,0.5)]"
         >
           <span
