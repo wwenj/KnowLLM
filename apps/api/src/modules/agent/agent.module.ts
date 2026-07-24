@@ -5,6 +5,7 @@ import { AgentController } from "./controllers/agent.controller";
 import { LlmWikiAgentRunner } from "./runners/llm-wiki/llm-wiki-agent.runner";
 import { LlmWikiAgentTools } from "./runners/llm-wiki/llm-wiki-agent.tools";
 import { LlmWikiAgentWorkflow } from "./runners/llm-wiki/llm-wiki-agent.workflow";
+import { LlmWikiSourceTraceTool } from "./runners/llm-wiki/llm-wiki-source-trace.tool";
 import { AgentRegistryService } from "./services/agent-registry.service";
 import { AgentResultRendererService } from "./services/agent-result-renderer.service";
 import { AgentRunExecutionService } from "./services/agent-run-execution.service";
@@ -20,9 +21,10 @@ import { AgentService } from "./services/agent.service";
     AgentResultRendererService,
     AgentRunExecutionService,
     AgentService,
+    LlmWikiSourceTraceTool,
     LlmWikiAgentTools,
     LlmWikiAgentWorkflow,
-    LlmWikiAgentRunner
+    LlmWikiAgentRunner,
   ],
   exports: [AgentRunExecutionService],
 })

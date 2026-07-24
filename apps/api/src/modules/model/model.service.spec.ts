@@ -5,27 +5,21 @@ import * as path from "node:path";
 import test from "node:test";
 import { ModelService } from "./model.service";
 
-test("model service exposes safe enabled model list from local provider config", async () => {
+test("model service exposes safe enabled OpenAI model list", async () => {
   await withTempModelConfig(
     [
       providerConfig({
-        name: "Provider A",
-        baseUrl: "https://provider-a.test/v1",
-        apiKey: "secret-a",
-        models: ["fast", "main"],
+        name: "OpenAPI GPT",
+        baseUrl: "https://provider.test/v1",
+        apiKey: "secret",
+        models: ["fast", "quality"],
       }),
       providerConfig({
         name: "Disabled",
         baseUrl: "https://disabled.test/v1",
-        apiKey: "secret-disabled",
+        apiKey: "disabled-secret",
         models: ["disabled"],
         enabled: false,
-      }),
-      providerConfig({
-        name: "Missing Key",
-        baseUrl: "https://missing-key.test/v1",
-        apiKey: "",
-        models: ["missing-key"],
       }),
     ],
     () => {
@@ -34,452 +28,222 @@ test("model service exposes safe enabled model list from local provider config",
 
       assert.deepEqual(
         models.map((item) => item.id),
-        ["provider-a:fast", "provider-a:main"],
+        ["openapi-gpt:fast", "openapi-gpt:quality"],
       );
-      assert.equal(models[0].providerName, "Provider A");
-      assert.equal(JSON.stringify(models).includes("secret-a"), false);
-      assert.equal(JSON.stringify(models).includes("provider-a.test"), false);
-      assert.equal(service.hasConfiguredModel(), true);
+      assert.equal(JSON.stringify(models).includes("secret"), false);
+      assert.equal(JSON.stringify(models).includes("provider.test"), false);
+      assert.equal(service.resolveModel("fast"), "openapi-gpt:fast");
+      assert.equal(service.findModel("missing"), null);
     },
   );
 });
 
-test("model service resolves ids and unique model names", async () => {
+test("respond uses only Responses API text.format and parses nested output", async () => {
   await withTempModelConfig(
     [
       providerConfig({
-        name: "Provider A",
-        baseUrl: "https://a.test/v1",
-        apiKey: "secret-a",
-        models: ["same", "unique"],
-      }),
-      providerConfig({
-        name: "Provider B",
-        baseUrl: "https://b.test/v1",
-        apiKey: "secret-b",
-        models: ["same"],
-      }),
-    ],
-    () => {
-      const service = new ModelService();
-
-      assert.equal(service.resolveModel("provider-a:same"), "provider-a:same");
-      assert.equal(service.resolveModel("unique"), "provider-a:unique");
-      assert.equal(service.findModel("same"), null);
-      assert.equal(service.resolveModel("missing"), "");
-      assert.equal(service.resolveModel(""), "provider-a:same");
-    },
-  );
-});
-
-test("model service routes chat requests to the selected provider", async () => {
-  await withTempModelConfig(
-    [
-      providerConfig({
-        name: "Provider A",
-        baseUrl: "https://a.test/v1",
-        apiKey: "secret-a",
-        models: ["model-a"],
-      }),
-      providerConfig({
-        name: "Provider B",
-        baseUrl: "https://b.test/api/",
-        apiKey: "secret-b",
-        models: ["model-b"],
+        name: "OpenAPI GPT",
+        baseUrl: "https://bella.test/v1/",
+        apiKey: "secret",
+        models: ["gpt-5.4-mini"],
       }),
     ],
     async () => {
-      const calls: Array<{
-        url: string;
-        auth: string;
-        body: Record<string, unknown>;
-      }> = [];
+      let requestUrl = "";
+      let requestAuth = "";
+      let requestBody: Record<string, unknown> = {};
       const debugRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
-      const debugResponses: unknown[] = [];
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async (
         input: string | URL | Request,
         init?: RequestInit,
       ) => {
-        calls.push({
-          url: String(input),
-          auth: String(new Headers(init?.headers).get("authorization") || ""),
-          body: JSON.parse(String(init?.body || "{}")) as Record<
-            string,
-            unknown
-          >,
-        });
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
+        requestUrl = String(input);
+        requestAuth = String(
+          new Headers(init?.headers).get("authorization") || "",
         );
+        requestBody = JSON.parse(String(init?.body || "{}")) as Record<
+          string,
+          unknown
+        >;
+        return response({
+          id: "resp_1",
+          model: "gpt-5.4-mini",
+          status: "completed",
+          output_text: null,
+          output: [
+            { type: "reasoning", summary: [] },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: '{"ok":true}' }],
+            },
+          ],
+          usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+        });
       }) as typeof fetch;
       try {
         const service = new ModelService();
-        await service.chat({
-          model: "provider-b:model-b",
-          messages: [{ role: "user", content: "hello" }],
-          onRequest: (request) => { debugRequests.push(request); },
-          onResponse: (response) => { debugResponses.push(response); },
+        const result = await service.respond({
+          model: "openapi-gpt:gpt-5.4-mini",
+          messages: [
+            { role: "system", content: "system prompt" },
+            { role: "user", content: "question" },
+          ],
+          textFormat: {
+            type: "json_schema",
+            name: "answer",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["ok"],
+              properties: { ok: { type: "boolean" } },
+            },
+          },
+          maxOutputTokens: 321,
+          onRequest: (request) => debugRequests.push(request),
         });
+
+        assert.equal(result.content, '{"ok":true}');
+        assert.equal(result.usage?.total_tokens, 16);
       } finally {
         globalThis.fetch = originalFetch;
       }
 
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0].url, "https://b.test/api/chat/completions");
-      assert.equal(calls[0].auth, "Bearer secret-b");
-      assert.equal(calls[0].body.model, "model-b");
-      assert.equal(debugRequests[0]?.url, "https://b.test/api/chat/completions");
-      assert.equal(debugRequests[0]?.body.model, "model-b");
-      assert.equal(JSON.stringify(debugRequests).includes("secret-b"), false);
-      assert.equal((debugResponses[0] as { choices?: unknown[] }).choices?.length, 1);
-    },
-  );
-});
-
-test("model service omits parameters unsupported by a selected model", async () => {
-  await withTempModelConfig(
-    [
-      providerConfig({
-        name: "Provider A",
-        baseUrl: "https://a.test/v1",
-        apiKey: "secret-a",
-        models: [
-          "regular-model",
-          { name: "restricted-model", unsupportedParameters: ["temperature", "max_tokens"] },
-        ],
-      }),
-    ],
-    async () => {
-      const bodies: Record<string, unknown>[] = [];
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (
-        _input: string | URL | Request,
-        init?: RequestInit,
-      ) => {
-        bodies.push(
-          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
-        );
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
+      assert.equal(requestUrl, "https://bella.test/v1/responses");
+      assert.equal(requestAuth, "Bearer secret");
+      assert.equal(requestBody.model, "gpt-5.4-mini");
+      assert.equal(requestBody.instructions, "system prompt");
+      assert.deepEqual(requestBody.input, [
+        { role: "user", content: "question" },
+      ]);
+      assert.equal(requestBody.store, false);
+      assert.equal(requestBody.max_output_tokens, 321);
+      assert.deepEqual(requestBody.text, {
+        format: {
+          type: "json_schema",
+          name: "answer",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["ok"],
+            properties: { ok: { type: "boolean" } },
           },
-        );
-      }) as typeof fetch;
-      try {
-        const service = new ModelService();
-        await service.chat({
-          model: "provider-a:regular-model",
-          temperature: 0,
-          maxTokens: 321,
-          messages: [{ role: "user", content: "hello" }],
-        });
-        await service.chat({
-          model: "provider-a:restricted-model",
-          temperature: 0,
-          maxTokens: 321,
-          messages: [{ role: "user", content: "hello" }],
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      assert.equal(bodies[0].temperature, 0);
-      assert.equal(bodies[0].max_tokens, 321);
-      assert.equal("temperature" in bodies[1], false);
-      assert.equal("max_tokens" in bodies[1], false);
-      assert.equal(bodies[1].max_completion_tokens, 321);
+        },
+      });
+      assert.equal("messages" in requestBody, false);
+      assert.equal("response_format" in requestBody, false);
+      assert.equal(debugRequests[0]?.url, "https://bella.test/v1/responses");
+      assert.equal(JSON.stringify(debugRequests).includes("secret"), false);
     },
   );
 });
 
-test("model service honors an explicit max_completion_tokens provider contract", async () => {
+test("respond keeps explicit correction history in Responses input", async () => {
   await withTempModelConfig(
-    [
-      providerConfig({
-        name: "Provider A",
-        baseUrl: "https://a.test/v1",
-        apiKey: "secret-a",
-        models: [{ name: "gpt-5.5", outputTokenParameter: "max_completion_tokens" }],
-      }),
-    ],
+    [providerConfig({ name: "OpenAI", baseUrl: "https://openai.test/v1", apiKey: "key", models: ["gpt"] })],
     async () => {
       let body: Record<string, unknown> = {};
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
         body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
-        return new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }], usage: { prompt_tokens: 3, completion_tokens: 2 } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }) as typeof fetch;
-      try {
-        const service = new ModelService();
-        await service.chat({ model: "provider-a:gpt-5.5", maxTokens: 321, messages: [{ role: "user", content: "probe" }] });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-      assert.equal(body.max_completion_tokens, 321);
-      assert.equal("max_tokens" in body, false);
-    },
-  );
-});
-
-test("model service applies provider unsupported parameters to all its models", async () => {
-  await withTempModelConfig(
-    [
-      providerConfig({
-        name: "Provider A",
-        baseUrl: "https://a.test/v1",
-        apiKey: "secret-a",
-        models: ["model-a", "model-b"],
-        unsupportedParameters: ["temperature"],
-      }),
-    ],
-    async () => {
-      const bodies: Record<string, unknown>[] = [];
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (
-        _input: string | URL | Request,
-        init?: RequestInit,
-      ) => {
-        bodies.push(
-          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
-        );
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }) as typeof fetch;
-      try {
-        const service = new ModelService();
-        await service.chat({
-          model: "provider-a:model-a",
-          temperature: 0,
-          messages: [{ role: "user", content: "hello" }],
-        });
-        await service.chat({
-          model: "provider-a:model-b",
-          temperature: 0.2,
-          messages: [{ role: "user", content: "hello" }],
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      assert.equal(
-        bodies.every((body) => !("temperature" in body)),
-        true,
-      );
-    },
-  );
-});
-
-test("model service adapts json schema response format per provider", async () => {
-  const schemaFormat = {
-    type: "json_schema" as const,
-    json_schema: {
-      name: "wiki_output",
-      strict: true,
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { ok: { type: "boolean" } },
-        required: ["ok"],
-      },
-    },
-  };
-  await withTempModelConfig(
-    [
-      providerConfig({
-        name: "OpenAI",
-        provider: "openai",
-        baseUrl: "https://openai.test/v1",
-        apiKey: "secret-openai",
-        models: ["gpt"],
-      }),
-      providerConfig({
-        name: "Claude",
-        provider: "anthropic",
-        baseUrl: "https://claude.test/v1",
-        apiKey: "secret-claude",
-        models: ["claude"],
-      }),
-      providerConfig({
-        name: "Gemini",
-        provider: "gemini",
-        baseUrl: "https://gemini.test/v1",
-        apiKey: "secret-gemini",
-        models: ["gemini"],
-      }),
-      providerConfig({
-        name: "DeepSeek",
-        provider: "deepseek",
-        baseUrl: "https://deepseek.test",
-        apiKey: "secret-deepseek",
-        models: ["deepseek"],
-      }),
-      providerConfig({
-        name: "Mimo",
-        provider: "mimo",
-        baseUrl: "https://mimo.test/v1",
-        apiKey: "secret-mimo",
-        models: ["mimo"],
-      }),
-      providerConfig({
-        name: "Unsupported",
-        provider: "openai",
-        baseUrl: "https://unsupported.test/v1",
-        apiKey: "secret-unsupported",
-        models: ["unsupported"],
-        unsupportedParameters: ["response_format"],
-      }),
-    ],
-    async () => {
-      const urls: string[] = [];
-      const bodies: Record<string, unknown>[] = [];
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (
-        input: string | URL | Request,
-        init?: RequestInit,
-      ) => {
-        urls.push(String(input));
-        bodies.push(
-          JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
-        );
-        return new Response(
-          JSON.stringify({ choices: [{ message: { content: "{}" } }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
-      }) as typeof fetch;
-      try {
-        const service = new ModelService();
-        for (const model of [
-          "openai:gpt",
-          "claude:claude",
-          "gemini:gemini",
-          "deepseek:deepseek",
-          "mimo:mimo",
-          "unsupported:unsupported",
-        ]) {
-          await service.chat({
-            model,
-            messages: [{ role: "user", content: "hello" }],
-            response_format: schemaFormat,
-          });
-        }
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      assert.deepEqual(bodies[0].response_format, schemaFormat);
-      assert.deepEqual(bodies[1].output_config, {
-        format: {
-          type: "json_schema",
-          schema: schemaFormat.json_schema.schema,
-        },
-      });
-      assert.deepEqual(bodies[2].response_format, {
-        type: "text",
-        mime_type: "application/json",
-        schema: schemaFormat.json_schema.schema,
-      });
-      assert.equal("response_format" in bodies[3], false);
-      assert.equal(urls[3], "https://deepseek.test/beta/chat/completions");
-      assert.deepEqual(bodies[3].tool_choice, {
-        type: "function",
-        function: { name: "wiki_output" },
-      });
-      assert.deepEqual(bodies[3].tools, [
-        {
-          type: "function",
-          function: {
-            name: "wiki_output",
-            description: "Return the response in the required JSON schema.",
-            strict: true,
-            parameters: schemaFormat.json_schema.schema,
-          },
-        },
-      ]);
-      assert.deepEqual(bodies[4].response_format, schemaFormat);
-      assert.equal("response_format" in bodies[5], false);
-      assert.equal("output_config" in bodies[5], false);
-      assert.equal("tools" in bodies[5], false);
-    },
-  );
-});
-
-test("model service reads strict tool call arguments as assistant content", async () => {
-  await withTempModelConfig(
-    [
-      providerConfig({
-        name: "DeepSeek",
-        provider: "deepseek",
-        baseUrl: "https://deepseek.test",
-        apiKey: "secret-deepseek",
-        models: ["deepseek"],
-      }),
-    ],
-    async () => {
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async () =>
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: "",
-                  tool_calls: [
-                    { function: { arguments: "{\"ok\":true}" } },
-                  ],
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        )) as typeof fetch;
-      try {
-        const service = new ModelService();
-        const res = await service.chat({
-          model: "deepseek:deepseek",
-          messages: [{ role: "user", content: "hello" }],
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "tool output",
-              strict: true,
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                properties: { ok: { type: "boolean" } },
-                required: ["ok"],
-              },
+        return response({
+          id: "resp_2",
+          model: "gpt",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "{}" }],
             },
-          },
+          ],
         });
+      }) as typeof fetch;
+      try {
+        await new ModelService().respond({
+          model: "openai:gpt",
+          messages: [
+            { role: "system", content: "rules" },
+            { role: "user", content: "first" },
+            { role: "assistant", content: "invalid" },
+            { role: "user", content: "correct it" },
+          ],
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      assert.deepEqual(body.input, [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "invalid" },
+        { role: "user", content: "correct it" },
+      ]);
+      assert.equal("previous_response_id" in body, false);
+    },
+  );
+});
 
-        assert.equal(res.choices?.[0]?.message?.content, "{\"ok\":true}");
+test("model service ignores non-OpenAI providers", async () => {
+  await withTempModelConfig(
+    [providerConfig({ provider: "anthropic", name: "Claude", baseUrl: "https://claude.test/v1", apiKey: "key", models: ["claude"] })],
+    async () => {
+      const service = new ModelService();
+      assert.equal(service.listModels().length, 0);
+      assert.equal(service.findModel("claude:claude"), null);
+    },
+  );
+});
+
+test("respond rejects incomplete and refusal responses", async () => {
+  await withTempModelConfig(
+    [providerConfig({ name: "OpenAI", baseUrl: "https://openai.test/v1", apiKey: "key", models: ["gpt"] })],
+    async () => {
+      const replies = [
+        {
+          id: "resp_incomplete",
+          model: "gpt",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [],
+        },
+        {
+          id: "resp_refusal",
+          model: "gpt",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              content: [{ type: "refusal", refusal: "cannot comply" }],
+            },
+          ],
+        },
+      ];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => response(replies.shift())) as typeof fetch;
+      try {
+        const service = new ModelService();
+        await assert.rejects(
+          () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "one" }] }),
+          /未完成: incomplete/,
+        );
+        await assert.rejects(
+          () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "two" }] }),
+          /模型拒绝回答: cannot comply/,
+        );
       } finally {
         globalThis.fetch = originalFetch;
       }
     },
   );
 });
+
+function response(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 function providerConfig(
   overrides: Record<string, unknown>,
@@ -491,6 +255,7 @@ function providerConfig(
     ...overrides,
   };
 }
+
 async function withTempModelConfig<T>(
   config: unknown,
   run: () => T | Promise<T>,

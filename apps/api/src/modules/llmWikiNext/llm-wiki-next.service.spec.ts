@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { ModelService, RawChatOptions } from "../model/model.service";
+import { ModelService, ResponseRequestOptions } from "../model/model.service";
 import {
   calculateMaxPages,
   LlmWikiNextService,
@@ -1210,7 +1210,7 @@ class StubModel {
     return model === "test:model" ? { id: model } : null;
   }
 
-  async chat(options: RawChatOptions): Promise<unknown> {
+  async respond(options: ResponseRequestOptions): Promise<unknown> {
     this.activeCalls += 1;
     this.maxActiveCalls = Math.max(this.maxActiveCalls, this.activeCalls);
     try {
@@ -1267,11 +1267,11 @@ class StubModel {
 class FactsModel extends StubModel {
   writerSystemPrompt = "";
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
-    if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
+    if (Array.isArray(payload.availablePageKeys)) return super.respond(options);
 
     this.writerSystemPrompt = String(options.messages[0]?.content || "");
     const pagePlan = payload.pagePlan as { pages: Array<{ pageKey: string }> };
@@ -1308,7 +1308,7 @@ class DelayedWriterModel extends StubModel {
     super();
   }
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
@@ -1328,7 +1328,7 @@ class DelayedWriterModel extends StubModel {
         }),
       ]);
     }
-    return super.chat(options);
+    return super.respond(options);
   }
 
   finishWriter(): void {
@@ -1339,19 +1339,19 @@ class DelayedWriterModel extends StubModel {
 class ToggleWriterFailureModel extends StubModel {
   failWrites = false;
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
     if (this.failWrites && !Array.isArray(payload.availablePageKeys)) {
       throw new Error("模拟重编译 Writer 失败");
     }
-    return super.chat(options);
+    return super.respond(options);
   }
 }
 
 class InvalidPlannerModel extends StubModel {
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
@@ -1377,7 +1377,7 @@ class InvalidPlannerModel extends StubModel {
         ],
       });
     }
-    return super.chat(options);
+    return super.respond(options);
   }
 }
 
@@ -1398,11 +1398,11 @@ class PlannerFailureModel extends StubModel {
     super();
   }
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
-    if (!Array.isArray(payload.availablePageKeys)) return super.chat(options);
+    if (!Array.isArray(payload.availablePageKeys)) return super.respond(options);
     if (this.variant === "invalid_json") {
       return { choices: [{ message: { content: "not-json" } }] };
     }
@@ -1444,11 +1444,11 @@ class WriterFailureModel extends StubModel {
     super();
   }
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
-    if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
+    if (Array.isArray(payload.availablePageKeys)) return super.respond(options);
     const plan = payload.pagePlan as { pages: Array<{ pageKey: string }> };
     const content = String(payload.completeSource || "");
     const sourceLine = Number(content.match(/^(\d+):/)?.[1] || 1);
@@ -1470,11 +1470,11 @@ class WriterFailureModel extends StubModel {
 }
 
 class FactLineCompatibilityModel extends StubModel {
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
-    if (Array.isArray(payload.availablePageKeys)) return super.chat(options);
+    if (Array.isArray(payload.availablePageKeys)) return super.respond(options);
     const plan = payload.pagePlan as { pages: Array<{ pageKey: string }> };
     return modelResponse({
       pages: [
@@ -1513,7 +1513,7 @@ interface CapturedWriterPayload {
 class MixedCreateUpdateModel extends StubModel {
   readonly writerPayloads: CapturedWriterPayload[] = [];
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;
@@ -1550,7 +1550,7 @@ class SequentialUpdateModel extends StubModel {
   readonly updateUnitIds: string[] = [];
   readonly updateExistingBodies: string[] = [];
 
-  override async chat(options: RawChatOptions): Promise<unknown> {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
     const payload = JSON.parse(
       String(options.messages[1]?.content || "{}"),
     ) as Record<string, unknown>;

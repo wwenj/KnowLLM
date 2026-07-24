@@ -2,476 +2,166 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ModelService,
-  RawChatResponseFormat,
+  ResponseTextFormat,
 } from "../../../model/model.service";
 import type { AgentRunEvent, AgentRunnerContext } from "../../agent.types";
 import type { LlmWikiAgentTools } from "./llm-wiki-agent.tools";
-import type { LlmWikiAgentInput } from "./llm-wiki-agent.types";
 import {
   DEFAULT_FAST_MODEL,
   DEFAULT_QUALITY_MODEL,
+  type LlmWikiAgentInput,
+  type SourceTraceInput,
 } from "./llm-wiki-agent.types";
 import { LlmWikiAgentWorkflow } from "./llm-wiki-agent.workflow";
 
-const sourceId = "a".repeat(32);
-const pageKey = "A1b2C3d4";
+const pageKey1 = "A1b2C3d4";
+const pageKey2 = "E5f6G7h8";
+const pageKey3 = "I9j0K1l2";
+const sourceId1 = "a".repeat(16);
+const sourceId2 = "b".repeat(16);
+const sourceId3 = "d".repeat(16);
 
-test("Planner + ReAct keeps key facts as page evidence and never executes readSource", async () => {
+test("Planner binds one initial action to each task and completes with Page evidence", async () => {
   const toolCalls: string[] = [];
-  const tools = makeTools(toolCalls);
-  let reactCount = 0;
-  const reactInputs: Array<Record<string, unknown>> = [];
-  let finalSystem = "";
-  const model = makeModel(async (system, _modelId, user) => {
-    if (system.includes("Wiki 查询规划器")) {
+  const models: string[] = [];
+  let plannerFormat: ResponseTextFormat | undefined;
+  const model = makeModel((system, _model, _user, _messages, format) => {
+    if (isPlanner(system)) {
+      plannerFormat = format;
       return {
         relevant: true,
-        tasks: [{ id: "config", question: "Agent 配置是什么？" }],
-        actions: [{ tool: "readPage", value: pageKey }],
+        tasks: [{ id: "t1", question: "默认模型是什么？" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
       };
     }
-    if (system.includes("你负责从已读取的资料 (materials) 中")) {
-      reactInputs.push(JSON.parse(user) as Record<string, unknown>);
-      reactCount += 1;
-      if (reactCount === 1) {
-        return {
-          evidence: [
-            {
-              taskId: "config",
-              pageKey,
-              quote: "fastModel: gpt-5.4-mini",
-              claim: "页面记录了快速模型配置",
-            },
-          ],
-          missing: ["缺少原始配置内容。"],
-          actions: [{ tool: "readSource", sourceId, reason: "核验配置行" }],
-          finish: false,
-        };
-      }
+    if (isReact(system)) {
       return {
-        evidence: [],
-        missing: [],
+        evidence: [pageEvidence("t1", pageKey1, "fastModel: gpt-5.4-mini")],
+        taskStates: [completed("t1", "默认模型是 gpt-5.4-mini")],
         actions: [],
-        finish: true,
+        conflicts: [],
       };
     }
-    finalSystem = system;
-    return {
-      answerable: true,
-      answerMarkdown: "# 结果\n\n快速模型是 `gpt-5.4-mini`。",
-      citations: ["E1", "not-real"],
-      gaps: [],
-    };
-  });
+    return final("complete", "默认模型是 `gpt-5.4-mini`。[E1]", ["E1"]);
+  }, models);
   const workflow = new LlmWikiAgentWorkflow(
-    tools as unknown as LlmWikiAgentTools,
-    model as unknown as ModelService,
-  );
-  const events: AgentRunEvent[] = [];
-  const result = await workflow.start(
-    context(workflow.validateInput(input()), events),
-  );
-
-  assert.equal(result.status, "success");
-  assert.deepEqual(toolCalls, ["catalog", `page:${pageKey}`, "catalog"]);
-  assert.deepEqual(
-    (result.resultJson?.citations as Array<{ evidenceId: string }>).map(
-      (item) => item.evidenceId,
-    ),
-    ["E1"],
-  );
-  assert.equal(
-    (result.resultJson?.verifiedEvidence as Array<{ kind: string }>)[0]?.kind,
-    "page",
-  );
-  assert.equal(
-    (result.resultJson?.verifiedEvidence as Array<{ sourceId?: string }>)[0]
-      ?.sourceId,
-    undefined,
-  );
-  assert.equal(result.resultJson?.stopReason, "complete");
-  assert.deepEqual(reactInputs[0]?.acceptedEvidence, []);
-  assert.deepEqual(reactInputs[1]?.acceptedEvidence, [
-    {
-      evidenceId: "E1",
-      taskId: "config",
-      pageKey,
-      quote: "fastModel: gpt-5.4-mini",
-      claim: "页面记录了快速模型配置",
-    },
-  ]);
-  assert.equal(result.tokens?.modelCalls, 4);
-  assert.equal(result.stats?.sourceReads, 0);
-  assert.equal(
-    events.filter((event) => event.type === "model_request").length,
-    4,
-  );
-  assert.equal(
-    events.filter((event) => event.type === "model_response").length,
-    4,
-  );
-  assert.deepEqual(
-    events
-      .filter((event) => event.type === "tool_request")
-      .map((event) => event.tool),
-    ["readPage"],
-  );
-  assert.deepEqual(
-    events
-      .filter((event) => event.type === "tool_response")
-      .map((event) => event.status),
-    ["success"],
-  );
-  assert.match(
-    finalSystem,
-    /关键数字、默认值、配置值、前置条件、适用范围、限制、例外和因果关系/,
-  );
-  assert.match(finalSystem, /不得为了缩短回答而删除会改变结论含义的条件/);
-});
-
-test("input is strict: dual models and limit are required, and legacy fields are rejected", () => {
-  const workflow = new LlmWikiAgentWorkflow(
-    {} as LlmWikiAgentTools,
-    makeModel(() => ({})) as unknown as ModelService,
-  );
-  assert.deepEqual(workflow.getDefaults(), {
-    limit: 8,
-    fastModel: DEFAULT_FAST_MODEL,
-    qualityModel: DEFAULT_QUALITY_MODEL,
-    modelOptions: [],
-  });
-  assert.throws(
-    () => workflow.validateInput({ query: "x", limit: 8, model: "old" }),
-    /旧 Agent 输入字段/,
-  );
-  assert.throws(
-    () => workflow.validateInput({ ...input(), limit: 21 }),
-    /limit/,
-  );
-  assert.deepEqual(workflow.validateInput(input()), input());
-});
-
-test("Planner only uses the fast model and receives the minimal page tuple catalog", async () => {
-  const models: string[] = [];
-  let plannerPayload: unknown = null;
-  let plannerSystem = "";
-  let plannerFormat: RawChatResponseFormat | undefined;
-  const model = makeModel(
-    (system, _modelId, user, _messages, responseFormat) => {
-      if (system.includes("Wiki 查询规划器")) {
-        plannerSystem = system;
-        plannerPayload = JSON.parse(user);
-        plannerFormat = responseFormat;
-        return {
-          relevant: true,
-          tasks: [{ id: "page", question: "页面事实" }],
-          actions: [{ tool: "readPage", value: pageKey }],
-        };
-      }
-      if (system.includes("你负责从已读取的资料 (materials) 中"))
-        return {
-          evidence: [
-            {
-              taskId: "page",
-              pageKey,
-              quote: "fastModel: gpt-5.4-mini",
-              claim: "页面事实",
-            },
-          ],
-          missing: [],
-          actions: [],
-          finish: true,
-        };
-      return {
-        answerable: true,
-        answerMarkdown: "# 完成",
-        citations: ["E1"],
-        gaps: [],
-      };
-    },
-    models,
-  );
-  const workflow = new LlmWikiAgentWorkflow(
-    makeTools([]) as unknown as LlmWikiAgentTools,
+    makeTools(toolCalls) as unknown as LlmWikiAgentTools,
     model as unknown as ModelService,
   );
   const result = await workflow.start(context(workflow.validateInput(input())));
+
   assert.equal(result.status, "success");
-  assert.deepEqual(plannerPayload, {
-    query: input().query,
-    pages: [[pageKey, "Agent", "Agent 配置"]],
-  });
-  assert.match(plannerSystem, /"tasks":\[\{"id":"t1","question"/);
-  assert.match(
-    plannerSystem,
-    /任务字段限 id\/question，动作字段限 tool\/value/,
-  );
-  assert.doesNotMatch(plannerSystem, /预判答案类型|evidence/);
-  assert.equal(plannerFormat?.type, "json_schema");
-  if (plannerFormat?.type !== "json_schema")
-    throw new Error("Planner 未使用 json_schema");
-  const plannerTaskItems = (
-    (plannerFormat.json_schema.schema.properties as Record<string, unknown>)
-      .tasks as {
-      items: { required: string[]; properties: Record<string, unknown> };
-    }
-  ).items;
-  assert.deepEqual(plannerTaskItems.required, ["id", "question"]);
-  assert.deepEqual(Object.keys(plannerTaskItems.properties).sort(), [
-    "id",
-    "question",
-  ]);
+  assert.deepEqual(toolCalls, ["catalog", `page:${pageKey1}`, "catalog"]);
   assert.deepEqual(models, [
     DEFAULT_FAST_MODEL,
     DEFAULT_FAST_MODEL,
     DEFAULT_QUALITY_MODEL,
   ]);
-  assert.equal(
-    (result.runnerMeta?.models as { qualityModel: string }).qualityModel,
-    DEFAULT_QUALITY_MODEL,
-  );
-});
-
-test("Planner can end an unrelated query without Tool, ReAct, or Final calls", async () => {
-  const toolCalls: string[] = [];
-  const modelStages: string[] = [];
-  let plannerSystem = "";
-  const model = makeModel((system) => {
-    modelStages.push(system);
-    plannerSystem = system;
-    return { relevant: false, tasks: [], actions: [] };
-  });
-  const workflow = new LlmWikiAgentWorkflow(
-    makeTools(toolCalls) as unknown as LlmWikiAgentTools,
-    model as unknown as ModelService,
-  );
-  const events: AgentRunEvent[] = [];
-  const result = await workflow.start(
-    context(
-      workflow.validateInput({
-        ...input(),
-        query: "今天北京天气怎么样？",
-      }),
-      events,
+  assert.equal(plannerFormat?.type, "json_schema");
+  assert.equal(result.resultJson?.answerStatus, "complete");
+  assert.deepEqual(result.resultJson?.taskResults, [
+    {
+      taskId: "t1",
+      question: "默认模型是什么？",
+      status: "completed",
+      conclusion: "默认模型是 gpt-5.4-mini",
+      evidenceIds: ["E1"],
+      insufficientReason: undefined,
+      gaps: [],
+    },
+  ]);
+  assert.deepEqual(
+    (result.resultJson?.verifiedEvidence as Array<{ kind: string }>).map(
+      (item) => item.kind,
     ),
-  );
-
-  assert.equal(result.status, "insufficient");
-  assert.equal(result.content, "当前 Wiki 无相关信息。");
-  assert.equal(result.resultJson?.stopReason, "no_relevant_wiki");
-  assert.deepEqual(result.resultJson?.plan, {
-    relevant: false,
-    tasks: [],
-    actions: [],
-  });
-  assert.deepEqual(toolCalls, ["catalog"]);
-  assert.equal(modelStages.length, 1);
-  assert.equal(result.tokens?.modelCalls, 1);
-  assert.equal(
-    events.filter((event) => event.type === "tool_request").length,
-    0,
-  );
-  assert.equal(
-    events.filter((event) => event.type === "planner_no_match").length,
-    1,
-  );
-  assert.match(plannerSystem, /完全无语义关联/);
-  assert.match(
-    plannerSystem,
-    /"relevant":false,\s*"tasks":\[\],\s*"actions":\[\]/,
+    ["page"],
   );
 });
 
-test("the observed invalid Planner field shape is rejected with corrective retry feedback", async () => {
+test("Planner rejects missing taskId and corrects it once", async () => {
   let plannerCalls = 0;
   let retryMessages: Array<{ role: string; content: unknown }> = [];
   const model = makeModel((system, _model, _user, messages) => {
-    if (system.includes("Wiki 查询规划器")) {
+    if (isPlanner(system)) {
       plannerCalls += 1;
       if (plannerCalls === 1) {
         return {
           relevant: true,
-          tasks: [
-            {
-              task: "查找打印床调平流程",
-              mustAnswer: ["打印床如何调平"],
-              evidence: "page",
-              priority: 1,
-            },
-          ],
-          actions: [{ action: "readPage", value: pageKey }],
+          tasks: [{ id: "t1", question: "问题" }],
+          actions: [{ tool: "readPage", value: pageKey1 }],
         };
       }
       retryMessages = messages;
       return {
         relevant: true,
-        tasks: [{ id: "page", question: "页面事实" }],
-        actions: [{ tool: "readPage", value: pageKey }],
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
       };
     }
-    if (system.includes("你负责从已读取的资料 (materials) 中"))
+    if (isReact(system)) {
       return {
-        evidence: [
-          {
-            taskId: "page",
-            pageKey,
-            quote: "fastModel: gpt-5.4-mini",
-            claim: "页面事实",
-          },
-        ],
-        missing: [],
+        evidence: [pageEvidence("t1", pageKey1, "fastModel: gpt-5.4-mini")],
+        taskStates: [completed("t1", "完成")],
         actions: [],
-        finish: true,
+        conflicts: [],
       };
-    return {
-      answerable: true,
-      answerMarkdown: "# 完成",
-      citations: ["E1"],
-      gaps: [],
-    };
+    }
+    return final("complete", "完成。[E1]", ["E1"]);
   });
   const workflow = new LlmWikiAgentWorkflow(
     makeTools([]) as unknown as LlmWikiAgentTools,
     model as unknown as ModelService,
   );
   const result = await workflow.start(context(workflow.validateInput(input())));
+
   assert.equal(result.status, "success");
   assert.equal(plannerCalls, 2);
-  assert.equal(result.tokens?.modelCalls, 4);
   assert.deepEqual(
     retryMessages.map((message) => message.role),
     ["system", "user", "assistant", "user"],
   );
-  assert.match(
-    String(retryMessages[3]?.content),
-    /Planner task包含未知字段: task, mustAnswer, evidence, priority/,
-  );
+  assert.match(String(retryMessages[3]?.content), /taskId/);
 });
 
-test("ReAct rejects a direct Markdown answer and retries with an explicit JSON-only contract", async () => {
-  let reactCalls = 0;
-  let reactSystem = "";
-  let retryMessages: Array<{ role: string; content: unknown }> = [];
-  let finalSystem = "";
-  const model = makeModel((system, _model, _user, messages) => {
-    if (system.includes("Wiki 查询规划器"))
+test("completed task is frozen and later ReAct only receives its compact summary", async () => {
+  const reactPayloads: Array<Record<string, unknown>> = [];
+  let reactRound = 0;
+  const model = makeModel((system, _model, user) => {
+    if (isPlanner(system)) {
       return {
         relevant: true,
-        tasks: [{ id: "page", question: "页面事实" }],
-        actions: [{ tool: "readPage", value: pageKey }],
-      };
-    if (system.includes("你负责从已读取的资料 (materials) 中")) {
-      reactCalls += 1;
-      reactSystem = system;
-      if (reactCalls === 1)
-        return rawModelContent("# 直接回答\n\n这不是 JSON。");
-      retryMessages = messages;
-      return {
-        evidence: [
-          {
-            taskId: "page",
-            pageKey,
-            quote: "fastModel: gpt-5.4-mini",
-            claim: "页面事实",
-          },
+        tasks: [
+          { id: "t1", question: "任务一" },
+          { id: "t2", question: "任务二" },
         ],
-        missing: [],
-        actions: [],
-        finish: true,
+        actions: [
+          { taskId: "t1", tool: "readPage", value: pageKey1 },
+          { taskId: "t2", tool: "readPage", value: pageKey2 },
+        ],
       };
     }
-    finalSystem = system;
-    return {
-      answerable: true,
-      answerMarkdown: "# 完成",
-      citations: ["E1"],
-      gaps: [],
-    };
-  });
-  const workflow = new LlmWikiAgentWorkflow(
-    makeTools([]) as unknown as LlmWikiAgentTools,
-    model as unknown as ModelService,
-  );
-  const events: AgentRunEvent[] = [];
-  const result = await workflow.start(
-    context(workflow.validateInput(input()), events),
-  );
-
-  assert.equal(result.status, "success");
-  assert.equal(reactCalls, 2);
-  assert.match(reactSystem, /【工作流程】/);
-  assert.match(
-    reactSystem,
-    /acceptedEvidence 是已经通过校验的证据，不要重复提取/,
-  );
-  assert.match(reactSystem, /必要事实属于 page 证据，不单独标记为 fact/);
-  assert.doesNotMatch(reactSystem, /readSource/);
-  assert.match(finalSystem, /【输出结构】/);
-  assert.deepEqual(
-    retryMessages.map((message) => message.role),
-    ["system", "user", "assistant", "user"],
-  );
-  assert.match(String(retryMessages[3]?.content), /模型返回不是合法 JSON/);
-  assert.equal(
-    events.filter((event) => event.type === "model_validation_error").length,
-    1,
-  );
-  assert.equal(
-    events.filter((event) => event.type === "model_json_retry").length,
-    1,
-  );
-});
-
-test("ReAct schema and runtime validation require locator fields for every evidence and Tool variant", async () => {
-  let reactFormat: RawChatResponseFormat | undefined;
-  let reactInput: Record<string, unknown> | undefined;
-  let reactCalls = 0;
-  let retryMessages: Array<{ role: string; content: unknown }> = [];
-  const model = makeModel((system, _model, user, messages, responseFormat) => {
-    if (system.includes("Wiki 查询规划器"))
-      return {
-        relevant: true,
-        tasks: [{ id: "page", question: "页面事实" }],
-        actions: [{ tool: "readPage", value: pageKey }],
-      };
-    if (system.includes("你负责从已读取的资料 (materials) 中")) {
-      reactFormat = responseFormat;
-      reactInput = JSON.parse(user) as Record<string, unknown>;
-      reactCalls += 1;
-      if (reactCalls === 1)
+    if (isReact(system)) {
+      reactRound += 1;
+      reactPayloads.push(JSON.parse(user) as Record<string, unknown>);
+      if (reactRound === 1) {
         return {
-          evidence: [
-            {
-              taskId: "page",
-              quote: "fastModel: gpt-5.4-mini",
-              claim: "页面事实",
-            },
+          evidence: [pageEvidence("t1", pageKey1, "PAGE_ONE_SECRET")],
+          taskStates: [
+            completed("t1", "任务一完成"),
+            active("t2", ["继续检索任务二"]),
           ],
-          missing: [],
-          actions: [],
-          finish: true,
+          actions: [{ tool: "searchWiki", taskId: "t2", query: "任务二" }],
+          conflicts: [],
         };
-      retryMessages = messages;
+      }
       return {
-        evidence: [
-          {
-            taskId: "page",
-            pageKey,
-            quote: "fastModel: gpt-5.4-mini",
-            claim: "页面事实",
-          },
-        ],
-        missing: [],
+        evidence: [pageEvidence("t2", pageKey2, "PAGE_TWO_SECRET")],
+        taskStates: [completed("t2", "任务二完成")],
         actions: [],
-        finish: true,
+        conflicts: [],
       };
     }
-    return {
-      answerable: true,
-      answerMarkdown: "# 完成",
-      citations: ["E1"],
-      gaps: [],
-    };
+    return final("complete", "两个任务均完成。[E1][E2]", ["E1", "E2"]);
   });
   const workflow = new LlmWikiAgentWorkflow(
     makeTools([]) as unknown as LlmWikiAgentTools,
@@ -480,125 +170,464 @@ test("ReAct schema and runtime validation require locator fields for every evide
   const result = await workflow.start(context(workflow.validateInput(input())));
 
   assert.equal(result.status, "success");
-  assert.equal(reactCalls, 2);
-  assert.deepEqual(Object.keys(reactInput || {}).sort(), [
-    "acceptedEvidence",
-    "materials",
-    "question",
-    "tasks",
-  ]);
-  assert.deepEqual((reactInput?.tasks as Array<Record<string, unknown>>)[0], {
-    taskId: "page",
-    question: "页面事实",
-  });
-  const materials = reactInput?.materials as {
-    pages: Array<Record<string, unknown>>;
-    sources: unknown[];
+  const second = reactPayloads[1] as {
+    activeTasks: Array<{ taskId: string }>;
+    completedTasks: unknown[];
   };
-  assert.deepEqual(Object.keys(materials.pages[0] || {}).sort(), [
-    "content",
-    "pageKey",
-    "sourceIds",
-    "title",
+  assert.deepEqual(
+    second.activeTasks.map((task) => task.taskId),
+    ["t2"],
+  );
+  assert.deepEqual(second.completedTasks, [
+    { taskId: "t1", conclusion: "任务一完成", evidenceIds: ["E1"] },
   ]);
-  assert.deepEqual(materials.pages[0]?.sourceIds, [sourceId]);
-  assert.equal("keyFacts" in (materials.pages[0] || {}), false);
-  assert.deepEqual(materials.sources, []);
-  assert.match(
-    String(retryMessages[3]?.content),
-    /缺少 pageKey 或 sourceId\/sourceLine/,
-  );
-  assert.equal(reactFormat?.type, "json_schema");
-  if (reactFormat?.type !== "json_schema")
-    throw new Error("ReAct 未使用 json_schema");
-  const properties = reactFormat.json_schema.schema.properties as Record<
-    string,
-    unknown
-  >;
-  const evidenceItems = (
-    properties.evidence as { items: { oneOf: Array<{ required: string[] }> } }
-  ).items.oneOf;
-  const actionItems = (
-    properties.actions as {
-      items: {
-        oneOf: Array<{
-          properties: Record<string, { const?: string }>;
-          required: string[];
-        }>;
-      };
-    }
-  ).items.oneOf;
-  assert.deepEqual(
-    evidenceItems.map((item) => item.required),
-    [
-      ["taskId", "pageKey", "quote", "claim"],
-      ["taskId", "sourceId", "sourceLine", "quote", "claim"],
-    ],
-  );
-  assert.deepEqual(
-    actionItems.find((item) => item.properties.tool.const === "searchWiki")
-      ?.required,
-    ["tool", "query"],
-  );
-  assert.deepEqual(
-    actionItems.find((item) => item.properties.tool.const === "readPage")
-      ?.required,
-    ["tool", "pageKey"],
-  );
-  assert.equal(
-    actionItems.find((item) => item.properties.tool.const === "readSource"),
-    undefined,
-  );
+  assert.doesNotMatch(JSON.stringify(second), /PAGE_ONE_SECRET/);
 });
 
-test("a changed published catalog ends the run as wiki_changed without mixing evidence", async () => {
-  let catalogs = 0;
-  const tools = makeTools([], () => {
-    catalogs += 1;
-    return catalogs > 1
-      ? {
-          stats: { pageCount: 2, factCount: 1, sourceCount: 1 },
-          pages: [catalogPage(), { ...catalogPage(), pageKey: "changed" }],
-          sources: [sourceSummary()],
+test("traceSource uses the fixed task question, fast model and compact result", async () => {
+  const models: string[] = [];
+  let reactRound = 0;
+  let sourceAttempts = 0;
+  let traceInput: SourceTraceInput | undefined;
+  let secondPayload: Record<string, unknown> | undefined;
+  const tools = makeTools([], undefined, async (value) => {
+    traceInput = value;
+    const decision = await value.callModel({
+      stage: "source_trace_t1_1",
+      system: "Source 证据查询器",
+      payload: { currentChunk: { content: "raw source must stay internal" } },
+      format: jsonFormat(),
+      maxTokens: 500,
+      parse: (raw) => {
+        if (typeof raw.sufficient !== "boolean") {
+          throw new Error("sufficient 必须是 boolean");
         }
-      : catalog();
+        return {
+          evidence: raw.evidence as Array<{ quote: string; claim: string }>,
+          sufficient: raw.sufficient,
+          conclusion: String(raw.conclusion || ""),
+          unresolved: [],
+        };
+      },
+    });
+    assert.equal(decision?.sufficient, true);
+    return {
+      taskId: value.taskId,
+      sourceId: value.source.sourceId,
+      status: "sufficient" as const,
+      conclusion: "原文确认默认模型",
+      evidence: [
+        {
+          taskId: value.taskId,
+          kind: "source" as const,
+          sourceId: value.source.sourceId,
+          sourceFilename: value.source.filename,
+          quote: "fastModel: gpt-5.4-mini",
+          claim: "原文配置",
+          sourceLine: 12,
+          range: { startLine: 12, endLine: 12 },
+        },
+      ],
+      unresolved: [],
+      rounds: 1,
+      reads: [],
+    };
   });
-  const model = makeModel((system) => {
-    if (system.includes("Wiki 查询规划器"))
+  const model = makeModel((system, _model, user) => {
+    if (isPlanner(system)) {
       return {
         relevant: true,
-        tasks: [{ id: "x", question: "x" }],
-        actions: [{ tool: "readPage", value: pageKey }],
+        tasks: [{ id: "t1", question: "默认模型是什么？" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
       };
-    if (system.includes("你负责从已读取的资料 (materials) 中"))
+    }
+    if (system.includes("Source 证据查询器")) {
+      sourceAttempts += 1;
+      if (sourceAttempts === 1) return { invalid: true };
       return {
-        evidence: [
+        evidence: [{ quote: "x", claim: "x" }],
+        sufficient: true,
+        conclusion: "找到",
+        unresolved: [],
+      };
+    }
+    if (isReact(system)) {
+      reactRound += 1;
+      if (reactRound === 1) {
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["Wiki 页面证据不完整"])],
+          actions: [{ tool: "traceSource", taskId: "t1", sourceId: sourceId1 }],
+          conflicts: [],
+        };
+      }
+      secondPayload = JSON.parse(user) as Record<string, unknown>;
+      return {
+        evidence: [],
+        taskStates: [completed("t1", "默认模型已由原文确认")],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    return final("complete", "默认模型已确认。[E1]", ["E1"]);
+  }, models);
+  const workflow = new LlmWikiAgentWorkflow(
+    tools as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(result.status, "success");
+  assert.equal(traceInput?.question, "默认模型是什么？");
+  assert.deepEqual(models, [
+    DEFAULT_FAST_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_FAST_MODEL,
+    DEFAULT_QUALITY_MODEL,
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(secondPayload),
+    /raw source must stay internal/,
+  );
+  assert.match(JSON.stringify(secondPayload), /原文确认默认模型/);
+  assert.equal(result.stats?.sourceModelCalls, 2);
+  assert.equal(result.resultJson?.answerStatus, "complete");
+  const traces = result.resultJson?.sourceTraces as Array<
+    Record<string, unknown>
+  >;
+  assert.equal("content" in traces[0], false);
+});
+
+test("traceSource rejects a Source not exposed by the task Page", async () => {
+  let reactRound = 0;
+  let traceCalls = 0;
+  const tools = makeTools([], undefined, async () => {
+    traceCalls += 1;
+    throw new Error("should not run");
+  });
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+      };
+    }
+    if (isReact(system)) {
+      reactRound += 1;
+      if (reactRound === 1) {
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["尝试错误 Source"])],
+          actions: [{ tool: "traceSource", taskId: "t1", sourceId: sourceId2 }],
+          conflicts: [],
+        };
+      }
+      return {
+        evidence: [],
+        taskStates: [
           {
-            taskId: "x",
-            pageKey,
-            quote: "fastModel: gpt-5.4-mini",
-            claim: "x",
+            taskId: "t1",
+            status: "insufficient",
+            conclusion: "",
+            reason: "没有可用 Source",
+            gaps: [],
           },
         ],
-        missing: [],
         actions: [],
-        finish: true,
+        conflicts: [],
       };
-    return {
-      answerable: true,
-      answerMarkdown: "x",
-      citations: ["E1"],
-      gaps: [],
-    };
+    }
+    return final("insufficient", "证据不足：没有可用 Source。", []);
   });
   const workflow = new LlmWikiAgentWorkflow(
     tools as unknown as LlmWikiAgentTools,
     model as unknown as ModelService,
   );
   const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(traceCalls, 0);
+  assert.equal(result.status, "insufficient");
+  assert.equal(result.resultJson?.answerStatus, "insufficient");
+});
+
+test("Source insufficient does not stop the task from reading another Page", async () => {
+  const toolCalls: string[] = [];
+  let reactRound = 0;
+  const tools = makeTools(toolCalls, undefined, async (value) => ({
+    taskId: value.taskId,
+    sourceId: value.source.sourceId,
+    status: "insufficient" as const,
+    conclusion: "",
+    evidence: [],
+    unresolved: ["原文没有回答固定问题"],
+    rounds: 1,
+    reason: "source_exhausted",
+    reads: [],
+  }));
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+      };
+    }
+    if (isReact(system)) {
+      reactRound += 1;
+      if (reactRound === 1) {
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["需要回溯原文"])],
+          actions: [
+            { tool: "traceSource", taskId: "t1", sourceId: sourceId1 },
+          ],
+          conflicts: [],
+        };
+      }
+      if (reactRound === 2) {
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["改读另一个 Wiki 页面"])],
+          actions: [
+            { tool: "readPage", taskId: "t1", pageKey: pageKey2 },
+          ],
+          conflicts: [],
+        };
+      }
+      return {
+        evidence: [pageEvidence("t1", pageKey2, "PAGE_TWO_SECRET")],
+        taskStates: [completed("t1", "第二个页面提供了答案")],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    return final("complete", "第二个页面提供了答案。[E1]", ["E1"]);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    tools as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(result.status, "success");
+  assert.equal(result.resultJson?.answerStatus, "complete");
+  assert.equal(toolCalls.includes(`page:${pageKey2}`), true);
+});
+
+test("all Source traces share a total budget of ten fast model calls", async () => {
+  let reactRound = 0;
+  const grantedRounds: number[] = [];
+  const tools = makeTools([], undefined, async (value) => {
+    grantedRounds.push(value.maxRounds);
+    for (let round = 0; round < value.maxRounds; round += 1) {
+      await value.callModel({
+        stage: `source_budget_${value.taskId}_${round + 1}`,
+        system: "Source budget probe",
+        payload: {},
+        format: jsonFormat(),
+        maxTokens: 100,
+        parse: () => ({
+          evidence: [],
+          sufficient: false,
+          conclusion: "",
+          unresolved: ["继续查找"],
+        }),
+      });
+    }
+    return {
+      taskId: value.taskId,
+      sourceId: value.source.sourceId,
+      status: "insufficient" as const,
+      conclusion: "",
+      evidence: [],
+      unresolved: ["预算内未找到"],
+      rounds: value.maxRounds,
+      reason:
+        value.maxRounds > 0 ? "source_round_limit" : "source_budget_exhausted",
+      reads: [],
+    };
+  });
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [
+          { id: "t1", question: "任务一" },
+          { id: "t2", question: "任务二" },
+          { id: "t3", question: "任务三" },
+        ],
+        actions: [
+          { taskId: "t1", tool: "readPage", value: pageKey1 },
+          { taskId: "t2", tool: "readPage", value: pageKey2 },
+          { taskId: "t3", tool: "readPage", value: pageKey3 },
+        ],
+      };
+    }
+    if (system.includes("Source budget probe")) return {};
+    if (isReact(system)) {
+      reactRound += 1;
+      if (reactRound === 1) {
+        return {
+          evidence: [],
+          taskStates: [
+            active("t1", ["需要原文"]),
+            active("t2", ["需要原文"]),
+            active("t3", ["需要原文"]),
+          ],
+          actions: [
+            { tool: "traceSource", taskId: "t1", sourceId: sourceId1 },
+            { tool: "traceSource", taskId: "t2", sourceId: sourceId2 },
+            { tool: "traceSource", taskId: "t3", sourceId: sourceId3 },
+          ],
+          conflicts: [],
+        };
+      }
+      return {
+        evidence: [],
+        taskStates: [
+          insufficient("t1", "Source 未找到"),
+          insufficient("t2", "Source 未找到"),
+          insufficient("t3", "Source 预算已耗尽"),
+        ],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    return final("insufficient", "所有任务证据不足。", []);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    tools as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.deepEqual(grantedRounds, [5, 5, 0]);
+  assert.equal(result.stats?.sourceModelCalls, 10);
+  assert.equal(result.status, "insufficient");
+});
+
+test("Final returns a partial answer when tasks end with mixed states", async () => {
+  let finalPayload: Record<string, unknown> | undefined;
+  const model = makeModel((system, _model, user) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [
+          { id: "t1", question: "可回答任务" },
+          { id: "t2", question: "不可回答任务" },
+        ],
+        actions: [
+          { taskId: "t1", tool: "readPage", value: pageKey1 },
+          { taskId: "t2", tool: "readPage", value: pageKey2 },
+        ],
+      };
+    }
+    if (isReact(system)) {
+      return {
+        evidence: [pageEvidence("t1", pageKey1, "PAGE_ONE_SECRET")],
+        taskStates: [
+          completed("t1", "任务一有答案"),
+          {
+            taskId: "t2",
+            status: "insufficient",
+            conclusion: "",
+            reason: "页面没有相关证据",
+            gaps: [],
+          },
+        ],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    finalPayload = JSON.parse(user) as Record<string, unknown>;
+    return final("partial", "任务一有答案。[E1]\n\n任务二证据不足。", ["E1"]);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools([]) as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(result.status, "insufficient");
+  assert.equal(result.resultJson?.answerStatus, "partial");
+  assert.equal((finalPayload?.completedTasks as unknown[]).length, 1);
+  assert.equal((finalPayload?.insufficientTasks as unknown[]).length, 1);
+  assert.equal((finalPayload?.verifiedEvidence as unknown[]).length, 1);
+});
+
+test("changed Published catalog discards evidence before Final", async () => {
+  let catalogReads = 0;
+  let finalCalls = 0;
+  const tools = makeTools([], () => {
+    catalogReads += 1;
+    const value = catalog();
+    return catalogReads > 1
+      ? {
+          ...value,
+          stats: { ...value.stats, pageCount: value.stats.pageCount + 1 },
+        }
+      : value;
+  });
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+      };
+    }
+    if (isReact(system)) {
+      return {
+        evidence: [pageEvidence("t1", pageKey1, "fastModel: gpt-5.4-mini")],
+        taskStates: [completed("t1", "完成")],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    finalCalls += 1;
+    return final("complete", "不应执行", ["E1"]);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    tools as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(finalCalls, 0);
   assert.equal(result.status, "insufficient");
   assert.equal(result.resultJson?.stopReason, "wiki_changed");
-  assert.deepEqual(result.resultJson?.citations, []);
+  assert.deepEqual(result.resultJson?.verifiedEvidence, []);
+});
+
+test("invalid ReAct JSON fails the run after one correction", async () => {
+  let reactCalls = 0;
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+      };
+    }
+    if (isReact(system)) {
+      reactCalls += 1;
+      return { invalid: true };
+    }
+    throw new Error("Final 不应执行");
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools([]) as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+
+  await assert.rejects(
+    () => workflow.start(context(workflow.validateInput(input()))),
+    /主 ReAct 第 1 轮未返回有效 JSON/,
+  );
+  assert.equal(reactCalls, 2);
 });
 
 function input(): LlmWikiAgentInput {
@@ -615,7 +644,7 @@ function context(
   events: AgentRunEvent[] = [],
 ): AgentRunnerContext<LlmWikiAgentInput> {
   return {
-    runId: "b".repeat(32),
+    runId: "c".repeat(32),
     agentType: "llmWiki",
     input: value,
     signal: new AbortController().signal,
@@ -630,23 +659,23 @@ function makeModel(
     model: string,
     user: string,
     messages: Array<{ role: string; content: unknown }>,
-    responseFormat?: RawChatResponseFormat,
+    responseFormat?: ResponseTextFormat,
   ) => unknown | Promise<unknown>,
   models: string[] = [],
 ) {
   return {
     listModels: () => [],
     findModel: (modelName: string) => ({ id: modelName }),
-    chat: async ({
+    respond: async ({
       messages,
       model,
-      response_format,
+      textFormat,
       onRequest,
       onResponse,
     }: {
       messages: Array<{ role: string; content: unknown }>;
       model: string;
-      response_format?: RawChatResponseFormat;
+      textFormat?: ResponseTextFormat;
       onRequest?: (request: {
         url: string;
         body: Record<string, unknown>;
@@ -655,24 +684,27 @@ function makeModel(
     }) => {
       models.push(model);
       onRequest?.({
-        url: "https://model.test/v1/chat/completions",
-        body: { model, messages, stream: false },
+        url: "https://model.test/v1/responses",
+        body: { model, input: messages, store: false, text: { format: textFormat } },
       });
-      const modelValue = await responder(
+      const value = await responder(
         String(messages[0]?.content || ""),
         model,
         String(messages[1]?.content || ""),
         messages,
-        response_format,
+        textFormat,
       );
+      const content = JSON.stringify(value);
       const response = {
-        choices: [
+        id: "resp_test",
+        model,
+        status: "completed",
+        content,
+        output: [
           {
-            message: {
-              content: isRawModelContent(modelValue)
-                ? modelValue.__rawModelContent
-                : JSON.stringify(modelValue),
-            },
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: content }],
           },
         ],
       };
@@ -682,22 +714,13 @@ function makeModel(
   };
 }
 
-function rawModelContent(content: string): { __rawModelContent: string } {
-  return { __rawModelContent: content };
-}
-
-function isRawModelContent(
-  value: unknown,
-): value is { __rawModelContent: string } {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { __rawModelContent?: unknown }).__rawModelContent ===
-      "string"
-  );
-}
-
-function makeTools(calls: string[], getCatalog: () => unknown = catalog) {
+function makeTools(
+  calls: string[],
+  getCatalog: () => ReturnType<typeof catalog> = catalog,
+  traceSource: (input: SourceTraceInput) => Promise<unknown> = async () => {
+    throw new Error("unexpected traceSource");
+  },
+) {
   return {
     getCatalog: () => {
       calls.push("catalog");
@@ -705,71 +728,134 @@ function makeTools(calls: string[], getCatalog: () => unknown = catalog) {
     },
     readPage: (key: string) => {
       calls.push(`page:${key}`);
-      return page();
+      return page(key);
     },
     searchWiki: (query: string) => {
       calls.push(`search:${query}`);
       return { query, items: [] };
     },
-    readSource: (id: string, startLine?: number, endLine?: number) => {
-      calls.push(`source:${id}:${startLine}-${endLine}`);
-      return {
-        source: sourceSummary(),
-        range: {
-          startLine,
-          endLine,
-          totalLines: 30,
-          hasMore: true,
-          nextStartLine: (endLine || 0) + 1,
-        },
-        content: "line 12: fastModel: gpt-5.4-mini",
-        pages: [],
-        factRefs: [
-          { pageKey, fact: "fastModel: gpt-5.4-mini", sourceLine: 12 },
-        ],
-      };
-    },
+    traceSource,
   };
 }
 
 function catalog() {
   return {
-    stats: { pageCount: 1, factCount: 1, sourceCount: 1 },
-    pages: [catalogPage()],
-    sources: [sourceSummary()],
+    stats: { pageCount: 3, factCount: 3, sourceCount: 3 },
+    pages: [
+      catalogPage(pageKey1, sourceId1),
+      catalogPage(pageKey2, sourceId2),
+      catalogPage(pageKey3, sourceId3),
+    ],
+    sources: [
+      sourceSummary(sourceId1, pageKey1),
+      sourceSummary(sourceId2, pageKey2),
+      sourceSummary(sourceId3, pageKey3),
+    ],
   };
 }
 
-function catalogPage() {
+function catalogPage(pageKey: string, sourceId: string) {
   return {
     pageKey,
-    title: "Agent",
-    goal: "Agent 配置",
+    title: `Page ${pageKey}`,
+    goal: `Goal ${pageKey}`,
     sourceIds: [sourceId],
     factCount: 1,
     relatedPageKeys: [],
   };
 }
 
-function sourceSummary() {
+function sourceSummary(sourceId: string, pageKey: string) {
   return {
     sourceId,
-    filename: "agent.yaml",
-    contentHash: "h1",
+    filename: `${sourceId}.md`,
+    contentHash: `hash-${sourceId}`,
     charCount: 100,
     lineCount: 30,
     pageKeys: [pageKey],
   };
 }
 
-function page() {
+function page(key: string) {
+  const sourceId =
+    key === pageKey1 ? sourceId1 : key === pageKey2 ? sourceId2 : sourceId3;
+  const marker =
+    key === pageKey1
+      ? "PAGE_ONE_SECRET"
+      : key === pageKey2
+        ? "PAGE_TWO_SECRET"
+        : "PAGE_THREE_SECRET";
   return {
     page: {
-      ...catalogPage(),
-      bodyMarkdown: "# Agent\n\nfastModel: gpt-5.4-mini",
-      keyFacts: [{ fact: "fastModel: gpt-5.4-mini", sourceId, sourceLine: 12 }],
+      ...catalogPage(key, sourceId),
+      bodyMarkdown: `# Page\n\n${marker}\n\nfastModel: gpt-5.4-mini`,
+      keyFacts: [{ fact: marker, sourceId, sourceLine: 12 }],
     },
     relations: { outgoing: [], incoming: [], sameSource: [] },
-    sources: [sourceSummary()],
+    sources: [sourceSummary(sourceId, key)],
+  };
+}
+
+function pageEvidence(taskId: string, pageKey: string, quote: string) {
+  return { taskId, pageKey, quote, claim: `${quote} 的结论` };
+}
+
+function completed(taskId: string, conclusion: string) {
+  return {
+    taskId,
+    status: "completed",
+    conclusion,
+    reason: "",
+    gaps: [],
+  };
+}
+
+function active(taskId: string, gaps: string[]) {
+  return {
+    taskId,
+    status: "active",
+    conclusion: "",
+    reason: "",
+    gaps,
+  };
+}
+
+function insufficient(taskId: string, reason: string) {
+  return {
+    taskId,
+    status: "insufficient",
+    conclusion: "",
+    reason,
+    gaps: [],
+  };
+}
+
+function final(
+  answerStatus: "complete" | "partial" | "insufficient",
+  answerMarkdown: string,
+  citations: string[],
+) {
+  return {
+    answerable: answerStatus !== "insufficient",
+    answerMarkdown,
+    citations,
+    gaps: [],
+  };
+}
+
+function isPlanner(system: string): boolean {
+  return system.includes("Wiki 查询规划器");
+}
+
+function isReact(system: string): boolean {
+  return system.includes("Wiki 主 ReAct");
+}
+
+function jsonFormat(): ResponseTextFormat {
+  return {
+    type: "json_schema",
+    name: "test",
+    strict: true,
+    schema: { type: "object" },
   };
 }
