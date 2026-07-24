@@ -3,8 +3,8 @@
 KnowLLM 采用 monorepo 结构。
 
 - `apps/web`：React 工作区。
-- `apps/api`：Node API 服务。
-- `packages/core`：核心编译、检索和知识库能力。
+- `apps/api`：NestJS API 服务。
+- `packages/core`：通用知识库能力。
 - `packages/protocol`：共享类型和协议。
 - `packages/cli`：命令行入口。
 - `packages/mcp-server`：MCP 接入。
@@ -13,20 +13,25 @@ KnowLLM 采用 monorepo 结构。
 
 ## 服务端模块边界
 
-`apps/api/src/modules/llmWiki` 负责知识库自身能力：
+`apps/api/src/modules/llmWikiNext` 负责当前知识库主链路：
 
-- `LlmWikiManagementService`：Source、Schema、页面、Lint 和 Issue 管理。
-- `LlmWikiIngestService`：执行 Source 编译与融合。
-- `LlmWikiRetrievalService`：对外提供稳定只读检索契约，包括 manifest、search、read page 和 read source。
+- `LlmWikiNextService`：Source 管理、编译估算、Compile Pool、Staging 和 Published Wiki。
+- `LlmWikiNextStore`：本地持久化、版本快照和发布产物读写。
+- `LlmWikiNextToolsService`：为 Agent 和 HTTP Tools 提供 Published Wiki 的只读检索能力。
 
-`apps/api/src/modules/agent` 负责 Agent 查询运行时。LLM Wiki Agent 只能通过内部
-`LlmWikiAgentTools` 调用 `LlmWikiRetrievalService`，不得直接依赖 Store、Search、
-Schema 或编译服务。
+`apps/api/src/modules/agent` 负责 Agent 查询运行时。Agent 通过 `LlmWikiNextToolsService` 读取 Published Wiki，不直接读写 Store，也不修改 Staging。
 
 当前 HTTP 路由分组：
 
-- `/api/llm-wiki/manage/*`：知识库管理和写操作。
-- `/api/llm-wiki/retrieval/*`：标准只读检索能力。
-- `/api/agents/llmWiki/*`：完整 Agent Query 执行与运行记录。
+- `/api/llm-wiki-next/*`：Source、Compile、Staging、Published Wiki 和只读 Tools。
+- `/api/agents/*`：Agent 执行、取消和运行记录。
+- `/api/models`：模型列表。
+- `/api/health`：健康检查。
 
-CLI、MCP 和其他 Agent 后续应复用 Retrieval Contract，不重复实现检索逻辑。
+## 数据边界
+
+当前 LLM Wiki 数据根为 `.knowllm/llm-wiki-next/default`。编译任务先写入共享 Staging；只有显式发布后，Agent 才能通过 Published Tools 读取新版本。
+
+## 待重构评测
+
+旧版编译评测和 Agent 评测源码仍保留在 `apps/api/src/modules/evaluation`、`apps/web/src/api/evaluation.ts`、`apps/web/src/pages/LlmWikiEvaluation` 和 `apps/web/src/pages/LlmWikiAgentEvaluation`。前端页面保留路由和导航入口；后端因依赖已删除的旧 Retrieval Contract，暂不注册并从当前 TypeScript 构建中隔离，等待迁移到 `llmWikiNext` Published revision 合同。

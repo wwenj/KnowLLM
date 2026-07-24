@@ -491,7 +491,6 @@ function providerConfig(
     ...overrides,
   };
 }
-
 async function withTempModelConfig<T>(
   config: unknown,
   run: () => T | Promise<T>,
@@ -500,7 +499,6 @@ async function withTempModelConfig<T>(
   const previousOpenaiKey = process.env.OPENAI_API_KEY;
   const previousOpenaiModel = process.env.OPENAI_MODEL;
   const previousModel = process.env.MODEL;
-  const previousLlmWikiModel = process.env.LLM_WIKI_MODEL;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "knowllm-models-"));
   const file = path.join(dir, "models.local.json");
   fs.writeFileSync(file, JSON.stringify(config, null, 2));
@@ -508,7 +506,6 @@ async function withTempModelConfig<T>(
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_MODEL;
   delete process.env.MODEL;
-  delete process.env.LLM_WIKI_MODEL;
   try {
     return await run();
   } finally {
@@ -520,8 +517,6 @@ async function withTempModelConfig<T>(
     else process.env.OPENAI_MODEL = previousOpenaiModel;
     if (previousModel === undefined) delete process.env.MODEL;
     else process.env.MODEL = previousModel;
-    if (previousLlmWikiModel === undefined) delete process.env.LLM_WIKI_MODEL;
-    else process.env.LLM_WIKI_MODEL = previousLlmWikiModel;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
