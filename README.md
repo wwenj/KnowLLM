@@ -118,6 +118,16 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 - [x] 支持页面证据与 Source 原文 Quote 核验、按行回查、重复读取缓存，以及检索期间 Revision 一致性校验。
 - [ ] 继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
 
+### 开放能力与本地 Agent 集成
+
+- [x] 建立 Core、Protocol、CLI、MCP Server 与 Skill Template 的独立包结构，为本地使用和第三方接入预留稳定边界。
+- [x] 定义本地工作区目录约定，以及 `init`、`import`、`compile`、`search`、`query`、`lint`、`mcp start` 等 CLI 命令接口。
+- [x] 提供 Codex Skill 模板：优先通过本地 `knowllm query` 查询答案，证据不足时明确拒绝补全。
+- [ ] 实现 CLI 的工作区初始化、资料导入、编译、检索、问答、校验与 JSON 输出；当前除帮助和目录展示外仍为占位实现。
+- [ ] 实现 MCP Server，开放 `knowllm_search`、`knowllm_read_page`、`knowllm_read_source`、`knowllm_query`、`knowllm_lint` 等只读 Tools。
+- [ ] 补齐 Codex、Claude Code、Cursor 等本地 Agent 的安装配置、进程管理、权限控制与端到端示例。
+- [ ] 提供可安装发布包、版本兼容策略和本地工作区迁移能力，降低开源用户的首次使用成本。
+
 ### 编译评测
 
 - [x] 收集并固化真实 Source，生成带 SHA-256 版本信息的 `source_manifest.json` 与 `compile_cases.json`。
@@ -137,6 +147,7 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 ### 2026-07-27
 
 - 梳理并公开 LLM 编译、Agent 检索、编译评测、检索评测四个模块的完成状态与下一步。
+- 新增 CLI、MCP、Skill 等开放能力与本地 Agent 集成进度，区分已完成的接入基础与待实现的可用能力。
 - 明确评测数据集采用「Codex 协助整理 + 人工复核标注」的协作方式，保证每项事实和问答都能回到真实 Source 验证。
 
 ## 邀请共建

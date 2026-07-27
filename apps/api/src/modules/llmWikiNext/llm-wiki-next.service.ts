@@ -487,7 +487,7 @@ export class LlmWikiNextService implements OnModuleInit {
       ),
       plannerMaxOutputTokens: boundedInt(
         request.plannerMaxOutputTokens,
-        2_000,
+        4_000,
         256,
         16_000,
         "plannerMaxOutputTokens",
@@ -584,9 +584,15 @@ export class LlmWikiNextService implements OnModuleInit {
           }
         }),
       );
-      const rejectedPlan = planResults.find(
-        (result) => result.status === "rejected",
-      );
+      // 一个 Planner 失败后会主动中断同 Source 的其他请求。allSettled 结果按
+      // 输入顺序排列，不能把排在前面的中断请求误报为根因。
+      const rejectedPlan =
+        planResults.find(
+          (result) =>
+            result.status === "rejected" &&
+            !isCancelledCompileError(result.reason),
+        ) ||
+        planResults.find((result) => result.status === "rejected");
       if (rejectedPlan?.status === "rejected") throw rejectedPlan.reason;
       const plans = planResults.map((result) => {
         if (result.status !== "fulfilled") throw result.reason;
@@ -892,11 +898,17 @@ export class LlmWikiNextService implements OnModuleInit {
     maxTokens: number;
     signal: AbortSignal;
     system: string;
-    payload: unknown;
+    payload: Record<string, unknown>;
   }): Promise<{ value: unknown; callId: string }> {
     const callId = createBase62Id(20);
     const startedAt = new Date().toISOString();
-    const payloadText = JSON.stringify(args.payload);
+    // Responses 兼容网关会在 input（而不是 instructions）中检查 JSON 模式提示。
+    // system prompt 会被 ModelService 迁移到 instructions，因此在业务 payload 中保留
+    // 这个无业务含义的标记，确保 text.format=json_object 不会被网关预检拦截。
+    const payloadText = JSON.stringify({
+      ...args.payload,
+      _responseFormat: "JSON object",
+    });
     const estimatedInputTokens = estimateTokens(`${args.system}\n${payloadText}`);
     await this.updateReport(args.sourceId, args.runId, (report) => {
       const reportUnit = requireReportUnit(report, args.unitId);
@@ -1584,6 +1596,12 @@ class CompileTraceError extends Error {
   }
 }
 
+function isCancelledCompileError(error: unknown): boolean {
+  return (
+    error instanceof CompileTraceError && error.detail.category === "cancelled"
+  );
+}
+
 function createReportUnit(unit: CompileUnit, index: number): CompileReportUnit {
   return {
     unitId: unit.unitId,
@@ -1913,14 +1931,32 @@ function validatePlan(
     throw new Error("Planner 页面数超过确认上限");
   const existing = new Set(existingPages.map((page) => page.pageKey));
   const available = new Set(availablePageKeys);
+  const usedCreateKeys = new Set<string>();
+  const requestedPageKeys = new Set<string>();
   const pages = record.pages.map((raw): WikiPagePlanItem => {
     const page = objectValue(raw, "Planner page 必须是对象");
-    const pageKey = stringValue(page.pageKey, "Planner pageKey 不能为空");
+    const requestedPageKey = stringValue(
+      page.pageKey,
+      "Planner pageKey 不能为空",
+    );
+    if (requestedPageKeys.has(requestedPageKey))
+      throw new Error("同一 Plan 中 pageKey 不得重复");
+    requestedPageKeys.add(requestedPageKey);
     const operation = page.operation;
     if (operation !== "create" && operation !== "update")
       throw new Error("Planner operation 非法");
+    // create 的 pageKey 只是后端存储标识，不承载页面语义。模型即使误用了
+    // existingPages 或自行生成 ID，也统一映射到本次已经预留且未使用的 ID。
+    const pageKey =
+      operation === "create" &&
+      (!available.has(requestedPageKey) ||
+        usedCreateKeys.has(requestedPageKey))
+        ? availablePageKeys.find((key) => !usedCreateKeys.has(key)) ||
+          requestedPageKey
+        : requestedPageKey;
     if (operation === "create" && !available.has(pageKey))
-      throw new Error(`create pageKey 未预留: ${pageKey}`);
+      throw new Error("create 页面缺少可用预留 pageKey");
+    if (operation === "create") usedCreateKeys.add(pageKey);
     if (operation === "update" && !existing.has(pageKey))
       throw new Error(`update pageKey 不存在: ${pageKey}`);
     return {
@@ -2045,7 +2081,7 @@ function plannerPrompt(): string {
     "6. 外部链接、目录项或‘参见某文档’不能被视为已有正文。",
     "7. pages 可以少于 maxPages，但至少返回 1 页；不得为凑数量拆页。",
     "8. 已有页面与当前目标一致时优先 update，否则 create。",
-    "9. create 只能使用 availablePageKeys；update 只能使用 existingPages 中的 pageKey。",
+    "9. pageKey 是不含语义的存储 ID，禁止自行生成；create 必须从 availablePageKeys 原样复制，update 必须从 existingPages 原样复制。",
     "10. Plan 内 pageKey 不得重复，页面不得关联自身，relatedPageKeys 只能引用已有页面或同 Plan create 的页面。",
     "只返回 JSON：",
     "{partitionIntent,pages:[{pageKey,operation,title,goal,scope,outline:[{heading,writingPoints:[string],sourceAnchors:[string]}],relatedPageKeys:[string]}]}。",

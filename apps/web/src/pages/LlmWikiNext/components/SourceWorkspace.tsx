@@ -161,6 +161,15 @@ function sourceState(
   return { status: source.status, poolItem };
 }
 
+function isActivePoolItem(item?: CompilePoolItem): boolean {
+  return (
+    item?.phase === "queued" ||
+    item?.phase === "planning" ||
+    item?.phase === "writing" ||
+    item?.phase === "committing"
+  );
+}
+
 function pageCountFor(
   sourceId: string,
   staging: StagingSummary | null,
@@ -268,7 +277,7 @@ export function SourceWorkspace({
       new Set(
         sourceRows
           .filter((row) => isCompileSelectable(row.status))
-          .filter((row) => !row.poolItem)
+          .filter((row) => !isActivePoolItem(row.poolItem))
           .map((row) => row.source.sourceId),
       ),
     [sourceRows],
@@ -633,7 +642,7 @@ export function SourceWorkspace({
             {pageRows.map(({ source, status, poolItem }) => {
               const sourceCompletedInStaging = status === "staged";
               const sourceBusy =
-                status === "compiling" || Boolean(poolItem);
+                status === "compiling" || isActivePoolItem(poolItem);
               const selectable = !operationsLocked;
               return (
                 <Fragment key={source.sourceId}>

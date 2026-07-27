@@ -45,7 +45,7 @@ const CONCURRENCY_STORAGE_KEY = "knowllm.llmWikiNext.concurrency";
 const CONCURRENCY_OPTIONS = [1, 2, 4, 8, 16] as const;
 const DEFAULT_SETTINGS: CompileSettings = {
   chunkChars: 12_000,
-  plannerMaxOutputTokens: 2_000,
+  plannerMaxOutputTokens: 4_000,
   writerMaxOutputTokens: 8_000,
 };
 

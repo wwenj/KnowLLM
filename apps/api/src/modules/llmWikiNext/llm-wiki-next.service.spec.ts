@@ -86,9 +86,30 @@ test("estimate 返回 Unit 局部上限，统一 Writer 调用预算为 2U", () 
     assert.equal(first.maxPlannerCalls, 1);
     assert.equal(first.maxWriterCalls, 1);
     assert.equal(first.maxModelCalls, 2);
-    assert.equal(first.maxOutputTokens, 10_000);
+    assert.equal(first.maxOutputTokens, 12_000);
     assert.equal(first.confirmHash, second.confirmHash);
     assert.ok(!("maxPagesPerUnit" in first.options));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("编译模型 input 明示 JSON 对象输出，兼容检查 input 的 Responses 网关", async () => {
+  const model = new StubModel();
+  const harness = createHarness(model);
+  try {
+    const source = harness.service.uploadSource(
+      "json-mode.md",
+      Buffer.from("JSON mode compatibility", "utf8"),
+    );
+    const pool = await compileSources(harness.service, [source.sourceId]);
+
+    assert.equal(poolStatus(pool), "completed");
+    assert.equal(model.requests.length, 2);
+    for (const request of model.requests) {
+      const input = String(request.messages[1]?.content || "");
+      assert.match(input, /"_responseFormat":"JSON object"/);
+    }
   } finally {
     harness.cleanup();
   }
@@ -535,7 +556,7 @@ test("发布失败时 Source 保持已暂存", async () => {
   }
 });
 
-test("确认 hash 失效和 Planner 越权 ID 都会阻止编译结果写入", async () => {
+test("确认 hash 失效，Planner 的 create 越权 ID 由后端替换为预留 ID", async () => {
   const harness = createHarness(new InvalidPlannerModel());
   try {
     const source = harness.service.uploadSource(
@@ -559,9 +580,9 @@ test("确认 hash 失效和 Planner 越权 ID 都会阻止编译结果写入", a
       confirmHash: estimate.confirmHash,
     });
     const finished = await waitForSources(harness.service, [source.sourceId]);
-    assert.equal(poolStatus(finished), "completed_with_errors");
-    assert.match(poolItem(finished, source.sourceId).error, /pageKey 未预留/);
-    assert.equal(harness.service.getStaging()?.pageCount, 0);
+    assert.equal(poolStatus(finished), "completed");
+    assert.equal(harness.service.getStaging()?.pageCount, 1);
+    assert.notEqual(harness.service.getStaging()?.pages[0]?.pageKey, "INVALID1");
     assert.deepEqual(harness.service.getStaging()?.state.reservedPageKeys, []);
   } finally {
     harness.cleanup();
@@ -1060,6 +1081,28 @@ test("Planner 结构、数组、ID 和关联边界均执行确定性校验", asy
   }
 });
 
+test("并发 Planner 中断其他请求后仍保留首个实际失败原因", async () => {
+  const harness = createHarness(new PlannerRootFailureModel());
+  try {
+    const source = harness.service.uploadSource(
+      "planner-root-error.md",
+      Buffer.from("x".repeat(2_500), "utf8"),
+    );
+    const pool = await compileSources(harness.service, [source.sourceId], 1, {
+      chunkChars: 1_000,
+    });
+
+    assert.equal(poolStatus(pool), "completed_with_errors");
+    assert.match(
+      poolItem(pool, source.sourceId).error,
+      /Planner 输出超过上限/,
+    );
+    assert.equal(harness.service.getSource(source.sourceId).status, "failed");
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("Writer 缺页、多页、重复页、空正文和空 Fact 使 Source 整体失败", async () => {
   const cases: Array<{ variant: WriterFailureVariant; error: RegExp }> = [
     { variant: "missing_page", error: /pageKey 集合必须与 Plan 完全一致/ },
@@ -1203,6 +1246,7 @@ test("多 Unit 更新同页严格按 startOffset 串行，后一 Writer 读到�
 class StubModel {
   activeCalls = 0;
   maxActiveCalls = 0;
+  readonly requests: ResponseRequestOptions[] = [];
 
   constructor(private readonly delayMs = 0) {}
 
@@ -1211,6 +1255,7 @@ class StubModel {
   }
 
   async respond(options: ResponseRequestOptions): Promise<unknown> {
+    this.requests.push(options);
     this.activeCalls += 1;
     this.maxActiveCalls = Math.max(this.maxActiveCalls, this.activeCalls);
     try {
@@ -1429,6 +1474,20 @@ class PlannerFailureModel extends StubModel {
     if (this.variant === "missing_relation")
       page.relatedPageKeys = ["MISSING1"];
     return modelResponse(plan);
+  }
+}
+
+class PlannerRootFailureModel extends StubModel {
+  override async respond(options: ResponseRequestOptions): Promise<unknown> {
+    const payload = JSON.parse(
+      String(options.messages[1]?.content || "{}"),
+    ) as Record<string, unknown>;
+    if (!Array.isArray(payload.availablePageKeys)) return super.respond(options);
+    if (String(payload.unitId).endsWith("0002")) {
+      throw new Error("Planner 输出超过上限");
+    }
+    await abortableDelay(1_000, options.signal);
+    throw new Error("未预期：Planner 未被中断");
   }
 }
 
