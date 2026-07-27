@@ -101,17 +101,48 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 
 ## 更新日志与开发进度
 
-当前阶段：LLM Wiki 的核心编译与 Agent 检索链路已经完成，项目进入评测体系开发阶段。
+当前阶段：LLM 编译与 Agent 检索主链路已完成；评测数据集已具备，评测执行模块正在迁移到新版 Published Revision 合同。
 
-- [x] LLM Wiki 编译层完成
-- [x] Agent 检索层完成
-- [x] 测试数据集收集完成
-- [ ] 编译评测开发中
-- [ ] Agent 评测开发中
+### LLM 编译
 
-### 2026-07-24
+- [x] 固定 Source 快照与 Hash，按原文顺序切片，并在执行前完成调用次数与 Token 预算估算。
+- [x] 通过 Planner 生成页面计划、预留页面 ID，并对模型输出进行 JSON、数量、关联关系等协议校验。
+- [x] 通过 Writer 生成页面正文和可回查的 Key Facts；任一 Unit 失败即丢弃该 Source 的中间结果。
+- [x] 支持 Shared Staging、冲突处理、原子发布与 Revision 切换，避免正式 Wiki 出现半成品或混合版本。
+- [ ] 完善增量重编译时的旧贡献替换，以及跨次编译的 Facts 清理。
 
-- 完成 llmWiki 编译层、原子发布和冲突处理主链路。
-- 完成 Published Tools 与 Agent 检索、证据核验链路。
-- 完成编译评测与 Agent 评测数据集收集。
-- 开始按新版 Published Revision 合同重构评测模块。
+### Agent 检索
+
+- [x] 提供只读 Published Wiki 的 `getCatalog`、`searchWiki`、`readPage`、`readSource` Tools 合同。
+- [x] 完成 `Catalog → Planner → Tools → ReAct → Evidence Gate → Final` 检索链路，并限制轮数、工具调用和 Token 预算。
+- [x] 支持页面证据与 Source 原文 Quote 核验、按行回查、重复读取缓存，以及检索期间 Revision 一致性校验。
+- [ ] 继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
+
+### 编译评测
+
+- [x] 收集并固化真实 Source，生成带 SHA-256 版本信息的 `source_manifest.json` 与 `compile_cases.json`。
+- [x] 建立以原文证据为依据的 Gold Facts 标注；由 Codex 协助整理候选事实，人工复核重要级别、原文锚点与正确表述。
+- [x] 形成 `correct`、`missing`、`incorrect` 的事实判定与 `weightedScore`、必须事实准确率、遗漏率、错误率等指标设计。
+- [ ] 将编译评测执行、Judge 与运行记录迁移到新版 Published Revision，并固定 Revision、数据集 Hash 与模型元数据。
+- [ ] 补齐可复现的评测报告、失败事实定位与跨版本对比。
+
+### 检索评测
+
+- [x] 基于同一批 Source 构建 `agent_cases.json`，覆盖单文档、多文档、配置查询、故障排查、安全约束与拒答等场景。
+- [x] 由 Codex 协助起草问题、参考答案和 Expected Facts，人工完成问题边界、答案、相关 Source 与拒答条件标注。
+- [x] 定义 Source 命中、事实覆盖、答案忠实度、回答正确性、拒答正确性与检索成本等评测维度。
+- [ ] 让评测运行真实调用新版 Agent 与 Published Tools，并完整记录 Planner、工具轨迹、证据和最终答案。
+- [ ] 将 Judge、评分汇总和运行时 Revision 固定到同一份评测合同，支持问题级复盘与回归对比。
+
+### 2026-07-27
+
+- 梳理并公开 LLM 编译、Agent 检索、编译评测、检索评测四个模块的完成状态与下一步。
+- 明确评测数据集采用「Codex 协助整理 + 人工复核标注」的协作方式，保证每项事实和问答都能回到真实 Source 验证。
+
+## 邀请共建
+
+KnowLLM 仍在快速迭代，欢迎一起把它做成可验证、可复现的 Agent 知识工程基础设施。
+
+- 欢迎贡献真实且可公开的 Source、Gold Facts、问题/答案与拒答样例，尤其是多文档、冲突信息和长文档场景。
+- 欢迎参与评测合同、Judge 方法、检索策略、编译增量更新与工程可靠性的讨论和实现。
+- 提交 Issue 或 Pull Request 前，请尽量附上可复现的 Source、预期结果和验证依据；我们优先讨论可被真实证据验证的问题。
