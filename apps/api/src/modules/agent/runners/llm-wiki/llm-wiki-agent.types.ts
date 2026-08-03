@@ -8,14 +8,14 @@ import type {
 import type { ResponseTextFormat } from "../../../model/model.service";
 import type { AgentRunTokens } from "../../agent.types";
 
-export const DEFAULT_FAST_MODEL = "openapi-gpt:gpt-5.4-mini";
-export const DEFAULT_QUALITY_MODEL = "openapi-gpt:gpt-5.5";
+export const DEFAULT_FAST_MODEL = "openapi-gpt:gpt-5.6-terra";
+export const DEFAULT_QUALITY_MODEL = "openapi-gpt:gpt-5.6-sol";
 export const MAX_PLAN_TASKS = 6;
-export const MAX_REACT_ROUNDS = 3;
+export const MAX_REACT_ROUNDS = 8;
 export const MAX_TOOLS_PER_TASK_PER_ROUND = 3;
 export const RETRIEVAL_TOKEN_BUDGET = 300_000;
 export const FINAL_MAX_OUTPUT_TOKENS = 150_000;
-export const MODEL_TIMEOUT_MS = 180_000;
+export const MODEL_TIMEOUT_MS = 5 * 60_000;
 export const MODEL_MAX_ATTEMPTS = 3;
 export const SOURCE_CHUNK_LINES = 1_000;
 
@@ -40,6 +40,19 @@ export interface LlmWikiAgentInput extends Record<string, unknown> {
 
 /** Planner 只消费 [pageKey, title, goal]，目录不能作为事实证据。 */
 export type PlannerCatalogPage = [pageKey: string, title: string, goal: string];
+
+export type RelatedPageRelationType =
+  | "outgoing"
+  | "incoming"
+  | "sameSource";
+
+export interface RelatedCatalogEntry {
+  pageKey: string;
+  title: string;
+  goal: string;
+  factCount: number;
+  relationTypes: RelatedPageRelationType[];
+}
 
 export interface QueryTask {
   taskId: string;

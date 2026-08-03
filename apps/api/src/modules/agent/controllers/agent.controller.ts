@@ -35,8 +35,8 @@ export class AgentController {
       type: "object",
       properties: {
         query: { type: "string", example: "Agent 查询如何工作？" },
-        fastModel: { type: "string", description: "Planner 与快速 ReAct 模型", example: "openapi-gpt:gpt-5.4-mini" },
-        qualityModel: { type: "string", description: "质量 ReAct 与最终回答模型", example: "openapi-gpt:gpt-5.5" }
+        fastModel: { type: "string", description: "Planner 与快速 ReAct 模型", example: "openapi-gpt:gpt-5.6-terra" },
+        qualityModel: { type: "string", description: "质量 ReAct 与最终回答模型", example: "openapi-gpt:gpt-5.6-sol" }
       },
       required: ["query", "fastModel", "qualityModel"]
     }
