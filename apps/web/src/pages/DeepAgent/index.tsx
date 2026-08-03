@@ -24,8 +24,6 @@ import {
   RUN_CONFIG_STORAGE_KEY,
   buildLogPayload,
   buildRunBody,
-  clamp,
-  numberValue,
   pickModel,
   readStoredConfig,
   stringValue,
@@ -85,7 +83,6 @@ export function DeepAgent() {
         setModelOptions(nextModels);
         setWikiConfig((current) => ({
           ...current,
-          limit: clamp(numberValue(defaultValues.limit, current.limit), 1, 20),
           fastModel: pickModel(current.fastModel || stringValue(defaultValues.fastModel), nextModels),
           qualityModel: pickModel(current.qualityModel || stringValue(defaultValues.qualityModel), nextModels),
         }));

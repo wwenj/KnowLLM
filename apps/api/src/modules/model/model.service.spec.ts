@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { ModelService } from "./model.service";
+import { ModelRequestError, ModelService } from "./model.service";
 
 test("model service exposes safe enabled OpenAI model list", async () => {
   await withTempModelConfig(
@@ -206,6 +206,7 @@ test("respond rejects incomplete and refusal responses", async () => {
           status: "incomplete",
           incomplete_details: { reason: "max_output_tokens" },
           output: [],
+          usage: { input_tokens: 20, output_tokens: 100, total_tokens: 120 },
         },
         {
           id: "resp_refusal",
@@ -223,13 +224,81 @@ test("respond rejects incomplete and refusal responses", async () => {
       globalThis.fetch = (async () => response(replies.shift())) as typeof fetch;
       try {
         const service = new ModelService();
-        await assert.rejects(
-          () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "one" }] }),
-          /未完成: incomplete/,
-        );
+        await assert.rejects(() =>
+          service.respond({
+            model: "openai:gpt",
+            messages: [{ role: "user", content: "one" }],
+          }),
+        (error: unknown) => {
+          assert.equal(error instanceof ModelRequestError, true);
+          const modelError = error as ModelRequestError;
+          assert.equal(modelError.category, "incomplete");
+          assert.equal(modelError.retryable, false);
+          assert.equal(modelError.code, "max_output_tokens");
+          assert.equal(modelError.usage?.total_tokens, 120);
+          return true;
+        });
         await assert.rejects(
           () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "two" }] }),
           /模型拒绝回答: cannot comply/,
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+});
+
+test("respond distinguishes retryable rate limits from quota exhaustion", async () => {
+  await withTempModelConfig(
+    [providerConfig({ name: "OpenAI", baseUrl: "https://openai.test/v1", apiKey: "key", models: ["gpt"] })],
+    async () => {
+      const replies = [
+        new Response(
+          JSON.stringify({
+            error: { type: "rate_limit_error", message: "too many requests" },
+          }),
+          {
+            status: 429,
+            headers: { "retry-after": "2.5", "x-request-id": "req_rate" },
+          },
+        ),
+        new Response(
+          JSON.stringify({
+            error: {
+              type: "insufficient_quota",
+              code: "credit_balance_exhausted",
+              message: "credits exhausted",
+            },
+          }),
+          { status: 429, headers: { "x-request-id": "req_quota" } },
+        ),
+      ];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () => replies.shift()!) as typeof fetch;
+      try {
+        const service = new ModelService();
+        await assert.rejects(
+          () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "one" }] }),
+          (error: unknown) => {
+            const modelError = error as ModelRequestError;
+            assert.equal(modelError.category, "rate_limit");
+            assert.equal(modelError.retryable, true);
+            assert.equal(modelError.retryAfterMs, 2_500);
+            assert.equal(modelError.requestId, "req_rate");
+            return true;
+          },
+        );
+        await assert.rejects(
+          () => service.respond({ model: "openai:gpt", messages: [{ role: "user", content: "two" }] }),
+          (error: unknown) => {
+            const modelError = error as ModelRequestError;
+            assert.equal(modelError.category, "quota");
+            assert.equal(modelError.retryable, false);
+            assert.equal(modelError.code, "credit_balance_exhausted");
+            assert.equal(modelError.requestId, "req_quota");
+            return true;
+          },
         );
       } finally {
         globalThis.fetch = originalFetch;

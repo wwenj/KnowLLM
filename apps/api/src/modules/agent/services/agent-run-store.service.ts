@@ -42,8 +42,7 @@ export class AgentRunStoreService {
         outputTokens: 0,
         totalTokens: 0,
         rounds: 0,
-        modelCalls: 0,
-        tokenLimit: null
+        modelCalls: 0
       },
       stats: { modelCalls: 0, toolRounds: 0 }
     };

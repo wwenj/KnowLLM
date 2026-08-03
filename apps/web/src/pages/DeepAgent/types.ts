@@ -5,7 +5,6 @@ export type StatusKey = "idle" | AgentRunStatus;
 
 export interface LlmWikiConfig {
   query: string;
-  limit: number;
   fastModel: string;
   qualityModel: string;
 }

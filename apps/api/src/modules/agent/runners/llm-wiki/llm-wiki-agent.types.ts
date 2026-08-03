@@ -10,19 +10,14 @@ import type { AgentRunTokens } from "../../agent.types";
 
 export const DEFAULT_FAST_MODEL = "openapi-gpt:gpt-5.4-mini";
 export const DEFAULT_QUALITY_MODEL = "openapi-gpt:gpt-5.5";
-export const DEFAULT_LIMIT = 8;
-export const MAX_LIMIT = 20;
 export const MAX_PLAN_TASKS = 6;
 export const MAX_REACT_ROUNDS = 3;
-export const MAX_ACTIONS_PER_ROUND = 6;
-export const MAX_SEARCHES = 6;
-export const MAX_MAIN_MODEL_CALLS = 6;
-export const MAX_SOURCE_MODEL_CALLS = 10;
-export const MAX_MODEL_ATTEMPTS = 32;
-export const TOKEN_LIMIT = 48_000;
-export const FINAL_TOKEN_RESERVE = 12_000;
+export const MAX_TOOLS_PER_TASK_PER_ROUND = 3;
+export const RETRIEVAL_TOKEN_BUDGET = 300_000;
+export const FINAL_MAX_OUTPUT_TOKENS = 150_000;
+export const MODEL_TIMEOUT_MS = 180_000;
+export const MODEL_MAX_ATTEMPTS = 3;
 export const SOURCE_CHUNK_LINES = 1_000;
-export const MAX_SOURCE_ROUNDS = 5;
 
 export type TaskStatus = "active" | "completed" | "insufficient";
 export type AnswerStatus = "complete" | "partial" | "insufficient";
@@ -33,13 +28,12 @@ export type StopReason =
   | "insufficient_evidence"
   | "max_rounds"
   | "no_new_evidence"
-  | "token_limit"
+  | "retrieval_token_limit"
   | "cancelled"
   | "wiki_changed";
 
 export interface LlmWikiAgentInput extends Record<string, unknown> {
   query: string;
-  limit: number;
   fastModel: string;
   qualityModel: string;
 }
@@ -162,7 +156,6 @@ export interface SourceTraceModelRequest {
   system: string;
   payload: Record<string, unknown>;
   format: ResponseTextFormat;
-  maxTokens: number;
   parse(value: Record<string, unknown>): SourceTraceDecision;
 }
 
@@ -215,12 +208,11 @@ export interface SourceTraceInput {
   taskId: string;
   question: string;
   source: ToolsSourceSummary;
-  maxRounds: number;
   signal: AbortSignal;
   callModel(
     request: SourceTraceModelRequest,
   ): Promise<SourceTraceDecision | null>;
-  canCallModel?(): boolean;
+  canContinue?(): boolean;
   onRead?(detail: ToolsSourceDetail, round: number): void;
 }
 
@@ -242,10 +234,7 @@ export interface LlmWikiAgentState {
   retrievalRounds: RetrievalRound[];
   stopReason: StopReason | null;
   tokens: AgentRunTokens;
-  modelAttempts: number;
   retries: number;
-  baseModelCalls: number;
-  sourceModelCalls: number;
   lastRoundProgress: boolean;
 }
 

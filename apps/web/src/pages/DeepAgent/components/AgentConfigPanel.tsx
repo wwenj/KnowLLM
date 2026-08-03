@@ -3,7 +3,6 @@ import type { AgentProfile } from "@/api/agent";
 import type { ModelOption } from "@/api/model";
 import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -13,7 +12,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentType, LlmWikiConfig } from "../types";
-import { clamp } from "../utils";
 
 interface AgentConfigPanelProps {
   profiles: AgentProfile[];
@@ -74,7 +72,7 @@ export function AgentConfigPanel({
       <div className="px-3 py-3">
         {supported ? (
           <div className="space-y-2.5">
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_80px] gap-2.5">
+            <div className="grid grid-cols-2 gap-2.5">
               <label className="block min-w-0 space-y-1">
                 <span className="text-xs font-medium text-slate-600">规划/快速模型</span>
                 <Select
@@ -112,22 +110,6 @@ export function AgentConfigPanel({
                     ))}
                   </SelectContent>
                 </Select>
-              </label>
-              <label className="block min-w-0 space-y-1">
-                <span className="text-xs font-medium text-slate-600">结果数</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={wikiConfig.limit}
-                  onChange={(event) =>
-                    onWikiChange({
-                      ...wikiConfig,
-                      limit: clamp(Number(event.target.value), 1, 20),
-                    })
-                  }
-                  className="border-stone-300 bg-white"
-                />
               </label>
             </div>
             <label className="block min-w-0 space-y-1">

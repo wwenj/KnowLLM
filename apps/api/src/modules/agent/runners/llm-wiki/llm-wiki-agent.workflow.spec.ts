@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  ModelService,
-  ResponseTextFormat,
+import {
+  ModelRequestError,
+  type ModelService,
+  type ResponseTextFormat,
 } from "../../../model/model.service";
 import type { AgentRunEvent, AgentRunnerContext } from "../../agent.types";
 import type { LlmWikiAgentTools } from "./llm-wiki-agent.tools";
@@ -24,6 +25,7 @@ const sourceId3 = "d".repeat(16);
 test("Planner binds one initial action to each task and completes with Page evidence", async () => {
   const toolCalls: string[] = [];
   const models: string[] = [];
+  const requests: Array<{ model: string; maxOutputTokens?: number }> = [];
   let plannerFormat: ResponseTextFormat | undefined;
   const model = makeModel((system, _model, _user, _messages, format) => {
     if (isPlanner(system)) {
@@ -43,7 +45,7 @@ test("Planner binds one initial action to each task and completes with Page evid
       };
     }
     return final("complete", "默认模型是 `gpt-5.4-mini`。[E1]", ["E1"]);
-  }, models);
+  }, models, requests);
   const workflow = new LlmWikiAgentWorkflow(
     makeTools(toolCalls) as unknown as LlmWikiAgentTools,
     model as unknown as ModelService,
@@ -57,6 +59,13 @@ test("Planner binds one initial action to each task and completes with Page evid
     DEFAULT_FAST_MODEL,
     DEFAULT_QUALITY_MODEL,
   ]);
+  assert.deepEqual(
+    requests.map((request) => request.maxOutputTokens),
+    [undefined, undefined, 150_000],
+  );
+  assert.equal(result.tokens?.phases?.retrieval.totalTokens, 30);
+  assert.equal(result.tokens?.phases?.final.outputTokens, 5);
+  assert.equal(result.tokens?.phases?.final.maxOutputTokens, 150_000);
   assert.equal(plannerFormat?.type, "json_schema");
   assert.equal(result.resultJson?.answerStatus, "complete");
   assert.deepEqual(result.resultJson?.taskResults, [
@@ -197,7 +206,6 @@ test("traceSource uses the fixed task question, fast model and compact result", 
       system: "Source 证据查询器",
       payload: { currentChunk: { content: "raw source must stay internal" } },
       format: jsonFormat(),
-      maxTokens: 500,
       parse: (raw) => {
         if (typeof raw.sufficient !== "boolean") {
           throw new Error("sufficient 必须是 boolean");
@@ -292,7 +300,7 @@ test("traceSource uses the fixed task question, fast model and compact result", 
     /raw source must stay internal/,
   );
   assert.match(JSON.stringify(secondPayload), /原文确认默认模型/);
-  assert.equal(result.stats?.sourceModelCalls, 2);
+  assert.equal(result.stats?.retrievalModelCalls, 5);
   assert.equal(result.resultJson?.answerStatus, "complete");
   const traces = result.resultJson?.sourceTraces as Array<
     Record<string, unknown>
@@ -417,18 +425,17 @@ test("Source insufficient does not stop the task from reading another Page", asy
   assert.equal(toolCalls.includes(`page:${pageKey2}`), true);
 });
 
-test("all Source traces share a total budget of ten fast model calls", async () => {
+test("Source traces are not limited to five rounds or ten global calls", async () => {
   let reactRound = 0;
-  const grantedRounds: number[] = [];
+  const sourceRounds: number[] = [];
   const tools = makeTools([], undefined, async (value) => {
-    grantedRounds.push(value.maxRounds);
-    for (let round = 0; round < value.maxRounds; round += 1) {
+    let rounds = 0;
+    for (let round = 0; round < 6; round += 1) {
       await value.callModel({
         stage: `source_budget_${value.taskId}_${round + 1}`,
         system: "Source budget probe",
         payload: {},
         format: jsonFormat(),
-        maxTokens: 100,
         parse: () => ({
           evidence: [],
           sufficient: false,
@@ -436,7 +443,9 @@ test("all Source traces share a total budget of ten fast model calls", async () 
           unresolved: ["继续查找"],
         }),
       });
+      rounds += 1;
     }
+    sourceRounds.push(rounds);
     return {
       taskId: value.taskId,
       sourceId: value.source.sourceId,
@@ -444,9 +453,8 @@ test("all Source traces share a total budget of ten fast model calls", async () 
       conclusion: "",
       evidence: [],
       unresolved: ["预算内未找到"],
-      rounds: value.maxRounds,
-      reason:
-        value.maxRounds > 0 ? "source_round_limit" : "source_budget_exhausted",
+      rounds,
+      reason: "source_exhausted",
       reads: [],
     };
   });
@@ -504,9 +512,201 @@ test("all Source traces share a total budget of ten fast model calls", async () 
   );
   const result = await workflow.start(context(workflow.validateInput(input())));
 
-  assert.deepEqual(grantedRounds, [5, 5, 0]);
-  assert.equal(result.stats?.sourceModelCalls, 10);
+  assert.deepEqual(sourceRounds, [6, 6, 6]);
+  assert.equal(result.stats?.retrievalModelCalls, 21);
   assert.equal(result.status, "insufficient");
+});
+
+test("ReAct allows three tools for each of six active tasks", async () => {
+  let reactRound = 0;
+  const toolCalls: string[] = [];
+  const taskIds = Array.from({ length: 6 }, (_, index) => `t${index + 1}`);
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: taskIds.map((id) => ({ id, question: `问题 ${id}` })),
+        actions: taskIds.map((taskId) => ({
+          taskId,
+          tool: "searchWiki",
+          value: `initial-${taskId}`,
+        })),
+      };
+    }
+    if (isReact(system)) {
+      reactRound += 1;
+      if (reactRound === 1) {
+        return {
+          evidence: [],
+          taskStates: taskIds.map((id) => active(id, ["继续检索"])),
+          actions: taskIds.flatMap((taskId) =>
+            Array.from({ length: 3 }, (_, index) => ({
+              tool: "searchWiki",
+              taskId,
+              query: `${taskId}-query-${index + 1}`,
+            })),
+          ),
+          conflicts: [],
+        };
+      }
+      return {
+        evidence: [],
+        taskStates: taskIds.map((id) => insufficient(id, "未找到证据")),
+        actions: [],
+        conflicts: [],
+      };
+    }
+    return final("insufficient", "所有任务证据不足。", []);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools(toolCalls) as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(result.status, "insufficient");
+  assert.equal(
+    toolCalls.filter((call) => call.startsWith("search:")).length,
+    24,
+  );
+});
+
+test("ReAct retries the whole response when one task emits a fourth tool", async () => {
+  let reactCalls = 0;
+  const toolCalls: string[] = [];
+  const model = makeModel((system) => {
+    if (isPlanner(system)) {
+      return {
+        relevant: true,
+        tasks: [{ id: "t1", question: "问题" }],
+        actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+      };
+    }
+    if (isReact(system)) {
+      reactCalls += 1;
+      if (reactCalls <= 2) {
+        const actionCount = reactCalls === 1 ? 4 : 3;
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["继续检索"])],
+          actions: Array.from({ length: actionCount }, (_, index) => ({
+            tool: "searchWiki",
+            taskId: "t1",
+            query: `query-${index + 1}`,
+          })),
+          conflicts: [],
+        };
+      }
+      return {
+        evidence: [],
+        taskStates: [insufficient("t1", "未找到证据")],
+        actions: [],
+        conflicts: [],
+      };
+    }
+    return final("insufficient", "证据不足。", []);
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools(toolCalls) as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(reactCalls, 3);
+  assert.equal(
+    toolCalls.filter((call) => call.startsWith("search:")).length,
+    3,
+  );
+});
+
+test("retrieval budget exhaustion stops tools and still runs Final", async () => {
+  const toolCalls: string[] = [];
+  let finalCalls = 0;
+  const model = makeModel(
+    (system) => {
+      if (isPlanner(system)) {
+        return {
+          relevant: true,
+          tasks: [{ id: "t1", question: "问题" }],
+          actions: [{ taskId: "t1", tool: "readPage", value: pageKey1 }],
+        };
+      }
+      if (isReact(system)) {
+        return {
+          evidence: [],
+          taskStates: [active("t1", ["继续检索"])],
+          actions: [{ tool: "searchWiki", taskId: "t1", query: "more" }],
+          conflicts: [],
+        };
+      }
+      finalCalls += 1;
+      return final("insufficient", "检索预算耗尽，证据不足。", []);
+    },
+    [],
+    [],
+    (system) =>
+      isPlanner(system)
+        ? { input_tokens: 299_980, output_tokens: 5, total_tokens: 299_985 }
+        : isReact(system)
+          ? { input_tokens: 10, output_tokens: 10, total_tokens: 20 }
+          : { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+  );
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools(toolCalls) as unknown as LlmWikiAgentTools,
+    model as unknown as ModelService,
+  );
+  const result = await workflow.start(context(workflow.validateInput(input())));
+
+  assert.equal(result.resultJson?.stopReason, "retrieval_token_limit");
+  assert.equal(result.tokens?.phases?.retrieval.exhausted, true);
+  assert.equal(result.tokens?.phases?.retrieval.totalTokens, 300_005);
+  assert.equal(toolCalls.includes("search:more"), false);
+  assert.equal(finalCalls, 1);
+});
+
+test("retryable model errors get two retries while quota errors do not retry", async () => {
+  let retryableCalls = 0;
+  const retryable = makeModel((system) => {
+    if (isPlanner(system)) {
+      retryableCalls += 1;
+      if (retryableCalls < 3) {
+        throw new ModelRequestError("temporary", {
+          status: 503,
+          category: "server",
+          retryable: true,
+        });
+      }
+      return { relevant: false, tasks: [], actions: [] };
+    }
+    throw new Error("unexpected model stage");
+  });
+  const workflow = new LlmWikiAgentWorkflow(
+    makeTools([]) as unknown as LlmWikiAgentTools,
+    retryable as unknown as ModelService,
+  );
+  const retried = await workflow.start(context(workflow.validateInput(input())));
+  assert.equal(retried.status, "insufficient");
+  assert.equal(retryableCalls, 3);
+
+  let quotaCalls = 0;
+  const quota = makeModel(() => {
+    quotaCalls += 1;
+    throw new ModelRequestError("quota exhausted", {
+      status: 429,
+      code: "credit_balance_exhausted",
+      category: "quota",
+      retryable: false,
+    });
+  });
+  const failedWorkflow = new LlmWikiAgentWorkflow(
+    makeTools([]) as unknown as LlmWikiAgentTools,
+    quota as unknown as ModelService,
+  );
+  await assert.rejects(
+    () => failedWorkflow.start(context(failedWorkflow.validateInput(input()))),
+    /planner 模型调用失败.*quota exhausted/,
+  );
+  assert.equal(quotaCalls, 1);
 });
 
 test("Final returns a partial answer when tasks end with mixed states", async () => {
@@ -602,7 +802,7 @@ test("changed Published catalog discards evidence before Final", async () => {
   assert.deepEqual(result.resultJson?.verifiedEvidence, []);
 });
 
-test("invalid ReAct JSON fails the run after one correction", async () => {
+test("invalid ReAct JSON fails the run after two corrections", async () => {
   let reactCalls = 0;
   const model = makeModel((system) => {
     if (isPlanner(system)) {
@@ -625,15 +825,14 @@ test("invalid ReAct JSON fails the run after one correction", async () => {
 
   await assert.rejects(
     () => workflow.start(context(workflow.validateInput(input()))),
-    /主 ReAct 第 1 轮未返回有效 JSON/,
+    /react_1 模型调用失败/,
   );
-  assert.equal(reactCalls, 2);
+  assert.equal(reactCalls, 3);
 });
 
 function input(): LlmWikiAgentInput {
   return {
     query: "默认快速模型是什么？",
-    limit: 8,
     fastModel: DEFAULT_FAST_MODEL,
     qualityModel: DEFAULT_QUALITY_MODEL,
   };
@@ -662,6 +861,12 @@ function makeModel(
     responseFormat?: ResponseTextFormat,
   ) => unknown | Promise<unknown>,
   models: string[] = [],
+  requests: Array<{ model: string; maxOutputTokens?: number }> = [],
+  usageForCall: (system: string) => {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  } = () => ({ input_tokens: 10, output_tokens: 5, total_tokens: 15 }),
 ) {
   return {
     listModels: () => [],
@@ -670,12 +875,14 @@ function makeModel(
       messages,
       model,
       textFormat,
+      maxOutputTokens,
       onRequest,
       onResponse,
     }: {
       messages: Array<{ role: string; content: unknown }>;
       model: string;
       textFormat?: ResponseTextFormat;
+      maxOutputTokens?: number;
       onRequest?: (request: {
         url: string;
         body: Record<string, unknown>;
@@ -683,12 +890,14 @@ function makeModel(
       onResponse?: (response: unknown) => void;
     }) => {
       models.push(model);
+      requests.push({ model, maxOutputTokens });
       onRequest?.({
         url: "https://model.test/v1/responses",
         body: { model, input: messages, store: false, text: { format: textFormat } },
       });
+      const system = String(messages[0]?.content || "");
       const value = await responder(
-        String(messages[0]?.content || ""),
+        system,
         model,
         String(messages[1]?.content || ""),
         messages,
@@ -707,6 +916,7 @@ function makeModel(
             content: [{ type: "output_text", text: content }],
           },
         ],
+        usage: usageForCall(system),
       };
       onResponse?.(response);
       return response;

@@ -11,15 +11,9 @@ export const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v2";
 export function buildRunBody(config: LlmWikiConfig): Record<string, unknown> {
   return {
     query: config.query.trim(),
-    limit: config.limit,
     fastModel: config.fastModel,
     qualityModel: config.qualityModel,
   };
-}
-
-export function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(Math.max(Math.round(value), min), max);
 }
 
 export function statusPillClass(status: AgentRunStatus): string {
@@ -131,7 +125,7 @@ export function eventDetail(event: AgentRunEvent): EventDetail | null {
   if (!Object.keys(payload).length) return null;
   const text = stringifyDetail(payload);
   return {
-    label: event.type === "plan_created" ? "规划结果" : event.type.includes("error") ? "错误详情" : "执行详情",
+    label: event.type === "plan_created" ? "规划结果" : event.type.includes("error") || event.type.includes("failed") ? "错误详情" : "执行详情",
     text,
   };
 }
@@ -161,12 +155,11 @@ export function readStoredConfig(): LlmWikiConfig {
     ) as Record<string, unknown>;
     return {
       query: stringValue(raw.query),
-      limit: clamp(numberValue(raw.limit, 8), 1, 20),
       fastModel: stringValue(raw.fastModel),
       qualityModel: stringValue(raw.qualityModel),
     };
   } catch {
-    return { query: "", limit: 8, fastModel: "", qualityModel: "" };
+    return { query: "", fastModel: "", qualityModel: "" };
   }
 }
 
@@ -180,8 +173,4 @@ export function pickModel(value: string, options: ModelOption[]): string {
 
 export function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-export function numberValue(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }

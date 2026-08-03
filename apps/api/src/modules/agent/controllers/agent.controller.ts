@@ -35,11 +35,10 @@ export class AgentController {
       type: "object",
       properties: {
         query: { type: "string", example: "Agent 查询如何工作？" },
-        limit: { type: "number", example: 8 },
         fastModel: { type: "string", description: "Planner 与快速 ReAct 模型", example: "openapi-gpt:gpt-5.4-mini" },
         qualityModel: { type: "string", description: "质量 ReAct 与最终回答模型", example: "openapi-gpt:gpt-5.5" }
       },
-      required: ["query", "limit", "fastModel", "qualityModel"]
+      required: ["query", "fastModel", "qualityModel"]
     }
   })
   @Post(":agentType/runs")

@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import type { ToolsCatalog } from "../../../llmWikiNext/llm-wiki-next.types";
 import {
+  ModelRequestError,
   ModelService,
   type ResponseTextFormat,
 } from "../../../model/model.service";
@@ -18,19 +19,14 @@ import {
 } from "./llm-wiki-agent-result";
 import {
   DEFAULT_FAST_MODEL,
-  DEFAULT_LIMIT,
   DEFAULT_QUALITY_MODEL,
-  FINAL_TOKEN_RESERVE,
-  MAX_ACTIONS_PER_ROUND,
-  MAX_LIMIT,
-  MAX_MAIN_MODEL_CALLS,
-  MAX_MODEL_ATTEMPTS,
+  FINAL_MAX_OUTPUT_TOKENS,
+  MODEL_MAX_ATTEMPTS,
+  MODEL_TIMEOUT_MS,
   MAX_PLAN_TASKS,
   MAX_REACT_ROUNDS,
-  MAX_SEARCHES,
-  MAX_SOURCE_MODEL_CALLS,
-  MAX_SOURCE_ROUNDS,
-  TOKEN_LIMIT,
+  MAX_TOOLS_PER_TASK_PER_ROUND,
+  RETRIEVAL_TOKEN_BUDGET,
   type AnswerStatus,
   type EvidenceSelection,
   type FinalAnswer,
@@ -139,7 +135,6 @@ const REACT_SCHEMA = jsonSchema("wiki_react_decision", {
     },
     actions: {
       type: "array",
-      maxItems: MAX_ACTIONS_PER_ROUND,
       items: {
         anyOf: [
           {
@@ -189,7 +184,7 @@ const FINAL_SCHEMA = jsonSchema("wiki_final_answer", {
   required: ["answerable", "answerMarkdown", "citations", "gaps"],
   properties: {
     answerable: { type: "boolean" },
-    answerMarkdown: { type: "string", minLength: 1, maxLength: 30_000 },
+    answerMarkdown: { type: "string", minLength: 1 },
     citations: {
       type: "array",
       maxItems: 24,
@@ -222,7 +217,6 @@ export class LlmWikiAgentWorkflow {
 
   getDefaults(): Record<string, unknown> {
     return {
-      limit: DEFAULT_LIMIT,
       fastModel: DEFAULT_FAST_MODEL,
       qualityModel: DEFAULT_QUALITY_MODEL,
       modelOptions: this.model.listModels(),
@@ -231,25 +225,21 @@ export class LlmWikiAgentWorkflow {
 
   validateInput(input: unknown): LlmWikiAgentInput {
     if (!isRecord(input)) throw new Error("请求体必须是对象");
-    const allowed = new Set(["query", "limit", "fastModel", "qualityModel"]);
+    const allowed = new Set(["query", "fastModel", "qualityModel"]);
     const unknown = Object.keys(input).filter((key) => !allowed.has(key));
     if (unknown.length)
       throw new Error(`不支持旧 Agent 输入字段: ${unknown.join(", ")}`);
     const query = string(input.query);
     const fastModel = string(input.fastModel);
     const qualityModel = string(input.qualityModel);
-    const limit = Number(input.limit);
     if (!query) throw new Error("query 不能为空");
     if (!fastModel || !qualityModel)
       throw new Error("fastModel 和 qualityModel 不能为空");
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
-      throw new Error(`limit 必须是 1 到 ${MAX_LIMIT} 的整数`);
-    }
     if (!this.model.findModel(fastModel))
       throw new Error(`fastModel 不存在或未配置: ${fastModel}`);
     if (!this.model.findModel(qualityModel))
       throw new Error(`qualityModel 不存在或未配置: ${qualityModel}`);
-    return { query, limit, fastModel, qualityModel };
+    return { query, fastModel, qualityModel };
   }
 
   title(input: LlmWikiAgentInput): string {
@@ -264,7 +254,6 @@ export class LlmWikiAgentWorkflow {
       type: "start",
       msg: "开始执行新版 LLM Wiki Planner + Task ReAct",
       query: ctx.input.query,
-      limit: ctx.input.limit,
       fastModel: ctx.input.fastModel,
       qualityModel: ctx.input.qualityModel,
     });
@@ -323,7 +312,7 @@ export class LlmWikiAgentWorkflow {
       round += 1
     ) {
       this.assertActive(ctx);
-      if (state.stopReason === "token_limit") break;
+      if (state.stopReason === "retrieval_token_limit") break;
       state.round = round;
       const useQuality =
         state.conflicts.length > 0 ||
@@ -389,8 +378,8 @@ export class LlmWikiAgentWorkflow {
 
     if (activeTasks(state).length) {
       const reason =
-        state.stopReason === "token_limit"
-          ? "已达到 Agent Token 或模型调用预算。"
+        state.stopReason === "retrieval_token_limit"
+          ? "已达到检索阶段 300,000 Token 预算。"
           : `达到 ${MAX_REACT_ROUNDS} 轮主 ReAct 上限，仍未获得充分证据。`;
       for (const task of activeTasks(state)) {
         task.status = "insufficient";
@@ -468,9 +457,7 @@ export class LlmWikiAgentWorkflow {
       ].join("\n"),
       payload: { query: state.query, pages: state.plannerCatalog },
       format: PLANNER_SCHEMA,
-      maxTokens: 1_200,
-      final: false,
-      budget: "main",
+      phase: "retrieval",
       parse: (raw) => normalizePlan(raw, state.catalog),
     });
     if (!value) {
@@ -527,9 +514,7 @@ export class LlmWikiAgentWorkflow {
       ].join("\n"),
       payload: reactPayload(state),
       format: REACT_SCHEMA,
-      maxTokens: 2_000,
-      final: false,
-      budget: "main",
+      phase: "retrieval",
       parse: (raw) => normalizeReact(raw, activeIds),
     });
   }
@@ -592,22 +577,11 @@ export class LlmWikiAgentWorkflow {
         conflicts: state.conflicts,
       },
       format: FINAL_SCHEMA,
-      maxTokens: 4_000,
-      final: true,
-      budget: "main",
+      phase: "final",
       parse: (raw) => normalizeFinal(raw, expected, completedEvidenceIds),
     });
     if (!value) {
-      if (state.stopReason !== "token_limit") {
-        throw new Error("Final 未返回有效 JSON");
-      }
-      return {
-        answerable: false,
-        answerStatus: "insufficient",
-        answerMarkdown: fallbackMarkdown(state),
-        citations: [],
-        gaps: taskGaps(state),
-      };
+      throw new Error("Final 未返回有效 JSON");
     }
     return {
       ...value,
@@ -628,10 +602,9 @@ export class LlmWikiAgentWorkflow {
     const observations: RetrievalRound["observations"] = [];
     const rejected: string[] = [];
     let fresh = 0;
-    let pageReads = 0;
-    for (const action of actions.slice(0, MAX_ACTIONS_PER_ROUND)) {
+    for (const action of actions) {
       this.assertActive(ctx);
-      if (state.stopReason === "token_limit") break;
+      if (state.stopReason === "retrieval_token_limit") break;
       const task = state.tasks.get(action.taskId);
       if (!task || task.status !== "active") {
         rejected.push(`${action.taskId}: Tool 只能处理 active task。`);
@@ -650,7 +623,6 @@ export class LlmWikiAgentWorkflow {
         state,
         task,
         action,
-        pageReads,
         round,
       );
       if ("reject" in result) {
@@ -666,8 +638,6 @@ export class LlmWikiAgentWorkflow {
         });
         continue;
       }
-      if (action.tool === "readPage" && !result.observation.cached)
-        pageReads += 1;
       observations.push(result.observation);
       if (!result.observation.cached) fresh += 1;
       ctx.appendEvent({
@@ -689,7 +659,6 @@ export class LlmWikiAgentWorkflow {
     state: LlmWikiAgentState,
     task: TaskState,
     action: ReactAction,
-    pageReads: number,
     mainRound: number,
   ): Promise<
     | { observation: RetrievalRound["observations"][number]; response: unknown }
@@ -708,9 +677,6 @@ export class LlmWikiAgentWorkflow {
         if (!query) return { reject: "searchWiki.query 不能为空。" };
         const ref = searchRef(query);
         const cached = state.searches.get(query);
-        if (!cached && state.searches.size >= MAX_SEARCHES) {
-          return { reject: `已达到 ${MAX_SEARCHES} 次 searchWiki 上限。` };
-        }
         const result = cached || this.tools.searchWiki(query);
         state.searches.set(query, result);
         pushUnique(task.observationRefs, ref);
@@ -735,14 +701,6 @@ export class LlmWikiAgentWorkflow {
           };
         }
         const cached = state.pages.get(pageKey);
-        if (!cached && pageReads >= MAX_ACTIONS_PER_ROUND) {
-          return { reject: `本轮 readPage 最多 ${MAX_ACTIONS_PER_ROUND} 次。` };
-        }
-        if (!cached && state.pages.size >= state.input.limit) {
-          return {
-            reject: `已达到 limit=${state.input.limit} 的页面读取上限。`,
-          };
-        }
         const result = cached || this.tools.readPage(pageKey);
         state.pages.set(pageKey, result);
         pushUnique(task.observationRefs, pageRef(pageKey));
@@ -782,33 +740,19 @@ export class LlmWikiAgentWorkflow {
       ) {
         return { reject: "该 Task 已完成或读完此 Source，禁止重复追踪。" };
       }
-      const availableRounds = Math.min(
-        MAX_SOURCE_ROUNDS,
-        MAX_SOURCE_MODEL_CALLS - state.sourceModelCalls,
-      );
-      const sourceCallsBeforeTrace = state.sourceModelCalls;
       const trace = await this.tools.traceSource({
         taskId: task.taskId,
         question: task.question,
         source,
-        maxRounds: availableRounds,
         signal: ctx.signal,
-        canCallModel: () =>
-          state.sourceModelCalls - sourceCallsBeforeTrace < MAX_SOURCE_ROUNDS &&
-          state.sourceModelCalls < MAX_SOURCE_MODEL_CALLS,
-        callModel: (request) => {
-          const remainingSourceCalls =
-            MAX_SOURCE_ROUNDS -
-            (state.sourceModelCalls - sourceCallsBeforeTrace);
-          if (remainingSourceCalls <= 0) return Promise.resolve(null);
-          return this.callJson(ctx, state, {
+        canContinue: () => !retrievalBudgetExhausted(state),
+        callModel: (request) =>
+          this.callJson(ctx, state, {
             ...request,
             model: state.input.fastModel,
-            final: false,
-            budget: "source",
-            maxAttempts: Math.min(2, remainingSourceCalls),
-          });
-        },
+            phase: "retrieval",
+            returnNullOnFailure: true,
+          }),
         onRead: (detail, sourceRound) => {
           const key = sourceReadKey(
             detail.source.sourceId,
@@ -948,94 +892,56 @@ export class LlmWikiAgentWorkflow {
       system: string;
       payload: unknown;
       format: ResponseTextFormat;
-      maxTokens: number;
-      final: boolean;
-      budget: "main" | "source";
-      maxAttempts?: number;
+      phase: "retrieval" | "final";
+      returnNullOnFailure?: boolean;
       parse: (value: Record<string, unknown>) => T;
     },
   ): Promise<T | null> {
     const prompt = JSON.stringify(args.payload);
-    const estimatedInput = estimateTokens(args.system) + estimateTokens(prompt);
-    const available = args.final
-      ? TOKEN_LIMIT
-      : TOKEN_LIMIT - FINAL_TOKEN_RESERVE;
-    if (
-      state.tokens.totalTokens + estimatedInput + args.maxTokens >
-      available
-    ) {
-      state.stopReason = "token_limit";
-      return null;
-    }
-    if (args.budget === "source") {
-      if (state.sourceModelCalls >= MAX_SOURCE_MODEL_CALLS) return null;
-    } else {
-      if (state.baseModelCalls >= MAX_MAIN_MODEL_CALLS) return null;
-      state.baseModelCalls += 1;
-    }
-
     let lastError = "";
     let lastContent = "";
-    const maxAttempts = Math.max(1, Math.min(args.maxAttempts ?? 2, 2));
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let correctInvalidJson = false;
+    for (let attempt = 1; attempt <= MODEL_MAX_ATTEMPTS; attempt += 1) {
       this.assertActive(ctx);
-      if (
-        args.budget === "source" &&
-        state.sourceModelCalls >= MAX_SOURCE_MODEL_CALLS
-      ) {
-        return null;
-      }
-      if (state.modelAttempts >= MAX_MODEL_ATTEMPTS) {
-        state.stopReason = "token_limit";
+      if (args.phase === "retrieval" && retrievalBudgetExhausted(state)) {
+        markRetrievalBudgetExhausted(state);
         return null;
       }
       const messages: Array<{ role: string; content: string }> = [
         { role: "system", content: args.system },
         { role: "user", content: prompt },
       ];
-      if (attempt === 2) {
+      if (attempt > 1 && correctInvalidJson) {
         if (lastContent)
           messages.push({ role: "assistant", content: lastContent });
         messages.push({
           role: "user",
           content: `上次输出未通过校验：${truncate(lastError.replace(/\s+/g, " "), 300)}。请严格按 system 指定的 JSON 字段修正，只返回 JSON。`,
         });
-        state.retries += 1;
-        ctx.appendEvent({
-          type: "model_json_retry",
-          msg: `${args.stage} 正在纠正无效 JSON`,
-          model: args.model,
-          error: lastError,
-        });
       }
       const attemptInput = messages.reduce(
         (sum, message) => sum + estimateTokens(message.content),
         0,
       );
-      if (
-        state.tokens.totalTokens + attemptInput + args.maxTokens >
-        available
-      ) {
-        state.stopReason = "token_limit";
-        return null;
-      }
-      if (args.budget === "source") state.sourceModelCalls += 1;
-      state.modelAttempts += 1;
-      state.tokens.modelCalls += 1;
-      state.tokens.rounds = state.tokens.modelCalls;
+      incrementModelCalls(state, args.phase);
       let responseReceived = false;
+      let usageRecorded = false;
+      let attemptContent = "";
+      const timeout = attemptSignal(ctx.signal, MODEL_TIMEOUT_MS);
       try {
         const response = await this.model.respond({
           model: args.model,
           messages,
           textFormat: args.format,
-          maxOutputTokens: args.maxTokens,
-          signal: ctx.signal,
+          maxOutputTokens:
+            args.phase === "final" ? FINAL_MAX_OUTPUT_TOKENS : undefined,
+          signal: timeout.signal,
           onRequest: (request) =>
             ctx.appendEvent({
               type: "model_request",
               msg: `请求模型：${args.stage}`,
               stage: args.stage,
+              phase: args.phase,
               attempt,
               model: args.model,
               request,
@@ -1046,6 +952,7 @@ export class LlmWikiAgentWorkflow {
               type: "model_response",
               msg: `模型返回：${args.stage}`,
               stage: args.stage,
+              phase: args.phase,
               attempt,
               model: args.model,
               response: modelResponse,
@@ -1053,36 +960,82 @@ export class LlmWikiAgentWorkflow {
           },
         });
         const content = responseContent(response);
+        attemptContent = content;
         lastContent = content;
-        state.tokens.inputTokens +=
-          response.usage?.input_tokens ?? attemptInput;
-        state.tokens.outputTokens +=
-          response.usage?.output_tokens ?? estimateTokens(content);
-        state.tokens.totalTokens =
-          state.tokens.inputTokens + state.tokens.outputTokens;
-        return args.parse(parseJsonObject(content));
+        addTokenUsage(
+          state,
+          args.phase,
+          response.usage,
+          attemptInput,
+          estimateTokens(content),
+        );
+        usageRecorded = true;
+        const parsed = args.parse(parseJsonObject(content));
+        if (args.phase === "retrieval" && retrievalBudgetExhausted(state)) {
+          markRetrievalBudgetExhausted(state);
+        }
+        return parsed;
       } catch (error) {
         if (ctx.signal.aborted) throw error;
+        if (!usageRecorded) {
+          addTokenUsage(
+            state,
+            args.phase,
+            error instanceof ModelRequestError ? error.usage : undefined,
+            attemptInput,
+            attemptContent ? estimateTokens(attemptContent) : 0,
+          );
+        }
         lastError = errorMessage(error);
+        correctInvalidJson = responseReceived && !(error instanceof ModelRequestError);
+        const retryable = correctInvalidJson || isRetryableModelError(error);
+        const errorDetails = modelErrorDetails(error);
         ctx.appendEvent({
           type: responseReceived ? "model_validation_error" : "model_error",
           msg: responseReceived
             ? `模型返回校验失败：${args.stage}`
             : `模型请求失败：${args.stage}`,
           stage: args.stage,
+          phase: args.phase,
           attempt,
           model: args.model,
           error: lastError,
+          errorDetails,
+          retryable,
         });
+        if (args.phase === "retrieval" && retrievalBudgetExhausted(state)) {
+          markRetrievalBudgetExhausted(state);
+          return null;
+        }
+        if (!retryable || attempt >= MODEL_MAX_ATTEMPTS) break;
+        state.retries += 1;
+        ctx.appendEvent({
+          type: correctInvalidJson ? "model_json_retry" : "model_retry",
+          msg: correctInvalidJson
+            ? `${args.stage} 正在纠正无效 JSON`
+            : `${args.stage} 模型异常，准备重试`,
+          stage: args.stage,
+          phase: args.phase,
+          attempt: attempt + 1,
+          model: args.model,
+          error: lastError,
+          errorDetails,
+        });
+        await cancellableDelay(retryDelayMs(error, attempt), ctx.signal);
+      } finally {
+        timeout.cleanup();
       }
     }
     ctx.appendEvent({
-      type: "model_json_error",
-      msg: `${args.stage} 未返回有效 JSON`,
+      type: "model_failed",
+      msg: `${args.stage} 模型调用失败或输出校验未通过`,
+      stage: args.stage,
+      phase: args.phase,
       model: args.model,
       error: lastError,
     });
-    return null;
+    if (args.returnNullOnFailure) return null;
+    throw new Error(`${args.stage} 模型调用失败：${lastError || "未知错误"}`);
   }
 
   private runnerMeta(state: LlmWikiAgentState): Record<string, unknown> {
@@ -1094,9 +1047,7 @@ export class LlmWikiAgentWorkflow {
       },
       catalogFingerprint: state.catalogFingerprint,
       rounds: state.round,
-      modelAttempts: state.modelAttempts,
-      baseModelCalls: state.baseModelCalls,
-      sourceModelCalls: state.sourceModelCalls,
+      modelCalls: state.tokens.modelCalls,
       retries: state.retries,
       searches: state.searches.size,
       pages: state.pages.size,
@@ -1131,7 +1082,9 @@ export class LlmWikiAgentWorkflow {
         pages: state.pages.size,
         sourceReads: state.sources.size,
         sourceTraces: state.sourceTraces.length,
-        sourceModelCalls: state.sourceModelCalls,
+        retrievalModelCalls:
+          state.tokens.phases?.retrieval.modelCalls || 0,
+        finalModelCalls: state.tokens.phases?.final.modelCalls || 0,
       },
     };
   }
@@ -1165,12 +1118,25 @@ function emptyState(input: LlmWikiAgentInput): LlmWikiAgentState {
       totalTokens: 0,
       rounds: 0,
       modelCalls: 0,
-      tokenLimit: TOKEN_LIMIT,
+      phases: {
+        retrieval: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          modelCalls: 0,
+          budgetTokens: RETRIEVAL_TOKEN_BUDGET,
+          exhausted: false,
+        },
+        final: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          modelCalls: 0,
+          maxOutputTokens: FINAL_MAX_OUTPUT_TOKENS,
+        },
+      },
     },
-    modelAttempts: 0,
     retries: 0,
-    baseModelCalls: 0,
-    sourceModelCalls: 0,
     lastRoundProgress: true,
   };
 }
@@ -1344,9 +1310,8 @@ function normalizeReact(
   if (updateIds.size !== active.size) {
     throw new Error("ReAct 必须更新全部 active task");
   }
-  const actions = array(value.actions)
-    .map(normalizeAction)
-    .slice(0, MAX_ACTIONS_PER_ROUND);
+  const actions = array(value.actions).map(normalizeAction);
+  const actionCounts = new Map<string, number>();
   for (const action of actions) {
     if (!active.has(action.taskId)) {
       throw new Error(`ReAct action 不是 active task：${action.taskId}`);
@@ -1355,6 +1320,13 @@ function normalizeReact(
     if (update?.status !== "active") {
       throw new Error(`Terminal task 不能产生 action：${action.taskId}`);
     }
+    const count = (actionCounts.get(action.taskId) || 0) + 1;
+    if (count > MAX_TOOLS_PER_TASK_PER_ROUND) {
+      throw new Error(
+        `ReAct 每个 active task 每轮最多 ${MAX_TOOLS_PER_TASK_PER_ROUND} 个 Tool：${action.taskId}`,
+      );
+    }
+    actionCounts.set(action.taskId, count);
   }
   return {
     evidence,
@@ -1783,6 +1755,135 @@ function pushUnique(values: string[], value: string): void {
 
 function estimateTokens(value: string): number {
   return Math.ceil(String(value || "").length / 4);
+}
+
+function retrievalBudgetExhausted(state: LlmWikiAgentState): boolean {
+  const retrieval = state.tokens.phases?.retrieval;
+  return Boolean(
+    retrieval && retrieval.totalTokens >= retrieval.budgetTokens,
+  );
+}
+
+function markRetrievalBudgetExhausted(state: LlmWikiAgentState): void {
+  const retrieval = state.tokens.phases?.retrieval;
+  if (retrieval) retrieval.exhausted = true;
+  state.stopReason = "retrieval_token_limit";
+}
+
+function incrementModelCalls(
+  state: LlmWikiAgentState,
+  phase: "retrieval" | "final",
+): void {
+  const phaseTokens = state.tokens.phases?.[phase];
+  if (!phaseTokens) throw new Error("Agent Token 阶段统计未初始化");
+  phaseTokens.modelCalls += 1;
+  state.tokens.modelCalls += 1;
+  state.tokens.rounds = state.tokens.modelCalls;
+}
+
+function addTokenUsage(
+  state: LlmWikiAgentState,
+  phase: "retrieval" | "final",
+  usage: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+  } | undefined,
+  fallbackInput: number,
+  fallbackOutput: number,
+): void {
+  const phaseTokens = state.tokens.phases?.[phase];
+  if (!phaseTokens) throw new Error("Agent Token 阶段统计未初始化");
+  const usageTotal = usage?.total_tokens;
+  const input =
+    usage?.input_tokens ??
+    (usageTotal !== undefined && usage?.output_tokens !== undefined
+      ? Math.max(0, usageTotal - usage.output_tokens)
+      : fallbackInput);
+  const output =
+    usage?.output_tokens ??
+    (usageTotal !== undefined
+      ? Math.max(0, usageTotal - input)
+      : fallbackOutput);
+  phaseTokens.inputTokens += Math.max(0, input);
+  phaseTokens.outputTokens += Math.max(0, output);
+  phaseTokens.totalTokens = phaseTokens.inputTokens + phaseTokens.outputTokens;
+  state.tokens.inputTokens =
+    state.tokens.phases!.retrieval.inputTokens +
+    state.tokens.phases!.final.inputTokens;
+  state.tokens.outputTokens =
+    state.tokens.phases!.retrieval.outputTokens +
+    state.tokens.phases!.final.outputTokens;
+  state.tokens.totalTokens = state.tokens.inputTokens + state.tokens.outputTokens;
+}
+
+function attemptSignal(
+  parent: AbortSignal,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup(): void } {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parent.reason);
+  if (parent.aborted) abortFromParent();
+  else parent.addEventListener("abort", abortFromParent, { once: true });
+  const timer = setTimeout(() => {
+    const error = new Error(`模型请求超过 ${timeoutMs}ms`);
+    error.name = "TimeoutError";
+    controller.abort(error);
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      parent.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+function isRetryableModelError(error: unknown): boolean {
+  return error instanceof ModelRequestError && error.retryable;
+}
+
+function modelErrorDetails(error: unknown): Record<string, unknown> | null {
+  if (!(error instanceof ModelRequestError)) return null;
+  return {
+    status: error.status,
+    type: error.type,
+    code: error.code,
+    param: error.param,
+    message: error.message,
+    requestId: error.requestId,
+    retryAfterMs: error.retryAfterMs,
+    category: error.category,
+    retryable: error.retryable,
+    usage: error.usage,
+  };
+}
+
+function retryDelayMs(error: unknown, failedAttempt: number): number {
+  if (
+    error instanceof ModelRequestError &&
+    error.category === "rate_limit" &&
+    error.retryAfterMs !== undefined
+  ) {
+    return Math.min(Math.max(0, error.retryAfterMs), 60_000);
+  }
+  return failedAttempt * 1_000;
+}
+
+function cancellableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function truncate(value: string, max: number): string {

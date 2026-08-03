@@ -25,7 +25,6 @@ test("agent tools delegate Wiki reads and expose traceSource instead of raw read
     taskId: "t1",
     question: "默认模型是什么？",
     source: sourceSummary(30),
-    maxRounds: 5,
     signal: new AbortController().signal,
     callModel: async (request) =>
       request.parse({
@@ -58,7 +57,6 @@ test("small Source is read once in full and never returns raw content", async ()
     taskId: "t1",
     question: "目标行是什么？",
     source: sourceSummary(1_000),
-    maxRounds: 5,
     signal: new AbortController().signal,
     callModel: async (request) => {
       modelCalls += 1;
@@ -94,7 +92,6 @@ test("large Source advances by 1000 lines and only carries verified evidence", a
     taskId: "t1",
     question: "查找第二段信息",
     source: sourceSummary(2_500),
-    maxRounds: 5,
     signal: new AbortController().signal,
     callModel: async (request) => {
       requests.push(request);
@@ -131,7 +128,7 @@ test("large Source advances by 1000 lines and only carries verified evidence", a
   assert.equal(result.rounds, 2);
 });
 
-test("large Source stops after five insufficient rounds", async () => {
+test("large Source continues beyond five rounds until exhausted", async () => {
   const calls: string[] = [];
   const service = makeService(6_000, calls);
   const tool = new LlmWikiSourceTraceTool(
@@ -141,7 +138,6 @@ test("large Source stops after five insufficient rounds", async () => {
     taskId: "t1",
     question: "不存在的问题",
     source: sourceSummary(6_000),
-    maxRounds: 5,
     signal: new AbortController().signal,
     callModel: async (request) =>
       request.parse({
@@ -153,10 +149,10 @@ test("large Source stops after five insufficient rounds", async () => {
   });
 
   assert.equal(result.status, "insufficient");
-  assert.equal(result.reason, "source_round_limit");
-  assert.equal(result.rounds, 5);
-  assert.equal(calls.length, 5);
-  assert.equal(calls[4], `source:${sourceId}:4001-5000`);
+  assert.equal(result.reason, "source_exhausted");
+  assert.equal(result.rounds, 6);
+  assert.equal(calls.length, 6);
+  assert.equal(calls[5], `source:${sourceId}:5001-6000`);
 });
 
 test("Source stops before another read when its model-call budget is exhausted", async () => {
@@ -169,9 +165,8 @@ test("Source stops before another read when its model-call budget is exhausted",
     taskId: "t1",
     question: "问题",
     source: sourceSummary(6_000),
-    maxRounds: 5,
     signal: new AbortController().signal,
-    canCallModel: () => modelCalls < 3,
+    canContinue: () => modelCalls < 3,
     callModel: async (request) => {
       modelCalls += 1;
       return request.parse({
@@ -184,7 +179,7 @@ test("Source stops before another read when its model-call budget is exhausted",
   });
 
   assert.equal(result.status, "insufficient");
-  assert.equal(result.reason, "source_model_call_limit");
+  assert.equal(result.reason, "source_budget_exhausted");
   assert.equal(modelCalls, 3);
   assert.equal(calls.length, 3);
 });
@@ -197,7 +192,6 @@ test("Source evidence quote must exist in the current chunk", async () => {
     taskId: "t1",
     question: "定位证据",
     source: sourceSummary(30),
-    maxRounds: 5,
     signal: new AbortController().signal,
     callModel: async (request) => {
       assert.throws(

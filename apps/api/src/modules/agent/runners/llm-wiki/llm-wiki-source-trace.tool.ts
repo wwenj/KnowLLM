@@ -61,37 +61,36 @@ export class LlmWikiSourceTraceTool {
     const evidence: SourceTraceEvidence[] = [];
     let conclusion = "";
     let unresolved: string[] = [];
-    const maxRounds = Math.max(0, Math.min(input.maxRounds, 5));
 
-    if (!maxRounds) {
-      return result(input, {
-        status: "insufficient",
-        conclusion,
-        evidence,
-        unresolved: ["本次运行的 Source 模型调用预算已耗尽。"],
-        rounds: 0,
-        reason: "source_budget_exhausted",
-        reads,
-      });
-    }
-
-    for (let round = 1; round <= maxRounds; round += 1) {
+    for (let round = 1; ; round += 1) {
       if (input.signal.aborted) throw new Error("任务被用户取消");
-      if (input.canCallModel && !input.canCallModel()) {
+      if (input.canContinue && !input.canContinue()) {
         return result(input, {
           status: "insufficient",
           conclusion,
           evidence,
           unresolved: unresolved.length
             ? unresolved
-            : ["达到每个 Source 最多 5 次模型调用的限制。"],
+            : ["检索阶段 Token 预算已耗尽。"],
           rounds: reads.length,
-          reason: "source_model_call_limit",
+          reason: "source_budget_exhausted",
           reads,
         });
       }
       const startLine = (round - 1) * SOURCE_CHUNK_LINES + 1;
-      if (startLine > input.source.lineCount) break;
+      if (startLine > input.source.lineCount) {
+        return result(input, {
+          status: "insufficient",
+          conclusion,
+          evidence,
+          unresolved: unresolved.length
+            ? unresolved
+            : ["已读完该 Source，仍没有充分证据。"],
+          rounds: reads.length,
+          reason: "source_exhausted",
+          reads,
+        });
+      }
       const endLine = Math.min(
         input.source.lineCount,
         startLine + SOURCE_CHUNK_LINES - 1,
@@ -142,19 +141,23 @@ export class LlmWikiSourceTraceTool {
           })),
         },
         format: SOURCE_TRACE_SCHEMA,
-        maxTokens: 1_500,
         parse: (value) =>
           normalizeSourceDecision(value, detail.content, evidence.length > 0),
       });
 
       if (!decision) {
+        const budgetExhausted = input.canContinue && !input.canContinue();
         return result(input, {
-          status: "failed",
+          status: budgetExhausted ? "insufficient" : "failed",
           conclusion,
           evidence,
-          unresolved,
+          unresolved: budgetExhausted
+            ? unique([...unresolved, "检索阶段 Token 预算已耗尽。"])
+            : unresolved,
           rounds: round,
-          reason: "Source 模型未返回有效 JSON。",
+          reason: budgetExhausted
+            ? "source_budget_exhausted"
+            : "Source 模型未返回有效 JSON。",
           reads,
         });
       }
@@ -206,23 +209,6 @@ export class LlmWikiSourceTraceTool {
         });
       }
     }
-
-    const budgetLimited = input.maxRounds < 5;
-    return result(input, {
-      status: "insufficient",
-      conclusion,
-      evidence,
-      unresolved: unresolved.length
-        ? unresolved
-        : [
-            budgetLimited
-              ? "本次运行的 Source 模型调用预算已耗尽。"
-              : "达到每个 Source 最多 5 轮的限制。",
-          ],
-      rounds: reads.length,
-      reason: budgetLimited ? "source_budget_exhausted" : "source_round_limit",
-      reads,
-    });
   }
 }
 

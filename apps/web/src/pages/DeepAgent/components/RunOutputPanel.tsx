@@ -73,6 +73,11 @@ export function RunOutputPanel({
   const modelRounds = detail?.tokens?.modelCalls
     ?? detail?.tokens?.rounds
     ?? detail?.stats?.modelCalls;
+  const retrievalTokens = detail?.tokens?.phases?.retrieval;
+  const finalTokens = detail?.tokens?.phases?.final;
+  const retries = typeof detail?.runnerMeta?.retries === "number"
+    ? detail.runnerMeta.retries
+    : undefined;
   return (
     <>
       <Card className="flex min-h-0 min-w-0 max-w-full flex-col gap-0 overflow-hidden border border-slate-200/70 bg-white/90 py-0 shadow-sm">
@@ -224,6 +229,34 @@ export function RunOutputPanel({
                     </dd>
                   </div>
                 </dl>
+                {(retrievalTokens || finalTokens) && (
+                  <dl className="mb-3 grid grid-cols-1 overflow-hidden rounded-lg border border-slate-200 bg-white sm:grid-cols-3">
+                    <div className="border-b border-slate-200 px-3 py-2 sm:border-b-0 sm:border-r">
+                      <dt className="text-xs text-slate-500">检索阶段 Token</dt>
+                      <dd className="mt-0.5 font-mono text-sm font-medium tabular-nums text-slate-800">
+                        {formatMetric(retrievalTokens?.totalTokens)} / {formatMetric(retrievalTokens?.budgetTokens)}
+                      </dd>
+                      <dd className="mt-1 text-xs text-slate-500">
+                        输入 {formatMetric(retrievalTokens?.inputTokens)} · 输出 {formatMetric(retrievalTokens?.outputTokens)} · 调用 {formatMetric(retrievalTokens?.modelCalls)} 次
+                      </dd>
+                    </div>
+                    <div className="border-b border-slate-200 px-3 py-2 sm:border-b-0 sm:border-r">
+                      <dt className="text-xs text-slate-500">Final 输出 Token</dt>
+                      <dd className="mt-0.5 font-mono text-sm font-medium tabular-nums text-slate-800">
+                        {formatMetric(finalTokens?.outputTokens)} / {formatMetric(finalTokens?.maxOutputTokens)}
+                      </dd>
+                      <dd className="mt-1 text-xs text-slate-500">
+                        输入 {formatMetric(finalTokens?.inputTokens)} · 总计 {formatMetric(finalTokens?.totalTokens)} · 调用 {formatMetric(finalTokens?.modelCalls)} 次
+                      </dd>
+                    </div>
+                    <div className="px-3 py-2">
+                      <dt className="text-xs text-slate-500">模型重试</dt>
+                      <dd className="mt-0.5 font-mono text-sm font-medium tabular-nums text-slate-800">
+                        {retries === undefined ? "-" : `${formatMetric(retries)} 次`}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
                 <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <MarkdownRenderer
                     content={detail.resultMd || "暂无结果。"}
@@ -271,7 +304,7 @@ function eventIcon(type: string) {
 }
 
 function eventIconClass(event: AgentRunEvent): string {
-  if (event.type.includes("error") || event.status === "failed" || event.status === "rejected") return "text-rose-600";
+  if (event.type.includes("error") || event.type.includes("failed") || event.status === "failed" || event.status === "rejected") return "text-rose-600";
   if (event.type === "model_response" || event.type === "tool_response") return "text-emerald-600";
   if (event.type === "model_request" || event.type === "tool_request") return "text-sky-600";
   return "text-slate-500";

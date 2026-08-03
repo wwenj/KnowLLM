@@ -42,6 +42,59 @@ export interface ModelResponse extends Record<string, unknown> {
   };
 }
 
+export type ModelErrorCategory =
+  | "timeout"
+  | "network"
+  | "rate_limit"
+  | "quota"
+  | "auth"
+  | "invalid_request"
+  | "server"
+  | "invalid_response"
+  | "incomplete"
+  | "refusal"
+  | "cancelled"
+  | "unknown";
+
+export interface ModelRequestErrorOptions {
+  status?: number;
+  type?: string;
+  code?: string;
+  param?: string;
+  requestId?: string;
+  retryAfterMs?: number;
+  category: ModelErrorCategory;
+  retryable: boolean;
+  usage?: ModelResponse["usage"];
+  cause?: unknown;
+}
+
+export class ModelRequestError extends Error {
+  readonly status?: number;
+  readonly type?: string;
+  readonly code?: string;
+  readonly param?: string;
+  readonly requestId?: string;
+  readonly retryAfterMs?: number;
+  readonly category: ModelErrorCategory;
+  readonly retryable: boolean;
+  readonly usage?: ModelResponse["usage"];
+
+  constructor(message: string, options: ModelRequestErrorOptions) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "ModelRequestError";
+    this.status = options.status;
+    this.type = options.type;
+    this.code = options.code;
+    this.param = options.param;
+    this.requestId = options.requestId;
+    this.retryAfterMs = options.retryAfterMs;
+    this.category = options.category;
+    this.retryable = options.retryable;
+    this.usage = options.usage;
+  }
+}
+
 export interface ModelOption {
   model: string;
   id: string;
@@ -117,9 +170,17 @@ export class ModelService {
     options: ResponseRequestOptions,
   ): Promise<ModelResponse> {
     const resolved = this.resolveModelForRequest(options.model);
-    if (!resolved) throw new Error("未配置可用模型");
+    if (!resolved) {
+      throw new ModelRequestError("未配置可用模型", {
+        category: "invalid_request",
+        retryable: false,
+      });
+    }
     if (resolved.provider.toLowerCase() !== "openai") {
-      throw new Error(`模型 ${resolved.id} 不是 OpenAI Provider`);
+      throw new ModelRequestError(`模型 ${resolved.id} 不是 OpenAI Provider`, {
+        category: "invalid_request",
+        retryable: false,
+      });
     }
 
     const { instructions, input } = responseInput(options.messages);
@@ -151,11 +212,17 @@ export class ModelService {
         signal: options.signal,
       });
     } catch (err) {
-      throw new Error(formatFetchFailure(err, url));
+      const aborted = isAbortError(err);
+      const timedOut = isTimeoutError(err);
+      throw new ModelRequestError(formatFetchFailure(err, url), {
+        category: timedOut ? "timeout" : aborted ? "cancelled" : "network",
+        retryable: timedOut || !aborted,
+        cause: err,
+      });
     }
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`模型调用失败: ${response.status} ${text.slice(0, 300)}`);
+      throw httpModelError(response, text);
     }
     let raw: Record<string, unknown>;
     try {
@@ -165,10 +232,19 @@ export class ModelService {
       }
       raw = value as Record<string, unknown>;
     } catch (error) {
-      throw new Error(`Responses API 返回非法 JSON: ${errorMessage(error)}`);
+      throw new ModelRequestError(
+        `Responses API 返回非法 JSON: ${errorMessage(error)}`,
+        {
+          status: response.status,
+          requestId: responseRequestId(response),
+          category: "invalid_response",
+          retryable: true,
+          cause: error,
+        },
+      );
     }
     options.onResponse?.(raw);
-    return normalizeResponse(raw);
+    return normalizeResponse(raw, responseRequestId(response));
   }
 
   private resolveModelForRequest(model?: string): ResolvedModel | null {
@@ -331,22 +407,47 @@ function messageContent(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function normalizeResponse(raw: Record<string, unknown>): ModelResponse {
-  const error = responseError(raw.error);
-  if (error) throw new Error(`Responses API 返回错误: ${error}`);
+function normalizeResponse(
+  raw: Record<string, unknown>,
+  requestId?: string,
+): ModelResponse {
+  const usage = normalizeUsage(raw.usage);
+  const responseErrorDetails = apiErrorDetails(raw.error);
+  if (responseErrorDetails.message) {
+    const classification = classifyModelError(undefined, responseErrorDetails);
+    throw new ModelRequestError(
+      `Responses API 返回错误: ${responseErrorDetails.message}`,
+      { ...responseErrorDetails, ...classification, requestId, usage },
+    );
+  }
   const status = stringField(raw.status);
   if (status && status !== "completed") {
-    const detail = responseError(raw.incomplete_details);
-    throw new Error(
-      `Responses API 未完成: ${status}${detail ? ` (${detail})` : ""}`,
+    const incomplete = apiErrorDetails(raw.incomplete_details);
+    const reason = incomplete.code || incomplete.message;
+    throw new ModelRequestError(
+      `Responses API 未完成: ${status}${reason ? ` (${reason})` : ""}`,
+      {
+        type: status,
+        code: reason,
+        requestId,
+        category: "incomplete",
+        retryable: false,
+        usage,
+      },
     );
   }
   const output = Array.isArray(raw.output) ? raw.output : [];
   const content = outputText(output);
   if (!content.trim()) {
     const refusal = outputRefusal(output);
-    throw new Error(
+    throw new ModelRequestError(
       refusal ? `模型拒绝回答: ${refusal}` : "Responses API 未返回文本内容",
+      {
+        category: refusal ? "refusal" : "invalid_response",
+        retryable: !refusal,
+        requestId,
+        usage,
+      },
     );
   }
   return {
@@ -356,7 +457,7 @@ function normalizeResponse(raw: Record<string, unknown>): ModelResponse {
     status: status || "completed",
     content,
     output,
-    usage: normalizeUsage(raw.usage),
+    usage,
   };
 }
 
@@ -410,12 +511,126 @@ function nonNegativeInteger(value: unknown): number | undefined {
     : undefined;
 }
 
-function responseError(value: unknown): string {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (typeof value !== "object" || Array.isArray(value)) return String(value);
+interface ApiErrorDetails {
+  message?: string;
+  type?: string;
+  code?: string;
+  param?: string;
+}
+
+const QUOTA_ERROR_CODES = new Set([
+  "insufficient_quota",
+  "billing_hard_limit_reached",
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+  "organization_usage_limit_exceeded",
+]);
+
+function apiErrorDetails(value: unknown): ApiErrorDetails {
+  if (!value) return {};
+  if (typeof value === "string") return { message: value };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { message: String(value) };
+  }
   const raw = value as Record<string, unknown>;
-  return stringField(raw.message) || stringField(raw.reason) || JSON.stringify(raw);
+  const code = stringField(raw.code) || stringField(raw.reason);
+  return {
+    message: stringField(raw.message) || code || JSON.stringify(raw),
+    type: stringField(raw.type) || undefined,
+    code: code || undefined,
+    param: stringField(raw.param) || undefined,
+  };
+}
+
+function httpModelError(response: Response, text: string): ModelRequestError {
+  let details: ApiErrorDetails = {};
+  try {
+    const raw = JSON.parse(text) as unknown;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const record = raw as Record<string, unknown>;
+      details = apiErrorDetails(record.error ?? raw);
+    }
+  } catch {
+    details = { message: text.trim().slice(0, 300) };
+  }
+  const classification = classifyModelError(response.status, details);
+  const message = details.message || response.statusText || "未知错误";
+  return new ModelRequestError(`模型调用失败: ${response.status} ${message}`, {
+    status: response.status,
+    type: details.type,
+    code: details.code,
+    param: details.param,
+    requestId: responseRequestId(response),
+    retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+    ...classification,
+  });
+}
+
+function classifyModelError(
+  status: number | undefined,
+  details: ApiErrorDetails,
+): Pick<ModelRequestErrorOptions, "category" | "retryable"> {
+  const code = String(details.code || "").toLowerCase();
+  const type = String(details.type || "").toLowerCase();
+  if (QUOTA_ERROR_CODES.has(code) || type === "insufficient_quota") {
+    return { category: "quota", retryable: false };
+  }
+  if (
+    status === 401 ||
+    status === 403 ||
+    type === "authentication_error" ||
+    type === "permission_error"
+  ) {
+    return { category: "auth", retryable: false };
+  }
+  if (status === 429 || type === "rate_limit_error") {
+    return { category: "rate_limit", retryable: true };
+  }
+  if (status === 408 || status === 409 || (status !== undefined && status >= 500)) {
+    return { category: "server", retryable: true };
+  }
+  if (type === "server_error" || type === "api_error") {
+    return { category: "server", retryable: true };
+  }
+  if (
+    status === 400 ||
+    status === 404 ||
+    status === 422 ||
+    type === "invalid_request_error" ||
+    code === "context_length_exceeded"
+  ) {
+    return { category: "invalid_request", retryable: false };
+  }
+  return { category: "unknown", retryable: false };
+}
+
+function responseRequestId(response: Response): string | undefined {
+  return (
+    response.headers.get("x-request-id") ||
+    response.headers.get("request-id") ||
+    undefined
+  );
+}
+
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return undefined;
+  return Math.max(0, at - Date.now());
+}
+
+function isAbortError(value: unknown): boolean {
+  return (
+    value instanceof Error &&
+    (value.name === "AbortError" || value.name === "TimeoutError")
+  );
+}
+
+function isTimeoutError(value: unknown): boolean {
+  return value instanceof Error && value.name === "TimeoutError";
 }
 
 function errorMessage(value: unknown): string {

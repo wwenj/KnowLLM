@@ -52,7 +52,24 @@ export interface AgentRunTokens {
   totalTokens: number;
   rounds: number;
   modelCalls: number;
-  tokenLimit: number | null;
+  tokenLimit?: number | null;
+  phases?: {
+    retrieval: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      modelCalls: number;
+      budgetTokens: number;
+      exhausted: boolean;
+    };
+    final: {
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      modelCalls: number;
+      maxOutputTokens: number;
+    };
+  };
 }
 
 export interface AgentRunStats {
