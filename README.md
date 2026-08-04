@@ -79,6 +79,18 @@ Planner 默认尽量保持单 Task，只在问题包含多个独立目标时拆�
 
 每轮 ReAct 会汇总已读页面的直接关联、反向关联和同 Source 页面，形成只用于导航的小目录；证据不足时优先读取可能补充缺口的关联页面，再进行全局搜索。生成答案前会再次计算 Published Catalog Fingerprint；目录、来源或页面关系发生变化时，本次证据会失效并停止回答。当前尚未把整个 Agent Run 固定到不可变 `revisionId`，正文内容级的一致性保护仍需继续完善。
 
+### 8. 评测数据收集
+
+评测数据优先选择通用模型难以仅凭参数记忆直接回答的真实资料，例如内部私域知识、项目文档、运维手册、业务规则和小众专业资料。原始 Source 需要保留版本与 Hash，并人工标注可回到原文核验的编译 Gold Facts，以及绑定 Published Revision 的 Agent 问题、参考答案、Required Facts、页面 Quote 和拒答用例。
+
+### 9. 编译评测
+
+编译评测关注原始 Source 中的重要事实经过 Planner、Writer 和发布后，是否被最终 Wiki 正确保留。大致思路是在编译前冻结 Gold Facts 和原文证据，编译完成后固定一个 Published Revision，只根据最终 Wiki 判断事实是否正确、遗漏或被错误改写；具体评测架构、Judge 和评分规则仍待设计与实现。
+
+### 10. Agent 检索评测
+
+Agent 检索评测关注 Agent 能否从固定的 Published Wiki 中找到直接证据，并生成被证据支持的完整答案；对于知识库没有覆盖的问题，应能够明确拒答。大致思路是运行真实 Agent 链路，记录 Planner、Tools、页面与 Source 读取、Evidence 和最终答案，再与人工标注的参考答案和 Required Facts 对照；具体评测架构、Judge 和评分规则仍待设计与实现。
+
 ## 开发进度
 
 ### LLM 编译
