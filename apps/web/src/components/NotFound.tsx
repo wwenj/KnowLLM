@@ -2,7 +2,7 @@ import { ArrowLeft, Home } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const LOGO_URL =
-  "https://file.ljcdn.com/nebula/313477d365d143b487d041f741e2ce93_1776847846865.png";
+  "https://file.ljcdn.com/nebula/b3d00bc5603746068118aceb95d1f824_1785468797075.png";
 
 export function NotFound() {
   const navigate = useNavigate();
@@ -11,7 +11,7 @@ export function NotFound() {
     <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-white px-6 text-center text-slate-800">
       <img
         src={LOGO_URL}
-        alt="ZSpace"
+        alt="KnowLLM"
         draggable={false}
         className="size-32 object-contain animate-nf-signal-shake animate-nf-signal-flicker animate-nf-signal-glitch"
         style={{ mixBlendMode: "multiply" }}

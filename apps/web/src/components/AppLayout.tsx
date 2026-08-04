@@ -15,23 +15,23 @@ const navItems = [
 
 export function AppLayout() {
   return (
-    <div className="zspace-app">
-      <header className="zspace-topbar">
-        <div className="zspace-topbar-inner">
-          <div className="zspace-brand">
-            <img src="/logo.webp" alt="KnowLLM" className="zspace-logo" />
-            <div className="zspace-brand-text">
-              <span className="zspace-brand-title">KnowLLM</span>
-              <span className="zspace-brand-subtitle">LLM Wiki · Agent · Workspace</span>
+    <div className="knowllm-app">
+      <header className="knowllm-topbar">
+        <div className="knowllm-topbar-inner">
+          <div className="knowllm-brand">
+            <img src="/logo.webp" alt="KnowLLM" className="knowllm-logo" />
+            <div className="knowllm-brand-text">
+              <span className="knowllm-brand-title">KnowLLM</span>
+              <span className="knowllm-brand-subtitle">LLM Wiki · Agent · Workspace</span>
             </div>
           </div>
-          <nav className="zspace-nav" aria-label="主导航">
+          <nav className="knowllm-nav" aria-label="主导航">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) =>
-                  isActive ? "zspace-nav-link is-active" : "zspace-nav-link"
+                  isActive ? "knowllm-nav-link is-active" : "knowllm-nav-link"
                 }
               >
                 <item.icon size={16} aria-hidden />
@@ -42,8 +42,8 @@ export function AppLayout() {
         </div>
       </header>
 
-      <div className="zspace-workspace">
-        <main className="zspace-content">
+      <div className="knowllm-workspace">
+        <main className="knowllm-content">
           <Outlet />
         </main>
       </div>
