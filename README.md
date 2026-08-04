@@ -53,7 +53,7 @@ Planner 不生成正文和 Facts。页面 ID 由后端预留：`create` 只能�
 
 Staging 保存 Pages、Facts、Source Map、Manifest 和 Search Index 的完整候选快照。多个 Source 可以持续合并到同一个 Staging；每次合并都会生成新的 Staging generation，所有产物写入并校验完成后才切换状态。
 
-发布时先生成完整 Published Revision，再原子切换正式指针。Agent 在切换前读取旧版本，切换后统一读取新版本，不会混用不同 Revision 的正文、来源关系和索引。取消、丢弃或发布会先让未完成任务失去写权限，晚到的模型响应不能回写 Staging 或正式 Wiki。
+发布时先生成完整 Published Revision，再原子切换正式指针。指针切换前所有读取仍指向旧版本，切换后只暴露完整的新版本，不会对外暴露写入一半的正文、来源关系或索引。取消、丢弃或发布会先让未完成任务失去写权限，晚到的模型响应不能回写 Staging 或正式 Wiki。
 
 ### 5. 删除与重编译
 
@@ -71,35 +71,15 @@ Tools 只读取 Published Wiki，对外提供 `getCatalog`、`searchWiki`、`rea
 
 ### 7. Agent 检索
 
-Agent 按照 `Catalog -> Planner -> Tools -> ReAct -> Evidence Gate -> Final` 执行。Planner 仅消费精简的页面目录，先判断相关性并拆分任务；无关问题会直接结束，不再消耗后续 Tools 和模型调用。
+Agent 按照 `Catalog -> Planner -> Tools -> ReAct -> Evidence Gate -> Final` 执行。Planner 仅消费精简的页面目录，先判断相关性并拆分任务，再为每个 Task 生成一个首轮 `readPage` 或 `searchWiki` 动作；无关问题会直接结束，不再消耗后续 Tools 和模型调用。
 
-页面证据和 Source 证据都必须通过原文 Quote 校验。Source Trace 只能访问当前任务已读取页面所暴露的 Source，并按行分段读取；检索过程有固定的轮数、Tools 调用和 Token 预算，重复读取优先使用缓存。
+页面证据的 Quote 必须存在于已读取的 Published Wiki 正文，Source 证据的 Quote 必须存在于当前读取的原文片段。Source Trace 只能访问当前 Task 已读取页面所暴露的 Source，并按行分段读取；重复读取优先使用缓存。
 
-每轮 ReAct 会汇总已读页面的直接关联、反向关联和同 Source 页面，形成只用于导航的小目录；证据不足时优先读取可能补充缺口的关联页面，再进行全局搜索。Planner 默认尽量保持单 Task，检索最多 8 轮，Fast/Quality 模型可手动指定，默认使用 `gpt-5.6-terra` 与 `gpt-5.6-sol`，单次模型请求超时为 5 分钟。
+Planner 默认尽量保持单 Task，最多拆分为 6 个 Task。检索最多执行 8 轮 ReAct，每个活动 Task 每轮最多调用 3 个 Tools；检索阶段 Token 预算为 300,000，最终回答输出上限为 150,000 Tokens。Fast/Quality 模型可手动指定，默认使用 `gpt-5.6-terra` 与 `gpt-5.6-sol`，单次模型请求超时为 5 分钟。
 
-生成答案前会再次检查 Published Catalog Fingerprint。Wiki 在检索期间发生变化时，本次证据会失效并停止回答，避免混合不同 Revision 的内容。
+每轮 ReAct 会汇总已读页面的直接关联、反向关联和同 Source 页面，形成只用于导航的小目录；证据不足时优先读取可能补充缺口的关联页面，再进行全局搜索。生成答案前会再次计算 Published Catalog Fingerprint；目录、来源或页面关系发生变化时，本次证据会失效并停止回答。当前尚未把整个 Agent Run 固定到不可变 `revisionId`，正文内容级的一致性保护仍需继续完善。
 
-## 评测设计
-
-当前评测实现仍基于旧 llmWiki 合同，新版 Published Revision 适配正在开发。后续重构会保留数据集、Gold Facts、Judge 和指标设计，并将评测输入绑定到不可变 Revision。
-
-### 1. 评测数据集
-
-同一批 Sources 同时生成 `source_manifest.json`、`compile_cases.json` 和 `agent_cases.json`。Source 通过 SHA-256 固定版本；编译评测使用带原文证据和重要级别的 Gold Facts，Agent 评测增加问题、参考答案、相关 Source、Expected Facts 和拒答用例。
-
-同源数据集让编译与 Agent 评测使用同一事实标准，能够区分问题出在知识编译、检索路径还是最终回答。数据集应覆盖流程、配置、限制、例外、冲突和多文档综合，不能用模板化 QA 卡片代替真实 Source。
-
-### 2. 编译评测
-
-编译评测固定一个 Published Revision，通过 Source Hash 找到相关页面，判断每条 Gold Fact 在最终 Wiki 中属于 `correct`、`missing` 还是 `incorrect`。Judge 只能用最终 Wiki 页面作为正确依据，原始 Source 只用于解释 Gold Fact 的来源。
-
-核心指标包括 `weightedScore`、`mustAccuracy`、遗漏率、错误率和字符覆盖率。新版 Run 还需要保存 Revision 产物、数据集 Hash、Judge/Compiler 元数据；Source 缺失应标记为不完整，不能用剩余 Case 的高分掩盖覆盖缺口。
-
-### 3. Agent 检索评测
-
-Agent 评测执行真实检索链路，记录 Planner、Tools、页面读取、Source Trace、证据和最终答案。主要评估 Source 命中、事实覆盖、答案忠实度、回答正确性、拒答正确性和检索成本。
-
-Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索证据判分，不能使用外部知识补充答案。新版评测需要适配当前 `query / limit / fastModel / qualityModel` 与 Published Tools 合同，并在运行期间固定 Wiki Revision。
+## 开发进度
 
 ### LLM 编译
 
@@ -114,34 +94,37 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 - [x] 提供只读 Published Wiki 的 `getCatalog`、`searchWiki`、`readPage`、`readSource` Tools 合同。
 - [x] 完成 `Catalog → Planner → Tools → ReAct → Evidence Gate → Final` 检索链路，并限制轮数、工具调用和 Token 预算。
 - [x] 支持按 Task 汇总关联页面小目录，引导 ReAct 在证据不足时继续读取兄弟页面，同时保持目录与正式 Evidence 隔离。
-- [x] 支持页面证据与 Source 原文 Quote 核验、按行回查、重复读取缓存，以及检索期间 Revision 一致性校验。
+- [x] 支持 Published Page Quote 与 Source Quote 分层核验、Source 按行回查、重复读取缓存和 Catalog Fingerprint 变化检测。
+- [ ] 将整个 Agent Run 固定到不可变 Published Revision，补齐正文内容级的一致性保护。
 - [ ] 继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
 
 ### 开放能力与本地 Agent 集成
 
-- [x] 建立 Core、Protocol、CLI、MCP Server 与 Skill Template 的独立包结构，为本地使用和第三方接入预留稳定边界。
-- [x] 定义本地工作区目录约定，以及 `init`、`import`、`compile`、`search`、`query`、`lint`、`mcp start` 等 CLI 命令接口。
-- [x] 提供 Codex Skill 模板：优先通过本地 `knowllm query` 查询答案，证据不足时明确拒绝补全。
-- [ ] 实现 CLI 的工作区初始化、资料导入、编译、检索、问答、校验与 JSON 输出；当前除帮助和目录展示外仍为占位实现。
-- [ ] 实现 MCP Server，开放 `knowllm_search`、`knowllm_read_page`、`knowllm_read_source`、`knowllm_query`、`knowllm_lint` 等只读 Tools。
-- [ ] 补齐 Codex、Claude Code、Cursor 等本地 Agent 的安装配置、进程管理、权限控制与端到端示例。
-- [ ] 提供可安装发布包、版本兼容策略和本地工作区迁移能力，降低开源用户的首次使用成本。
+- [ ] 提炼可复用的 Core 与 Protocol，统一 Source、Compile、Published Tools 和 Agent 合同。
+- [ ] 发布 npm Packages，补齐版本兼容、配置迁移和安装升级能力。
+- [ ] 实现 CLI，覆盖工作区初始化、资料导入、编译、检索、问答和校验。
+- [ ] 实现只读 MCP Server，向本地 Agent 开放搜索、页面读取、原文核验和问答 Tools。
+- [ ] 提供可安装的 Agent Skills，以及 Codex、Claude Code、Cursor 等工具的配置与端到端示例。
+
+当前 `packages/core`、`packages/protocol`、`packages/cli`、`packages/mcp-server` 和 `packages/skill-templates` 仅为占位骨架，以上能力均未完成开发。
+
+### 评测数据集收集
+
+- [x] 收集并固化真实 Source，通过 `source_manifest.json` 保存来源信息与 SHA-256。
+- [x] 完成编译评测标准答案：`compile_cases.json` 保存 Gold Facts、原文证据和重要级别。
+- [x] 完成 Agent 检索评测标准答案：`agent_cases.json` 绑定 Published `revisionId`，保存问题、参考答案、Required Facts、页面 Quote 和拒答用例。
 
 ### 编译评测
 
-- [x] 收集并固化真实 Source，生成带 SHA-256 版本信息的 `source_manifest.json` 与 `compile_cases.json`。
-- [x] 建立以原文证据为依据的 Gold Facts 标注；由 Codex 协助整理候选事实，人工复核重要级别、原文锚点与正确表述。
-- [x] 形成 `correct`、`missing`、`incorrect` 的事实判定与 `weightedScore`、必须事实准确率、遗漏率、错误率等指标设计。
-- [ ] 将编译评测执行、Judge 与运行记录迁移到新版 Published Revision，并固定 Revision、数据集 Hash 与模型元数据。
-- [ ] 补齐可复现的评测报告、失败事实定位与跨版本对比。
+- [ ] 完成面向 Published Revision 的评测架构与执行合同设计。
+- [ ] 设计 Judge、事实判定、评分和覆盖缺口处理规则。
+- [ ] 实现评测执行、运行记录、报告、失败定位和跨版本对比。
 
-### 检索评测
+### Agent 检索评测
 
-- [x] 基于同一批 Source 构建 `agent_cases.json`，覆盖单文档、多文档、配置查询、故障排查、安全约束与拒答等场景。
-- [x] 由 Codex 协助起草问题、参考答案和 Expected Facts，人工完成问题边界、答案、相关 Source 与拒答条件标注。
-- [x] 定义 Source 命中、事实覆盖、答案忠实度、回答正确性、拒答正确性与检索成本等评测维度。
-- [ ] 让评测运行真实调用新版 Agent 与 Published Tools，并完整记录 Planner、工具轨迹、证据和最终答案。
-- [ ] 将 Judge、评分汇总和运行时 Revision 固定到同一份评测合同，支持问题级复盘与回归对比。
+- [ ] 完成基于当前 Agent 与 Published Tools 的评测架构和运行合同设计。
+- [ ] 设计 Required Facts 覆盖、证据忠实度、拒答正确性、检索成本等评分规则。
+- [ ] 实现真实 Agent 执行、轨迹记录、Judge、报告和回归对比。
 
 ## 邀请共建
 
