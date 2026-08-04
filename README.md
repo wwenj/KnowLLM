@@ -75,7 +75,7 @@ Agent 按照 `Catalog -> Planner -> Tools -> ReAct -> Evidence Gate -> Final` �
 
 页面证据的 Quote 必须存在于已读取的 Published Wiki 正文，Source 证据的 Quote 必须存在于当前读取的原文片段。Source Trace 只能访问当前 Task 已读取页面所暴露的 Source，并按行分段读取；重复读取优先使用缓存。
 
-Planner 默认尽量保持单 Task，最多拆分为 6 个 Task。检索最多执行 8 轮 ReAct，每个活动 Task 每轮最多调用 3 个 Tools；检索阶段 Token 预算为 300,000，最终回答输出上限为 150,000 Tokens。Fast/Quality 模型可手动指定，默认使用 `gpt-5.6-terra` 与 `gpt-5.6-sol`，单次模型请求超时为 5 分钟。
+Planner 默认尽量保持单 Task，只在问题包含多个独立目标时拆分。ReAct 在受控的轮次、Tools 调用和 Token 预算内持续补充证据，并在复杂冲突或检索停滞时切换到更强的推理能力。
 
 每轮 ReAct 会汇总已读页面的直接关联、反向关联和同 Source 页面，形成只用于导航的小目录；证据不足时优先读取可能补充缺口的关联页面，再进行全局搜索。生成答案前会再次计算 Published Catalog Fingerprint；目录、来源或页面关系发生变化时，本次证据会失效并停止回答。当前尚未把整个 Agent Run 固定到不可变 `revisionId`，正文内容级的一致性保护仍需继续完善。
 
@@ -83,48 +83,48 @@ Planner 默认尽量保持单 Task，最多拆分为 6 个 Task。检索最多�
 
 ### LLM 编译
 
-- [x] 固定 Source 快照与 Hash，按原文顺序切片，并在执行前完成调用次数与 Token 预算估算。
-- [x] 通过 Planner 生成页面计划、预留页面 ID，并对模型输出进行 JSON、数量、关联关系等协议校验。
-- [x] 通过 Writer 生成页面正文和可回查的 Key Facts；任一 Unit 失败即丢弃该 Source 的中间结果。
-- [x] 支持 Shared Staging、冲突处理、原子发布与 Revision 切换，避免正式 Wiki 出现半成品或混合版本。
-- [ ] 完善增量重编译时的旧贡献替换，以及跨次编译的 Facts 清理。
+- ✅ 已完成：固定 Source 快照与 Hash，按原文顺序切片，并在执行前完成调用次数与 Token 预算估算。
+- ✅ 已完成：通过 Planner 生成页面计划、预留页面 ID，并对模型输出进行 JSON、数量、关联关系等协议校验。
+- ✅ 已完成：通过 Writer 生成页面正文和可回查的 Key Facts；任一 Unit 失败即丢弃该 Source 的中间结果。
+- ✅ 已完成：支持 Shared Staging、冲突处理、原子发布与 Revision 切换，避免正式 Wiki 出现半成品或混合版本。
+- ❌ 未完成：完善增量重编译时的旧贡献替换，以及跨次编译的 Facts 清理。
 
 ### Agent 检索
 
-- [x] 提供只读 Published Wiki 的 `getCatalog`、`searchWiki`、`readPage`、`readSource` Tools 合同。
-- [x] 完成 `Catalog → Planner → Tools → ReAct → Evidence Gate → Final` 检索链路，并限制轮数、工具调用和 Token 预算。
-- [x] 支持按 Task 汇总关联页面小目录，引导 ReAct 在证据不足时继续读取兄弟页面，同时保持目录与正式 Evidence 隔离。
-- [x] 支持 Published Page Quote 与 Source Quote 分层核验、Source 按行回查、重复读取缓存和 Catalog Fingerprint 变化检测。
-- [ ] 将整个 Agent Run 固定到不可变 Published Revision，补齐正文内容级的一致性保护。
-- [ ] 继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
+- ✅ 已完成：提供只读 Published Wiki 的 `getCatalog`、`searchWiki`、`readPage`、`readSource` Tools 合同。
+- ✅ 已完成：`Catalog → Planner → Tools → ReAct → Evidence Gate → Final` 检索链路，以及轮数、工具调用和 Token 预算限制。
+- ✅ 已完成：支持按 Task 汇总关联页面小目录，引导 ReAct 在证据不足时继续读取兄弟页面，同时保持目录与正式 Evidence 隔离。
+- ✅ 已完成：支持 Published Page Quote 与 Source Quote 分层核验、Source 按行回查、重复读取缓存和 Catalog Fingerprint 变化检测。
+- ❌ 未完成：将整个 Agent Run 固定到不可变 Published Revision，补齐正文内容级的一致性保护。
+- ❌ 未完成：继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
 
 ### 开放能力与本地 Agent 集成
 
-- [ ] 提炼可复用的 Core 与 Protocol，统一 Source、Compile、Published Tools 和 Agent 合同。
-- [ ] 发布 npm Packages，补齐版本兼容、配置迁移和安装升级能力。
-- [ ] 实现 CLI，覆盖工作区初始化、资料导入、编译、检索、问答和校验。
-- [ ] 实现只读 MCP Server，向本地 Agent 开放搜索、页面读取、原文核验和问答 Tools。
-- [ ] 提供可安装的 Agent Skills，以及 Codex、Claude Code、Cursor 等工具的配置与端到端示例。
+- ❌ 未完成：提炼可复用的 Core 与 Protocol，统一 Source、Compile、Published Tools 和 Agent 合同。
+- ❌ 未完成：发布 npm Packages，补齐版本兼容、配置迁移和安装升级能力。
+- ❌ 未完成：实现 CLI，覆盖工作区初始化、资料导入、编译、检索、问答和校验。
+- ❌ 未完成：实现只读 MCP Server，向本地 Agent 开放搜索、页面读取、原文核验和问答 Tools。
+- ❌ 未完成：提供可安装的 Agent Skills，以及 Codex、Claude Code、Cursor 等工具的配置与端到端示例。
 
 当前 `packages/core`、`packages/protocol`、`packages/cli`、`packages/mcp-server` 和 `packages/skill-templates` 仅为占位骨架，以上能力均未完成开发。
 
 ### 评测数据集收集
 
-- [x] 收集并固化真实 Source，通过 `source_manifest.json` 保存来源信息与 SHA-256。
-- [x] 完成编译评测标准答案：`compile_cases.json` 保存 Gold Facts、原文证据和重要级别。
-- [x] 完成 Agent 检索评测标准答案：`agent_cases.json` 绑定 Published `revisionId`，保存问题、参考答案、Required Facts、页面 Quote 和拒答用例。
+- ✅ 已完成：收集并固化真实 Source，通过 `source_manifest.json` 保存来源信息与 SHA-256。
+- ✅ 已完成：编译评测标准答案；`compile_cases.json` 保存 Gold Facts、原文证据和重要级别。
+- ✅ 已完成：Agent 检索评测标准答案；`agent_cases.json` 绑定 Published `revisionId`，保存问题、参考答案、Required Facts、页面 Quote 和拒答用例。
 
 ### 编译评测
 
-- [ ] 完成面向 Published Revision 的评测架构与执行合同设计。
-- [ ] 设计 Judge、事实判定、评分和覆盖缺口处理规则。
-- [ ] 实现评测执行、运行记录、报告、失败定位和跨版本对比。
+- ❌ 未完成：面向 Published Revision 的评测架构与执行合同设计。
+- ❌ 未完成：设计 Judge、事实判定、评分和覆盖缺口处理规则。
+- ❌ 未完成：实现评测执行、运行记录、报告、失败定位和跨版本对比。
 
 ### Agent 检索评测
 
-- [ ] 完成基于当前 Agent 与 Published Tools 的评测架构和运行合同设计。
-- [ ] 设计 Required Facts 覆盖、证据忠实度、拒答正确性、检索成本等评分规则。
-- [ ] 实现真实 Agent 执行、轨迹记录、Judge、报告和回归对比。
+- ❌ 未完成：基于当前 Agent 与 Published Tools 的评测架构和运行合同设计。
+- ❌ 未完成：设计 Required Facts 覆盖、证据忠实度、拒答正确性、检索成本等评分规则。
+- ❌ 未完成：实现真实 Agent 执行、轨迹记录、Judge、报告和回归对比。
 
 ## 邀请共建
 
