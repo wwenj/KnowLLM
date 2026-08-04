@@ -7,7 +7,7 @@
 - 领域：3D 打印机固件安装、配置、校准、排障和参考手册
 - 文档数：51 篇，满足 50 篇以上、100 篇以下。
 - 形态：保留原始 Markdown 章节、列表、表格、配置片段、步骤、注意事项和引用，不整理成统一 QA 卡片。
-- 事实：compile cases 以原文证据片段为 gold facts，Agent cases 以同一批 sources 派生。
+- 事实：compile cases 以原文证据片段为 gold facts；Agent cases 冻结到指定 Published Revision，并以最终 Wiki 页面原文作为证据。
 - 许可：GPL-3.0，许可文本见 `LICENSE-GPL-3.0.txt`。
 
 ## 抽样与清洗
@@ -26,11 +26,12 @@
 - `sources/`：原始 Markdown source，共 51 篇。
 - `source_manifest.json`：来源、license、commit、原始路径、sha256 和抽样规则。
 - `compile_cases.json`：51 个编译事实保真 case，共 306 条原子事实。
-- `agent_cases.json`：50 个 Agent case，其中包含 45 个可回答 case、5 个拒答 case，并覆盖单文档、多文档、配置、校准、故障排查、安全约束、接口和开发规范场景。
+- `agent_cases.json`：30 个 Agent case，其中包含 25 个可回答 case、5 个拒答 case；当前冻结到 Published Revision `Xgi4wdAIWgvMEbe4`，覆盖单页、多页、配置、校准、故障排查、安全约束、接口、协议和开发规范场景。
 
-重新生成 Agent case：
+校验数据集和 Published Wiki 证据：
 
 ```bash
-node eval/tools/generate_agent_dataset.mjs eval/zh_klipper3d_manual_mini
+node eval/tools/validate_llmwiki_dataset.mjs eval/zh_klipper3d_manual_mini
 ```
+
 - `upload_compile_dataset.json`：便于现有上传/编译流程一次性读取 sources 的辅助 JSON。

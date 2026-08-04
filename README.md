@@ -75,6 +75,8 @@ Agent 按照 `Catalog -> Planner -> Tools -> ReAct -> Evidence Gate -> Final` �
 
 页面证据和 Source 证据都必须通过原文 Quote 校验。Source Trace 只能访问当前任务已读取页面所暴露的 Source，并按行分段读取；检索过程有固定的轮数、Tools 调用和 Token 预算，重复读取优先使用缓存。
 
+每轮 ReAct 会汇总已读页面的直接关联、反向关联和同 Source 页面，形成只用于导航的小目录；证据不足时优先读取可能补充缺口的关联页面，再进行全局搜索。Planner 默认尽量保持单 Task，检索最多 8 轮，Fast/Quality 模型可手动指定，默认使用 `gpt-5.6-terra` 与 `gpt-5.6-sol`，单次模型请求超时为 5 分钟。
+
 生成答案前会再次检查 Published Catalog Fingerprint。Wiki 在检索期间发生变化时，本次证据会失效并停止回答，避免混合不同 Revision 的内容。
 
 ## 评测设计
@@ -99,10 +101,6 @@ Agent 评测执行真实检索链路，记录 Planner、Tools、页面读取、S
 
 Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索证据判分，不能使用外部知识补充答案。新版评测需要适配当前 `query / limit / fastModel / qualityModel` 与 Published Tools 合同，并在运行期间固定 Wiki Revision。
 
-## 更新日志与开发进度
-
-当前阶段：LLM 编译与 Agent 检索主链路已完成；评测数据集已具备，评测执行模块正在迁移到新版 Published Revision 合同。
-
 ### LLM 编译
 
 - [x] 固定 Source 快照与 Hash，按原文顺序切片，并在执行前完成调用次数与 Token 预算估算。
@@ -115,6 +113,7 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 
 - [x] 提供只读 Published Wiki 的 `getCatalog`、`searchWiki`、`readPage`、`readSource` Tools 合同。
 - [x] 完成 `Catalog → Planner → Tools → ReAct → Evidence Gate → Final` 检索链路，并限制轮数、工具调用和 Token 预算。
+- [x] 支持按 Task 汇总关联页面小目录，引导 ReAct 在证据不足时继续读取兄弟页面，同时保持目录与正式 Evidence 隔离。
 - [x] 支持页面证据与 Source 原文 Quote 核验、按行回查、重复读取缓存，以及检索期间 Revision 一致性校验。
 - [ ] 继续基于真实评测结果优化召回、任务规划与复杂多文档问题的检索策略。
 
@@ -144,16 +143,6 @@ Judge 只能基于 Expected Facts、参考答案、Agent 答案和本次检索�
 - [ ] 让评测运行真实调用新版 Agent 与 Published Tools，并完整记录 Planner、工具轨迹、证据和最终答案。
 - [ ] 将 Judge、评分汇总和运行时 Revision 固定到同一份评测合同，支持问题级复盘与回归对比。
 
-### 2026-07-27
-
-- 梳理并公开 LLM 编译、Agent 检索、编译评测、检索评测四个模块的完成状态与下一步。
-- 新增 CLI、MCP、Skill 等开放能力与本地 Agent 集成进度，区分已完成的接入基础与待实现的可用能力。
-- 明确评测数据集采用「Codex 协助整理 + 人工复核标注」的协作方式，保证每项事实和问答都能回到真实 Source 验证。
-
 ## 邀请共建
 
 KnowLLM 仍在快速迭代，欢迎一起把它做成可验证、可复现的 Agent 知识工程基础设施。
-
-- 欢迎贡献真实且可公开的 Source、Gold Facts、问题/答案与拒答样例，尤其是多文档、冲突信息和长文档场景。
-- 欢迎参与评测合同、Judge 方法、检索策略、编译增量更新与工程可靠性的讨论和实现。
-- 提交 Issue 或 Pull Request 前，请尽量附上可复现的 Source、预期结果和验证依据；我们优先讨论可被真实证据验证的问题。
