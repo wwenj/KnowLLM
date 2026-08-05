@@ -271,13 +271,13 @@
     },
     {
       "id": "A009",
-      "question": "搭建并排查 Klipper CAN 总线时，终端电阻如何配置和核验，txqueuelen 通常怎么设，多 MCU 时有什么例外？",
+      "question": "Klipper CAN 总线应配置几个多大阻值的终端电阻？断电后用万用表测量 CANH 与 CANL 应约为多少欧姆？can0 的 txqueuelen 通常怎么设，单总线有 5 个或更多 MCU 时有什么例外？",
       "answerable": true,
       "expectedAnswer": "CANH 与 CANL 之间应只有两个 120 欧姆终端电阻，断电测量约为 60 欧姆。can0 通常建议设置 txqueuelen 128；单总线有 5 个或更多 MCU 时可能需要提高，但要避免过长的往返延迟。",
       "requiredFacts": [
         {
           "id": "A009-F01",
-          "fact": "CANH 与 CANL 之间应有两个 120 欧姆电阻，正确接线时断电测得约 60 欧姆。",
+          "fact": "CANH 与 CANL 之间应配置两个 120 欧姆终端电阻，理想情况下总线两端各一个。",
           "evidence": {
             "pageKey": "r2TX8d14",
             "quote": "CAN 总线在 CANH 和 CANL 导线之间必须有两个 120 欧姆的电阻。理想情况下，总线两端各有一个电阻。"

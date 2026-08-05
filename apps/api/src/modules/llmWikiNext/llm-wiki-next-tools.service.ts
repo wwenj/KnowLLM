@@ -25,6 +25,33 @@ const SEARCH_SNIPPET_LENGTH = 240;
 export class LlmWikiNextToolsService {
   constructor(private readonly store: LlmWikiNextStore) {}
 
+  getPublishedIdentity(): {
+    revisionId: string;
+    publishedAt: string;
+    pageCount: number;
+    factCount: number;
+    sourceCount: number;
+  } {
+    const pointer = this.store.readPublishedPointer();
+    if (!pointer) {
+      throw new NotFoundException({
+        message: "暂无正式发布的 Wiki",
+        error: "PUBLISHED_WIKI_NOT_FOUND",
+      });
+    }
+    const snapshot = this.store.readPublishedSnapshot();
+    return {
+      revisionId: pointer.revisionId,
+      publishedAt: pointer.publishedAt,
+      pageCount: snapshot.manifest.pages.length,
+      factCount: Object.values(snapshot.facts.byPage).reduce(
+        (sum, facts) => sum + facts.length,
+        0,
+      ),
+      sourceCount: Object.keys(snapshot.sourceMap.sourceToPages).length,
+    };
+  }
+
   getCatalog(): ToolsCatalog {
     const snapshot = this.readPublishedSnapshot();
     const pages = snapshot.manifest.pages.map((page) =>

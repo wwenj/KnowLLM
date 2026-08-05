@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test -r ts-node/register src/modules/model/model.service.spec.ts src/modules/llmWikiNext/llm-wiki-next-tools.service.spec.ts src/modules/llmWikiNext/llm-wiki-next.service.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.tools.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.workflow.spec.ts"
+    "validate:agent-evaluation-data": "node ../../eval/zh_klipper3d_manual_mini/validate_agent_cases.mjs",
+    "test": "node --test -r ts-node/register src/modules/model/model.service.spec.ts src/modules/llmWikiNext/llm-wiki-next-tools.service.spec.ts src/modules/llmWikiNext/llm-wiki-next.service.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.tools.spec.ts src/modules/agent/runners/llm-wiki/llm-wiki-agent.workflow.spec.ts src/modules/agentEvaluation/agent-evaluation-dataset.service.spec.ts src/modules/agentEvaluation/agent-evaluation-store.service.spec.ts src/modules/agentEvaluation/agent-evaluation.service.spec.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.1.48",

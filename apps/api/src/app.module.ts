@@ -5,6 +5,7 @@ import { ApiExceptionFilter } from "./common/api-exception.filter";
 import { ApiResponseInterceptor } from "./common/api-response.interceptor";
 import { getEnvFilePaths } from "./config/env";
 import { AgentModule } from "./modules/agent/agent.module";
+import { AgentEvaluationModule } from "./modules/agentEvaluation/agent-evaluation.module";
 import { HealthModule } from "./modules/health/health.module";
 import { LlmWikiNextModule } from "./modules/llmWikiNext/llm-wiki-next.module";
 import { ModelModule } from "./modules/model/model.module";
@@ -13,22 +14,23 @@ import { ModelModule } from "./modules/model/model.module";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: getEnvFilePaths()
+      envFilePath: getEnvFilePaths(),
     }),
     HealthModule,
     ModelModule,
     LlmWikiNextModule,
-    AgentModule
+    AgentModule,
+    AgentEvaluationModule,
   ],
   providers: [
     {
       provide: APP_INTERCEPTOR,
-      useClass: ApiResponseInterceptor
+      useClass: ApiResponseInterceptor,
     },
     {
       provide: APP_FILTER,
-      useClass: ApiExceptionFilter
-    }
-  ]
+      useClass: ApiExceptionFilter,
+    },
+  ],
 })
 export class AppModule {}
