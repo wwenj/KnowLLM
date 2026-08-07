@@ -33,5 +33,3 @@
 ```bash
 node eval/tools/validate_llmwiki_dataset.mjs eval/zh_klipper3d_manual_mini
 ```
-
-- `upload_compile_dataset.json`：便于现有上传/编译流程一次性读取 sources 的辅助 JSON。

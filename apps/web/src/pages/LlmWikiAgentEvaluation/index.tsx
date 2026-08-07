@@ -1,10 +1,22 @@
 import {
+  Activity,
   AlertTriangle,
+  Award,
+  BarChart3,
+  CheckCircle2,
   ChevronRight,
+  CircleGauge,
+  Clock3,
   ExternalLink,
   FileSearch,
+  History,
   Loader2,
+  PieChart,
+  PlayCircle,
   RefreshCw,
+  SearchCheck,
+  ShieldCheck,
+  Target,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -232,15 +244,17 @@ export function LlmWikiAgentEvaluation() {
       <DatasetHeader dataset={dataset} loading={loading} />
       <div className="grid min-h-0 flex-1 gap-3 overflow-hidden p-3 pt-0 xl:grid-cols-[360px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 p-1">
+          <div className="grid grid-cols-2 gap-1 border-b border-slate-200 bg-slate-50/80 p-1.5">
             <TabButton
               active={leftTab === "new"}
+              icon={<PlayCircle />}
               onClick={() => setLeftTab("new")}
             >
               新评测
             </TabButton>
             <TabButton
               active={leftTab === "history"}
+              icon={<History />}
               onClick={() => setLeftTab("history")}
             >
               历史记录
@@ -299,7 +313,7 @@ function DatasetHeader({
   loading: boolean;
 }) {
   return (
-    <header className="m-3 mb-0 flex min-h-14 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2.5">
+    <header className="m-3 flex min-h-14 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-2.5">
       {loading ? (
         <div className="h-5 w-64 animate-pulse rounded bg-slate-100" />
       ) : dataset ? (
@@ -569,10 +583,15 @@ function HistoryPanel({
                   <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-500">
                     <span>{run.progress.total} 题</span>
                     <span>Rev {shortId(run.revisionId)}</span>
-                    <span className="font-semibold tabular-nums text-slate-700">
+                    <span
+                      className={cn(
+                        "font-bold tabular-nums",
+                        scoreTone(run.summary.overallScore).text,
+                      )}
+                    >
                       {run.summary.overallScore === null
                         ? "—"
-                        : Math.round(run.summary.overallScore)}
+                        : `${Math.round(run.summary.overallScore)} 分`}
                     </span>
                   </div>
                 </button>
@@ -650,11 +669,11 @@ function EvaluationResult({
 
   return (
     <div className="space-y-3">
-      <section className="rounded-lg border border-slate-200 bg-white px-4 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-950">
+              <span className="truncate text-sm font-semibold text-slate-950">
                 {run.datasetName}
               </span>
               <StatusTag status={run.status} labels={runLabels} />
@@ -663,41 +682,68 @@ function EvaluationResult({
               Revision {shortId(run.revisionId)} · {formatDate(run.startedAt)}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Clock3 className="size-3.5" />
+              平均 {formatDuration(summary.averageDurationMs)}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Activity className="size-3.5" />
+              成功率 {Math.round(summary.executionSuccessRate * 100)}%
+            </span>
+          </div>
+        </div>
+
+        <div className="grid sm:grid-cols-2 xl:grid-cols-[1.2fr_repeat(4,minmax(120px,1fr))]">
+          <ScoreMetric
+            score={summary.overallScore}
+            passLevel={summary.passLevel}
+          />
+          <div className="border-t border-slate-100 px-4 py-4 sm:border-l sm:border-t-0">
             <SummaryMetric
-              label="质量分"
-              value={
-                summary.overallScore === null
-                  ? "—"
-                  : String(Math.round(summary.overallScore))
-              }
-              detail={passLevelLabel(summary.passLevel)}
-            />
-            <SummaryMetric
+              icon={<CheckCircle2 />}
               label="有效题"
               value={`${summary.validCases}/${summary.totalCases}`}
+              tone="emerald"
             />
+          </div>
+          <div className="border-t border-slate-100 px-4 py-4 xl:border-l xl:border-t-0">
             <SummaryMetric
+              icon={<Target />}
               label="事实覆盖"
               value={factTotal ? `${summary.supportedFacts}/${factTotal}` : "—"}
+              tone="indigo"
             />
+          </div>
+          <div className="border-t border-slate-100 px-4 py-4 sm:border-l xl:border-t-0">
             <SummaryMetric
+              icon={<ShieldCheck />}
               label="拒答准确率"
               value={
                 summary.abstainAccuracy === null
                   ? "—"
                   : `${Math.round(summary.abstainAccuracy * 100)}%`
               }
+              tone="sky"
             />
+          </div>
+          <div className="border-t border-slate-100 px-4 py-4 xl:border-l xl:border-t-0">
             <SummaryMetric
+              icon={<AlertTriangle />}
               label="重要编造"
               value={String(summary.materialHallucinationCount)}
+              tone={summary.materialHallucinationCount > 0 ? "rose" : "slate"}
             />
           </div>
         </div>
 
+        <div className="grid border-t border-slate-100 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <FactDistributionChart summary={summary} />
+          <ScoreDistributionChart cases={run.cases} />
+        </div>
+
         {run.status === "running" && (
-          <div className="mt-3 border-t border-slate-100 pt-3">
+          <div className="border-t border-slate-100 px-4 py-3">
             <div className="flex items-center justify-between text-xs">
               <span className="inline-flex items-center gap-1.5 text-indigo-700">
                 <Loader2 className="size-3.5 animate-spin" />
@@ -716,14 +762,37 @@ function EvaluationResult({
           </div>
         )}
 
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
-          <span>Token {formatNumber(summary.totalTokens)}</span>
-          <span>模型调用 {summary.totalModelCalls}</span>
-          <span>页面读取 {summary.totalReadPages}</span>
-          <span>搜索 {summary.totalSearches}</span>
-          <span>重试 {summary.totalRetries}</span>
-          <span>超时 {summary.totalTimeouts}</span>
-          <span>平均耗时 {formatDuration(summary.averageDurationMs)}</span>
+        <div className="flex flex-wrap gap-x-5 gap-y-2 border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 text-[11px] text-slate-600">
+          <OperationalMetric
+            icon={<CircleGauge />}
+            label="Token"
+            value={formatNumber(summary.totalTokens)}
+          />
+          <OperationalMetric
+            icon={<Activity />}
+            label="模型调用"
+            value={summary.totalModelCalls}
+          />
+          <OperationalMetric
+            icon={<SearchCheck />}
+            label="页面读取"
+            value={summary.totalReadPages}
+          />
+          <OperationalMetric
+            icon={<FileSearch />}
+            label="搜索"
+            value={summary.totalSearches}
+          />
+          <OperationalMetric
+            icon={<RefreshCw />}
+            label="重试"
+            value={summary.totalRetries}
+          />
+          <OperationalMetric
+            icon={<AlertTriangle />}
+            label="超时"
+            value={summary.totalTimeouts}
+          />
         </div>
       </section>
 
@@ -809,9 +878,19 @@ function CaseRow({ item }: { item: AgentEvaluationCaseResult }) {
           </div>
         </div>
         <div className="shrink-0 text-right">
-          <div className="text-sm font-semibold tabular-nums text-slate-900">
+          <div
+            className={cn(
+              "text-xl font-bold leading-none tabular-nums",
+              scoreTone(item.caseScore).text,
+            )}
+          >
             {item.caseScore === null ? "—" : Math.round(item.caseScore)}
           </div>
+          {item.caseScore !== null && (
+            <div className="mt-0.5 text-[9px] font-medium text-slate-400">
+              / 100 分
+            </div>
+          )}
           <div className="mt-0.5 flex gap-2 text-[10px] text-slate-400">
             <span>{formatDuration(item.metrics.durationMs)}</span>
             <span>{formatNumber(item.metrics.totalTokens)} tok</span>
@@ -946,26 +1025,252 @@ function AnswerBlock({
   );
 }
 
-function SummaryMetric({
-  label,
-  value,
-  detail,
+function ScoreMetric({
+  score,
+  passLevel,
 }: {
-  label: string;
-  value: string;
-  detail?: string;
+  score: number | null;
+  passLevel: AgentEvaluationRun["summary"]["passLevel"];
 }) {
+  const tone = scoreTone(score);
   return (
-    <div>
-      <div className="text-lg font-semibold tabular-nums text-slate-950">
-        {value}
-      </div>
-      <div className="text-[11px] text-slate-500">
-        {label}
-        {detail ? ` · ${detail}` : ""}
+    <div className="flex min-h-28 items-center gap-3 bg-indigo-50/55 px-5 py-4">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white text-indigo-600 ring-1 ring-indigo-100">
+        <Award className="size-5" />
+      </span>
+      <div>
+        <div className="text-xs font-medium text-indigo-700">综合质量分</div>
+        <div className="mt-0.5 flex items-end gap-2">
+          <span
+            className={cn(
+              "text-4xl font-bold leading-none tabular-nums",
+              tone.text,
+            )}
+          >
+            {score === null ? "—" : Math.round(score)}
+          </span>
+          {score !== null && (
+            <span className="pb-0.5 text-xs text-slate-400">/ 100</span>
+          )}
+        </div>
+        <div className={cn("mt-1 text-xs font-semibold", tone.text)}>
+          {passLevelLabel(passLevel)}
+        </div>
       </div>
     </div>
   );
+}
+
+function SummaryMetric({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone: "emerald" | "indigo" | "sky" | "rose" | "slate";
+}) {
+  const colors = {
+    emerald: "bg-emerald-50 text-emerald-700",
+    indigo: "bg-indigo-50 text-indigo-700",
+    sky: "bg-sky-50 text-sky-700",
+    rose: "bg-rose-50 text-rose-700",
+    slate: "bg-slate-100 text-slate-600",
+  }[tone];
+  return (
+    <div className="flex h-full items-center gap-3">
+      <span
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4",
+          colors,
+        )}
+      >
+        {icon}
+      </span>
+      <div>
+        <div
+          className={cn(
+            "text-2xl font-semibold leading-none tabular-nums",
+            tone === "rose" ? "text-rose-700" : "text-slate-950",
+          )}
+        >
+          {value}
+        </div>
+        <div className="mt-1.5 text-[11px] font-medium text-slate-500">
+          {label}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FactDistributionChart({
+  summary,
+}: {
+  summary: AgentEvaluationRun["summary"];
+}) {
+  const items = [
+    { label: "完整", value: summary.supportedFacts, color: "#10b981" },
+    { label: "部分", value: summary.partialFacts, color: "#f59e0b" },
+    { label: "缺失", value: summary.missingFacts, color: "#94a3b8" },
+    { label: "错误", value: summary.incorrectFacts, color: "#f43f5e" },
+  ];
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  let cursor = 0;
+  const stops = items.map((item) => {
+    const start = cursor;
+    cursor += total ? (item.value / total) * 360 : 0;
+    return `${item.color} ${start}deg ${cursor}deg`;
+  });
+  const background = total ? `conic-gradient(${stops.join(", ")})` : "#e2e8f0";
+  return (
+    <div className="flex items-center gap-5 px-5 py-4">
+      <div
+        className="relative size-24 shrink-0 rounded-full"
+        style={{ background }}
+      >
+        <div className="absolute inset-3.5 flex flex-col items-center justify-center rounded-full bg-white">
+          <span className="text-xl font-semibold tabular-nums text-slate-900">
+            {total}
+          </span>
+          <span className="text-[10px] text-slate-500">事实</span>
+        </div>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-slate-800">
+          <PieChart className="size-4 text-slate-500" />
+          事实判定分布
+        </div>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-2">
+          {items.map((item) => (
+            <div
+              key={item.label}
+              className="flex items-center justify-between gap-2 text-xs"
+            >
+              <span className="inline-flex items-center gap-2 text-slate-600">
+                <span
+                  className="size-2 rounded-sm"
+                  style={{ backgroundColor: item.color }}
+                />
+                {item.label}
+              </span>
+              <span className="font-semibold tabular-nums text-slate-800">
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreDistributionChart({
+  cases,
+}: {
+  cases: AgentEvaluationCaseResult[];
+}) {
+  const buckets = [
+    {
+      label: "优秀",
+      hint: "85–100",
+      value: cases.filter(
+        (item) => item.caseScore !== null && item.caseScore >= 85,
+      ).length,
+      color: "bg-emerald-500",
+    },
+    {
+      label: "可接受",
+      hint: "75–84",
+      value: cases.filter(
+        (item) =>
+          item.caseScore !== null &&
+          item.caseScore >= 75 &&
+          item.caseScore < 85,
+      ).length,
+      color: "bg-indigo-500",
+    },
+    {
+      label: "待优化",
+      hint: "0–74",
+      value: cases.filter(
+        (item) => item.caseScore !== null && item.caseScore < 75,
+      ).length,
+      color: "bg-amber-500",
+    },
+    {
+      label: "未判分",
+      hint: "—",
+      value: cases.filter((item) => item.caseScore === null).length,
+      color: "bg-slate-300",
+    },
+  ];
+  const max = Math.max(...buckets.map((item) => item.value), 1);
+  return (
+    <div className="border-t border-slate-100 px-5 py-4 lg:border-l lg:border-t-0">
+      <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+        <BarChart3 className="size-4 text-slate-500" />
+        题目分数分布
+      </div>
+      <div className="mt-3 flex h-24 items-end gap-4">
+        {buckets.map((item) => (
+          <div
+            key={item.label}
+            className="flex h-full min-w-0 flex-1 flex-col justify-end"
+          >
+            <div className="mb-1 text-center text-xs font-semibold tabular-nums text-slate-700">
+              {item.value}
+            </div>
+            <div className="flex h-14 items-end rounded-sm bg-slate-100">
+              <div
+                className={cn(
+                  "w-full rounded-sm transition-[height] duration-200 motion-reduce:transition-none",
+                  item.color,
+                )}
+                style={{
+                  height: `${Math.max(item.value ? 14 : 4, (item.value / max) * 100)}%`,
+                }}
+              />
+            </div>
+            <div className="mt-1.5 truncate text-center text-[10px] font-medium text-slate-600">
+              {item.label}
+            </div>
+            <div className="text-center text-[9px] text-slate-400">
+              {item.hint}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OperationalMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-slate-400 [&_svg]:size-3.5">{icon}</span>
+      <span>{label}</span>
+      <span className="font-semibold tabular-nums text-slate-700">{value}</span>
+    </span>
+  );
+}
+
+function scoreTone(score: number | null) {
+  if (score === null) return { text: "text-slate-500" };
+  if (score >= 85) return { text: "text-emerald-700" };
+  if (score >= 75) return { text: "text-indigo-700" };
+  if (score >= 60) return { text: "text-amber-700" };
+  return { text: "text-rose-700" };
 }
 
 function StateNotice({
@@ -991,10 +1296,12 @@ function StateNotice({
 
 function TabButton({
   active,
+  icon,
   children,
   onClick,
 }: {
   active: boolean;
+  icon: React.ReactNode;
   children: React.ReactNode;
   onClick(): void;
 }) {
@@ -1003,12 +1310,13 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md px-3 py-1.5 text-xs font-medium",
+        "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1 [&_svg]:size-3.5",
         active
-          ? "bg-white text-slate-900 shadow-sm"
-          : "text-slate-500 hover:text-slate-800",
+          ? "bg-indigo-600 text-white"
+          : "text-slate-500 hover:bg-white hover:text-slate-800",
       )}
     >
+      {icon}
       {children}
     </button>
   );

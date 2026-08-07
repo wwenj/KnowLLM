@@ -1,5 +1,7 @@
 # FarmBot Genesis v1.8 硬件手册评测集
 
+> 状态：保留的参考数据集。当前 Agent cases 仍是旧 Schema，未绑定 Published Revision，不能直接用于 Agent Evaluation V2；使用前需要重新编译 Wiki 并完成 V2 迁移。
+
 这是一套用于 KnowLLM llmWiki 的小体量、高价值、知识内聚评测数据集。数据来自 FarmBot-Docs/farmbot-genesis，固定到 commit `44e0fa2`。
 
 ## 适配理由
@@ -27,4 +29,3 @@
 - `source_manifest.json`：来源、license、commit、原始路径、sha256 和抽样规则。
 - `compile_cases.json`：45 个编译事实保留 case。
 - `agent_cases.json`：32 个 Agent case，其中包含 2 个拒答 case。
-- `upload_compile_dataset.json`：便于现有上传/编译流程一次性读取 sources 的辅助 JSON。

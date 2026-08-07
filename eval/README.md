@@ -1,163 +1,120 @@
-# KnowLLM llmWiki 评测设计
+# KnowLLM llmWiki 评测数据
 
-本目录用于评测 KnowLLM 当前的 llmWiki 能力。核心是验证一条具体的链路：
+本目录只保存可复核的评测数据、来源材料和校验工具，不保存运行结果。
 
-```text
-真实文档 -> Wiki 编译 -> Agent 检索 -> 证据约束回答
-```
-
-评测被拆成两层：
-
-- `compile`：验证原始资料中的关键事实，是否在 Wiki 编译后被保留。
-- `agent`：验证 Agent 是否能找到证据，并生成被证据支持的答案。
-
-![llmWiki 两段式评测拆解](../assets/eval/README/01-eval-split.png)
-
-## 设计依据
-
-市场上的评测方法大致有三类：
-
-- 检索评测：证明系统能否找到相关文档，但不能证明答案正确。
-- RAG 评测：拆解 context relevance、faithfulness、answer correctness，更接近知识问答系统。
-- LLM-as-Judge：用模型做语义判卷，但判卷标准必须来自可追溯的人工标注，而不是 Judge 自己生成。
-
-llmWiki 的核心风险也正好对应这三点：
+当前评测链路：
 
 ```text
-Wiki 编译丢事实 -> 后续回答没有可靠知识基础
-Agent 没命中证据 -> 回答可能依赖模型记忆或幻觉
-答案不忠实证据 -> 检索成功也不能代表系统可信
+原始 Source -> Wiki 编译质量评测 -> Published Wiki -> Agent 检索回答评测
 ```
 
-所以当前评测不只看最终答案，而是把失败点拆开：事实保留、证据命中、事实覆盖、答案忠实性。
+运行结果统一写入 `.knowllm/evaluations/`，不写回本目录。
 
-## 样本构造
-
-评测样本从同一批真实文档派生，而不是用 QA 卡片反推 source。
-
-当前样本来源经过专门筛选：它们不是普通演示文档，而是为评测准备的领域内聚资料，要求有稳定来源、明确事实、可追溯证据，以及足够暴露编译和 Agent 回答问题的复杂度。
+## 目录结构
 
 ```text
-sources
-  -> gold facts + evidence
-  -> compile cases
-  -> agent cases
+eval/
+├── README.md
+├── tools/
+│   └── validate_llmwiki_dataset.mjs
+├── zh_klipper3d_manual_mini/
+│   ├── README.md
+│   ├── LICENSE-GPL-3.0.txt
+│   ├── source_manifest.json
+│   ├── compile_cases.json
+│   ├── agent_cases.json
+│   ├── validate_agent_cases.mjs
+│   └── sources/
+└── farmbot_genesis_v18_manual_mini/
+    ├── README.md
+    ├── LICENSE-MIT.txt
+    ├── source_manifest.json
+    ├── compile_cases.json
+    ├── agent_cases.json
+    └── sources/
 ```
 
-`gold facts` 是核心标准。每条事实都要能回到原文证据，Agent 问答中的 expected facts 也应尽量复用这些事实，避免编译评测和问答评测使用两套互相矛盾的答案标准。
+## 数据集状态
 
-![从真实文档派生 Gold Facts 和评测用例](../assets/eval/README/02-gold-facts.png)
+### `zh_klipper3d_manual_mini`
 
-## llmWiki 编译评测
+当前标准评测集。
 
-编译评测回答一个问题：
+- 51 篇 Klipper 中文手册 Source。
+- `source_manifest.json` 保存来源、commit、license、文件路径和 SHA-256。
+- `compile_cases.json` 保存编译质量 Gold Facts。
+- `agent_cases.json` 是 Agent Evaluation V2 的内置数据，绑定 Published Revision `Xgi4wdAIWgvMEbe4`。
+- Agent 数据包含 30 道题、78 条 Required Facts，每条事实绑定 Published 页面 `pageKey + quote`。
+- `validate_agent_cases.mjs` 校验当前 Published Revision 与全部 Gold Quote。
+
+后端当前只会读取：
 
 ```text
-Wiki 是否保留了原始资料里的关键事实？
+eval/zh_klipper3d_manual_mini/agent_cases.json
 ```
 
-实现方式：
+### `farmbot_genesis_v18_manual_mini`
 
-1. 读取人工标注的 expected facts。
-2. 找到这些事实对应的已编译 Wiki 页面。
-3. 用固定 Judge 判断每条事实是 `correct`、`missing` 还是 `incorrect`。
-4. 按事实重要性加权汇总。
+保留的参考数据集，不是当前可运行的标准评测集。
 
-评分设计：
+- 71 篇 FarmBot Genesis v1.8 英文手册 Source。
+- 保留 manifest、compile cases、旧 Agent cases 和 License，供后续迁移或扩展评测集时参考。
+- 当前 Agent cases 仍是旧 Schema，没有绑定 Published Revision，不能直接用于 Agent Evaluation V2。
+- 当前综合校验规则不会通过该数据集；使用前必须重新编译 Wiki，并按 V2 结构重做 `agent_cases.json`。
+
+## 文件职责
+
+### `sources/*.md`
+
+冻结的原始资料，是编译评测的 Source of Truth。Agent V2 不直接读取这些文件。
+
+### `source_manifest.json`
+
+记录数据集来源、固定 commit、license、文件名、原始路径和 SHA-256，用于确认 Source 没有漂移。
+
+### `compile_cases.json`
+
+编译质量标准答案。每条 Gold Fact 都应包含原子事实、原文证据、事实类型和重要级别。
+
+当前编译评测迁移代码尚未注册到 `AppModule`，但后续重构仍需要这些数据，因此保留。
+
+### `agent_cases.json`
+
+Agent 检索回答标准答案。
+
+当前 V2 只支持 Klipper 数据集，核心字段为：
 
 ```text
-must   = 3
-should = 2
-nice   = 1
-
-weightedScore = correctWeight / totalWeight * 100
-mustAccuracy  = mustCorrect / mustTotal
-incorrectRate = incorrect / totalFacts
+revisionId
+question
+expectedAnswer
+requiredFacts[].fact
+requiredFacts[].evidence.pageKey
+requiredFacts[].evidence.quote
 ```
 
-这里不只看正确率，还单独约束 `mustAccuracy` 和 `incorrectRate`。原因是：关键事实丢失和错误事实写入，比普通遗漏更容易破坏后续 Agent 的可信度。
+### License
 
-## Agent 检索评测
+公开数据集的许可证原文必须与数据一起保留。
 
-Agent 评测回答另一个问题：
+## 校验
 
-```text
-Agent 是否能基于 Wiki 找到证据，并给出事实充分、证据忠实的答案？
+校验 Klipper Source、manifest、compile cases 和 Agent V2 Published 证据：
+
+```bash
+node eval/tools/validate_llmwiki_dataset.mjs eval/zh_klipper3d_manual_mini
 ```
 
-实现方式：
+只校验当前 Agent V2 内置数据：
 
-1. 运行用户问题。
-2. 记录 Agent 的检索与证据轨迹。
-3. 判断是否命中相关来源。
-4. 判断答案是否覆盖 expected facts。
-5. 判断答案是否被证据支持。
-6. 对资料不足的问题，判断是否正确拒答。
-
-单题分以事实覆盖为主、二元正确为辅：
-
-```text
-factScore = max(0, (correctFacts - incorrectFacts) / totalFacts)
-taskScore = 0.7 * factScore + 0.3 * binaryAnswerScore
+```bash
+pnpm --filter @knowllm/api validate:agent-evaluation-data
 ```
 
-拒答题不计算事实覆盖，只判断是否正确拒答。
+## 维护约束
 
-## 总分设计
-
-Agent 总分不是单一准确率，而是多维加权：
-
-```text
-overallScore =
-  50 * taskCorrectnessRate +
-  25 * faithfulnessRate +
-  15 * factAccuracy +
-   5 * sourceHitRate +
-   5 * completionRate
-```
-
-权重含义：
-
-- `taskCorrectnessRate`：最终任务是否完成，是主指标。
-- `faithfulnessRate`：答案是否忠实证据，是可信度指标。
-- `factAccuracy`：事实覆盖是否充分，是细粒度质量指标。
-- `sourceHitRate`：是否找到来源，是检索诊断指标。
-- `completionRate`：是否稳定跑完，是工程稳定性指标。
-
-![llmWiki 评分模型](../assets/eval/README/03-score-model.png)
-
-等级口径：
-
-```text
-excellent:         >= 90
-pass:              >= 80
-needs_improvement: >= 60
-failed:            otherwise
-```
-
-## Judge 边界
-
-LLM Judge 只是语义判卷器，不是评测标准本身。
-
-当前实现通过以下方式降低不确定性：
-
-- 使用固定 Judge 模型。
-- 使用低温度或确定性配置。
-- 要求结构化 JSON 输出。
-- 只允许有限状态：`correct`、`missing`、`incorrect`。
-- 保留证据片段和判定原因，便于人工抽查。
-
-更严谨的做法是定期抽样人工复核 Judge 结果，统计 Judge 与人工判断的一致性。
-
-## 实现边界
-
-评测模块只读取已编译结果并写入评测 run，不负责资料生产链路本身。
-
-它不会：
-
-- 上传 source。
-- 触发 ingest。
-- 改写 Wiki 页面。
-- 用 Judge 结果替代人工复核。
-
-当前标准示例数据集是 `zh_klipper3d_manual_mini`。目录中保留的其他数据集，如果未通过当前校验规则，只能作为参考材料，不作为标准示例。
+- 不再保存把全部 Source 正文重复展开的 `upload_compile_dataset.json`。
+- 不使用生成脚本直接覆盖人工维护的 Gold Cases。
+- 修改 Klipper `agent_cases.json` 后必须重新运行两项校验。
+- Published Revision 变化后，必须重新核对所有 `pageKey + quote`，不能只修改 `revisionId`。
+- FarmBot 在完成 V2 迁移前只能作为参考资料，不能显示为可运行评测集。
