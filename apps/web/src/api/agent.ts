@@ -44,6 +44,7 @@ export interface AgentRunSummary {
   startedAt: string;
   endedAt: string;
   runnerMeta: Record<string, unknown>;
+  knowledgeBaseId?: string;
 }
 
 export interface AgentRunTokens {
@@ -114,9 +115,9 @@ export const agentApi = {
       undefined,
       silent ? { silent: true } : undefined,
     ),
-  listAllRuns: (limit = 50, silent = false) =>
+  listAllRuns: (knowledgeBaseId: string, limit = 50, silent = false) =>
     http.get<{ items: AgentRunSummary[] }>(
-      `/api/agents/runs?limit=${limit}`,
+      `/api/agents/runs?limit=${limit}&knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`,
       undefined,
       silent ? { silent: true } : undefined,
     ),

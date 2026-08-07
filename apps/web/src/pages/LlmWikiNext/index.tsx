@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { Archive, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/http";
@@ -73,6 +74,7 @@ function validInteger(value: number, min: number, max: number): boolean {
 }
 
 export function LlmWikiNext() {
+  const { knowledgeBaseId = "" } = useParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState(
@@ -138,9 +140,9 @@ export function LlmWikiNext() {
     setLoading(true);
     try {
       const [sourceData, stagingData, manifest] = await Promise.all([
-        llmWikiNextApi.listSources(),
-        llmWikiNextApi.getStaging(),
-        llmWikiNextApi.getPublishedManifest(),
+        llmWikiNextApi.listSources(knowledgeBaseId),
+        llmWikiNextApi.getStaging(knowledgeBaseId),
+        llmWikiNextApi.getPublishedManifest(knowledgeBaseId),
       ]);
       setSources(sourceData.items);
       setStaging(stagingData);
@@ -153,7 +155,7 @@ export function LlmWikiNext() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [knowledgeBaseId]);
 
   const loadModels = useCallback(async () => {
     try {
@@ -187,9 +189,9 @@ export function LlmWikiNext() {
     const poll = async () => {
       try {
         const [nextPool, nextStaging, sourceData] = await Promise.all([
-          llmWikiNextApi.getCompilePool(),
-          llmWikiNextApi.getStaging(),
-          llmWikiNextApi.listSources(),
+          llmWikiNextApi.getCompilePool(knowledgeBaseId),
+          llmWikiNextApi.getStaging(knowledgeBaseId),
+          llmWikiNextApi.listSources(knowledgeBaseId),
         ]);
         if (cancelled) return;
         setPool(nextPool);
@@ -206,7 +208,7 @@ export function LlmWikiNext() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [active]);
+  }, [active, knowledgeBaseId]);
 
   const sourceNames = useMemo(
     () =>
@@ -258,7 +260,7 @@ export function LlmWikiNext() {
     try {
       for (const file of entries) {
         try {
-          await llmWikiNextApi.uploadSource(file);
+          await llmWikiNextApi.uploadSource(knowledgeBaseId, file);
           succeeded += 1;
         } catch {
           failed += 1;
@@ -289,7 +291,7 @@ export function LlmWikiNext() {
       return toast.error("Writer 输出上限必须是 256 到 32,000 的整数");
     setEstimating(true);
     try {
-      const nextEstimate = await llmWikiNextApi.estimateCompile({
+      const nextEstimate = await llmWikiNextApi.estimateCompile(knowledgeBaseId, {
         sourceIds,
         model,
         sourceConcurrency,
@@ -307,7 +309,7 @@ export function LlmWikiNext() {
     setStartingCompile(true);
     try {
       // 只提交 estimate 原样返回的 options + confirmHash，配置变更必须重新估算。
-      const nextPool = await llmWikiNextApi.compile({
+      const nextPool = await llmWikiNextApi.compile(knowledgeBaseId, {
         ...estimate.options,
         confirmHash: estimate.confirmHash,
       });
@@ -325,7 +327,7 @@ export function LlmWikiNext() {
     if (!pool || cancelling) return;
     setCancelling(true);
     try {
-      const result = await llmWikiNextApi.cancelCompilePool();
+      const result = await llmWikiNextApi.cancelCompilePool(knowledgeBaseId);
       setPool(null);
       setCompilePoolDialogOpen(false);
       toast.success(
@@ -341,7 +343,7 @@ export function LlmWikiNext() {
     if (!deleteSourceIds.length || deleting) return;
     setDeleting(true);
     try {
-      const result = await llmWikiNextApi.deleteSources(deleteSourceIds);
+      const result = await llmWikiNextApi.deleteSources(knowledgeBaseId, deleteSourceIds);
       setDeleteSourceIds([]);
       toast.success(`已删除 ${result.deletedSourceIds.length} 个文档`);
       await refreshWorkspace(true);
@@ -361,6 +363,7 @@ export function LlmWikiNext() {
     setDeletingPage(true);
     try {
       const result = await llmWikiNextApi.deletePublishedPage(
+        knowledgeBaseId,
         deletePageTarget.pageKey,
         deletePageTarget.revisionId,
       );
@@ -392,7 +395,7 @@ export function LlmWikiNext() {
     if (publishBlocked) return;
     setPublishing(true);
     try {
-      const result = await llmWikiNextApi.publishStaging();
+      const result = await llmWikiNextApi.publishStaging(knowledgeBaseId);
       setPublishDialogOpen(false);
       setEstimate(null);
       toast.success(`已发布 ${result.pageCount} 个页面`);
@@ -413,7 +416,7 @@ export function LlmWikiNext() {
     if (discardBlocked) return;
     setDiscarding(true);
     try {
-      await llmWikiNextApi.discardStaging();
+      await llmWikiNextApi.discardStaging(knowledgeBaseId);
       setPool(null);
       setDiscardDialogOpen(false);
       setEstimate(null);
@@ -437,7 +440,7 @@ export function LlmWikiNext() {
     setPreviewSource(null);
     setPreviewSourceLine(sourceLine);
     try {
-      setPreviewSource(await llmWikiNextApi.getSource(sourceId));
+      setPreviewSource(await llmWikiNextApi.getSource(knowledgeBaseId, sourceId));
     } finally {
       setPreviewLoading(false);
     }
@@ -446,7 +449,7 @@ export function LlmWikiNext() {
   const loadCompileDetail = useCallback(async (sourceId: string) => {
     setCompileDetailLoading(true);
     try {
-      const result = await llmWikiNextApi.getSourceCompileDetail(sourceId);
+      const result = await llmWikiNextApi.getSourceCompileDetail(knowledgeBaseId, sourceId);
       setCompileDetailSource(result.source);
       setCompileDetailReport(result.report);
       setSources((current) =>
@@ -642,7 +645,7 @@ export function LlmWikiNext() {
               <WikiWorkspace
                 mode="staging"
                 pages={staging.pages}
-                loadPage={llmWikiNextApi.getStagingPage}
+                loadPage={(pageKey) => llmWikiNextApi.getStagingPage(knowledgeBaseId, pageKey)}
                 revisionId={staging.state.generation}
                 generatedAt={staging.state.updatedAt}
                 completedSourceIds={staging.state.completedSourceIds}
@@ -667,8 +670,8 @@ export function LlmWikiNext() {
             key={publishedManifest.revisionId || "published-empty"}
             mode="published"
             pages={publishedPages}
-            loadPage={llmWikiNextApi.getPublishedPage}
-            search={(query) => llmWikiNextApi.searchPublished(query)}
+            loadPage={(pageKey) => llmWikiNextApi.getPublishedPage(knowledgeBaseId, pageKey)}
+            search={(query) => llmWikiNextApi.searchPublished(knowledgeBaseId, query)}
             revisionId={publishedManifest.revisionId}
             generatedAt={publishedManifest.generatedAt}
             sourceNames={sourceNames}
@@ -688,7 +691,7 @@ export function LlmWikiNext() {
           value="tools"
           className="min-h-0 flex-1 data-[state=active]:flex data-[state=inactive]:hidden"
         >
-          <ToolsWorkspace />
+          <ToolsWorkspace knowledgeBaseId={knowledgeBaseId} />
         </TabsContent>
       </Tabs>
 

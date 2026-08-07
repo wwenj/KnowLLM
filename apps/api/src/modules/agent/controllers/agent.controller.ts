@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { ApiBody, ApiOperation, ApiParam, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { AgentService } from "../services/agent.service";
 
@@ -16,8 +16,8 @@ export class AgentController {
   @ApiOperation({ summary: "列出 Agent 运行记录" })
   @ApiQuery({ name: "limit", required: false, description: "最大返回数量", example: 50 })
   @Get("runs")
-  listRuns(@Query("limit") limit?: string) {
-    return this.agents.listRuns(limit ? Number(limit) : undefined);
+  listRuns(@Query("limit") limit?: string, @Query("knowledgeBaseId") knowledgeBaseId?: string) {
+    return this.agents.listRuns(limit ? Number(limit) : undefined, knowledgeBaseId);
   }
 
   @ApiOperation({ summary: "获取指定 Agent 的默认配置" })
@@ -43,6 +43,12 @@ export class AgentController {
   })
   @Post(":agentType/runs")
   createRun(@Param("agentType") agentType: string, @Body() body: unknown) {
+    if (
+      agentType === "llmWiki" &&
+      (!body || typeof body !== "object" || !String((body as Record<string, unknown>).knowledgeBaseId || "").trim())
+    ) {
+      throw new BadRequestException("knowledgeBaseId 不能为空");
+    }
     return this.agents.submit(agentType, body);
   }
 

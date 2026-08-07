@@ -18,10 +18,12 @@ import {
   ShieldCheck,
   Target,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { agentApi } from "@/api/agent";
+import { llmWikiNextApi, type KnowledgeBase } from "@/api/llmWikiNext";
 import {
   agentEvaluationApi,
   type AgentEvaluationCaseResult,
@@ -85,7 +87,12 @@ const factMeta: Record<
 };
 
 export function LlmWikiAgentEvaluation() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dataset, setDataset] = useState<AgentEvaluationDataset | null>(null);
+  const [datasets, setDatasets] = useState<AgentEvaluationDataset[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState("");
+  const [datasetId, setDatasetId] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [fastModel, setFastModel] = useState("");
   const [qualityModel, setQualityModel] = useState("");
@@ -105,22 +112,22 @@ export function LlmWikiAgentEvaluation() {
     pollRef.current = null;
   }, []);
 
-  const refreshRuns = useCallback(async (silent = true) => {
-    const response = await agentEvaluationApi.listRuns(silent);
+  const refreshRuns = useCallback(async (silent = true, id = knowledgeBaseId) => {
+    if (!id) return setRuns([]);
+    const response = await agentEvaluationApi.listRuns(id, silent);
     setRuns(response.items || []);
-  }, []);
+  }, [knowledgeBaseId]);
 
   useEffect(() => {
     const init = async () => {
       try {
-        const [nextDataset, modelResponse, defaults] = await Promise.all([
-          agentEvaluationApi.getDataset(true),
+        const [modelResponse, defaults, bases] = await Promise.all([
           modelApi.list(true),
           agentApi.getDefaults<{ fastModel?: string; qualityModel?: string }>(
             "llmWiki",
             true,
           ),
-          refreshRuns(true),
+          llmWikiNextApi.listKnowledgeBases(),
         ]);
         const nextModels = modelResponse.items || [];
         const modelIds = new Set(nextModels.map((item) => item.id));
@@ -130,12 +137,13 @@ export function LlmWikiAgentEvaluation() {
         const defaultQuality = modelIds.has(defaults.qualityModel || "")
           ? defaults.qualityModel!
           : nextModels[0]?.id || "";
-        setDataset(nextDataset);
+        const nextBases = bases.items || [];
+        setKnowledgeBases(nextBases);
+        setKnowledgeBaseId(nextBases[0]?.id || "");
         setModels(nextModels);
         setFastModel(defaultFast);
         setQualityModel(defaultQuality);
         setJudgeModel(defaultQuality);
-        setSelectedCaseIds(nextDataset.cases.map((item) => item.id));
       } finally {
         setLoading(false);
       }
@@ -143,6 +151,21 @@ export function LlmWikiAgentEvaluation() {
     void init();
     return stopPolling;
   }, [refreshRuns, stopPolling]);
+
+  useEffect(() => {
+    if (!knowledgeBaseId) return;
+    const load = async () => {
+      const response = await agentEvaluationApi.listDatasets(knowledgeBaseId, true);
+      const items = response.items || [];
+      setDatasets(items);
+      const selected = items.find((item) => item.datasetId === datasetId) || items[0] || null;
+      setDatasetId(selected?.datasetId || "");
+      setDataset(selected);
+      setSelectedCaseIds(selected?.cases.map((item) => item.id) || []);
+      await refreshRuns(true, knowledgeBaseId);
+    };
+    void load();
+  }, [knowledgeBaseId]);
 
   const startPolling = useCallback(
     (runId: string) => {
@@ -182,6 +205,8 @@ export function LlmWikiAgentEvaluation() {
     setSubmitting(true);
     try {
       const run = await agentEvaluationApi.createRun({
+        knowledgeBaseId,
+        datasetId,
         caseIds: selectionMode === "all" ? undefined : effectiveCaseIds,
         fastModel,
         qualityModel,
@@ -194,6 +219,17 @@ export function LlmWikiAgentEvaluation() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleUpload = async (file: File | undefined) => {
+    if (!file || !knowledgeBaseId) return;
+    const uploaded = await agentEvaluationApi.uploadDataset(knowledgeBaseId, file);
+    const response = await agentEvaluationApi.listDatasets(knowledgeBaseId, true);
+    setDatasets(response.items || []);
+    setDatasetId(uploaded.datasetId);
+    setDataset(uploaded);
+    setSelectedCaseIds(uploaded.cases.map((item) => item.id));
+    toast.success("评测数据已上传并绑定当前知识库");
   };
 
   const handleOpenRun = async (runId: string) => {
@@ -242,6 +278,12 @@ export function LlmWikiAgentEvaluation() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-100/80">
       <DatasetHeader dataset={dataset} loading={loading} />
+      <div className="mx-3 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+        <Select value={knowledgeBaseId} onValueChange={setKnowledgeBaseId}><SelectTrigger className="h-8 w-52"><SelectValue placeholder="选择知识库" /></SelectTrigger><SelectContent>{knowledgeBases.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select>
+        <Select value={datasetId} onValueChange={(value) => { const next = datasets.find((item) => item.datasetId === value) || null; setDatasetId(value); setDataset(next); setSelectedCaseIds(next?.cases.map((item) => item.id) || []); }} disabled={!datasets.length}><SelectTrigger className="h-8 w-64"><SelectValue placeholder="选择评测数据" /></SelectTrigger><SelectContent>{datasets.map((item) => <SelectItem key={item.datasetId} value={item.datasetId}>{item.name}</SelectItem>)}</SelectContent></Select>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void handleUpload(event.target.files?.[0])} />
+        <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={!knowledgeBaseId}><Upload />上传评测数据</Button>
+      </div>
       <div className="grid min-h-0 flex-1 gap-3 overflow-hidden p-3 pt-0 xl:grid-cols-[360px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
           <div className="grid grid-cols-2 gap-1 border-b border-slate-200 bg-slate-50/80 p-1.5">

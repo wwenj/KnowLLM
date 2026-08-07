@@ -33,6 +33,7 @@ export type StopReason =
   | "wiki_changed";
 
 export interface LlmWikiAgentInput extends Record<string, unknown> {
+  knowledgeBaseId?: string;
   query: string;
   fastModel: string;
   qualityModel: string;
@@ -218,6 +219,7 @@ export interface SourceTraceSummary {
 }
 
 export interface SourceTraceInput {
+  knowledgeBaseId?: string;
   taskId: string;
   question: string;
   source: ToolsSourceSummary;

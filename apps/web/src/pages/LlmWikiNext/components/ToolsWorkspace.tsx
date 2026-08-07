@@ -29,7 +29,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
   searchWiki: "searchWiki",
 };
 
-export function ToolsWorkspace() {
+export function ToolsWorkspace({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const [pageKey, setPageKey] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [startLine, setStartLine] = useState("");
@@ -62,7 +62,7 @@ export function ToolsWorkspace() {
   };
 
   const runCatalog = () =>
-    void execute("getCatalog", {}, llmWikiNextApi.getToolsCatalog);
+    void execute("getCatalog", {}, () => llmWikiNextApi.getToolsCatalog(knowledgeBaseId));
 
   const runPage = (event: FormEvent) => {
     event.preventDefault();
@@ -72,7 +72,7 @@ export function ToolsWorkspace() {
       return;
     }
     void execute("readPage", { pageKey: normalized }, () =>
-      llmWikiNextApi.readToolsPage(normalized),
+      llmWikiNextApi.readToolsPage(knowledgeBaseId, normalized),
     );
   };
 
@@ -139,6 +139,7 @@ export function ToolsWorkspace() {
     };
     void execute("readSource", params, () =>
       llmWikiNextApi.readToolsSource(
+        knowledgeBaseId,
         normalizedSourceId,
         parsedStartLine,
         parsedEndLine,
@@ -154,7 +155,7 @@ export function ToolsWorkspace() {
       return;
     }
     void execute("searchWiki", { query: normalized }, () =>
-      llmWikiNextApi.searchToolsWiki(normalized),
+      llmWikiNextApi.searchToolsWiki(knowledgeBaseId, normalized),
     );
   };
 

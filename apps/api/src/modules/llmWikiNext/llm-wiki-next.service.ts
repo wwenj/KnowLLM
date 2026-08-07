@@ -69,6 +69,10 @@ export class LlmWikiNextService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
+    this.initialize();
+  }
+
+  initialize(): void {
     this.recoverCompileReports();
     this.store.clearInterruptedCompileState();
     this.reconcileSourceStatuses();

@@ -33,6 +33,7 @@ export class AgentRunStoreService {
       startedAt: nowIso(),
       endedAt: "",
       input: args.input,
+      knowledgeBaseId: typeof args.input.knowledgeBaseId === "string" ? args.input.knowledgeBaseId : undefined,
       errors: [],
       contentFormat: "markdown",
       artifacts: [],
@@ -112,7 +113,7 @@ export class AgentRunStoreService {
     };
   }
 
-  listAllRuns(agentTypes: string[], limit = 50): AgentRunSummary[] {
+  listAllRuns(agentTypes: string[], limit = 50, knowledgeBaseId?: string): AgentRunSummary[] {
     if (!fs.existsSync(this.root)) return [];
     const allowed = new Set(agentTypes.map(safeAgentType));
     const out: AgentRunSummary[] = [];
@@ -125,6 +126,7 @@ export class AgentRunStoreService {
         if (!runDir.isDirectory()) continue;
         const meta = this.loadMeta(agentType, runDir.name);
         if (!meta) continue;
+        if (knowledgeBaseId && meta.knowledgeBaseId !== knowledgeBaseId) continue;
         out.push(toSummary(meta));
       }
     }
@@ -134,7 +136,11 @@ export class AgentRunStoreService {
   }
 
   loadMeta(agentType: string, runId: string): AgentRunMeta | null {
-    return readJson<AgentRunMeta | null>(this.metaPath(agentType, runId), null);
+    const meta = readJson<AgentRunMeta | null>(this.metaPath(agentType, runId), null);
+    if (!meta) return null;
+    return meta.agentType === "llmWiki" && !meta.knowledgeBaseId
+      ? { ...meta, knowledgeBaseId: "default" }
+      : meta;
   }
 
   updateMeta(agentType: string, runId: string, patch: Partial<AgentRunMeta>): AgentRunMeta {
@@ -226,5 +232,6 @@ function toSummary(meta: AgentRunMeta): AgentRunSummary {
     startedAt: meta.startedAt,
     endedAt: meta.endedAt,
     runnerMeta: meta.runnerMeta || {}
+    ,knowledgeBaseId: meta.knowledgeBaseId
   };
 }

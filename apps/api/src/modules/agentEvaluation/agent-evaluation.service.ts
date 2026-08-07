@@ -28,6 +28,8 @@ const FACT_SCORE: Record<AgentEvaluationFactStatus, number> = {
 };
 
 interface CreateRunInput {
+  knowledgeBaseId?: string;
+  datasetId?: string;
   caseIds?: string[];
   fastModel: string;
   qualityModel: string;
@@ -69,12 +71,24 @@ export class AgentEvaluationService {
     private readonly models: ModelService,
   ) {}
 
-  getDataset() {
-    return this.datasets.getDataset();
+  listDatasets(knowledgeBaseId: string) {
+    return { items: this.datasets.listDatasets(knowledgeBaseId) };
   }
 
-  listRuns() {
-    return { items: this.store.list() };
+  getDataset(knowledgeBaseId: string, datasetId: string) {
+    return this.datasets.getDataset(knowledgeBaseId, datasetId);
+  }
+
+  uploadDataset(knowledgeBaseId: string, buffer: Buffer) {
+    return this.datasets.upload(knowledgeBaseId, buffer);
+  }
+
+  deleteDataset(knowledgeBaseId: string, datasetId: string) {
+    return this.datasets.delete(knowledgeBaseId, datasetId);
+  }
+
+  listRuns(knowledgeBaseId: string) {
+    return { items: this.store.list(knowledgeBaseId) };
   }
 
   getRun(runId: string) {
@@ -82,7 +96,9 @@ export class AgentEvaluationService {
   }
 
   createRun(input: CreateRunInput): AgentEvaluationRun {
-    const dataset = this.datasets.getRunnableDataset();
+    const knowledgeBaseId = String(input.knowledgeBaseId || "default").trim();
+    const datasetId = String(input.datasetId || "").trim();
+    const dataset = this.datasets.getRunnableDataset(knowledgeBaseId, datasetId);
     const fastModel = this.requireModel(input.fastModel, "fastModel");
     const qualityModel = this.requireModel(input.qualityModel, "qualityModel");
     const judgeModel = this.requireModel(input.judgeModel, "judgeModel");
@@ -96,6 +112,7 @@ export class AgentEvaluationService {
       throw new BadRequestException(`评测题不存在: ${unknown.join(", ")}`);
     }
     const run = this.store.create({
+      knowledgeBaseId,
       dataset,
       caseIds,
       fastModel,
@@ -139,7 +156,7 @@ export class AgentEvaluationService {
       let run = this.store.get(runId);
       for (let index = 0; index < run.cases.length; index += 1) {
         if (controller.signal.aborted) return this.finishCancelled(runId);
-        if (!this.revisionMatches(run.revisionId))
+        if (!this.revisionMatches(run.knowledgeBaseId, run.revisionId))
           return this.invalidate(runId);
         run.cases[index] = { ...run.cases[index], status: "running" };
         run.progress.currentCaseId = run.cases[index].caseId;
@@ -190,6 +207,7 @@ export class AgentEvaluationService {
     const started = Date.now();
     const execution = this.agents.start("llmWiki", {
       query: item.question,
+      knowledgeBaseId: run.knowledgeBaseId,
       fastModel: run.fastModel,
       qualityModel: run.qualityModel,
     });
@@ -230,8 +248,8 @@ export class AgentEvaluationService {
         detail,
       );
     }
-    item.verifiedEvidence = this.verifyEvidence(detail);
-    if (!this.revisionMatches(run.revisionId)) {
+    item.verifiedEvidence = this.verifyEvidence(run.knowledgeBaseId, detail);
+    if (!this.revisionMatches(run.knowledgeBaseId, run.revisionId)) {
       return {
         ...item,
         status: "invalidated",
@@ -336,6 +354,7 @@ export class AgentEvaluationService {
   }
 
   private verifyEvidence(
+    knowledgeBaseId: string,
     detail: AgentRunDetail,
   ): AgentEvaluationVerifiedEvidence[] {
     const raw = Array.isArray(detail.resultJson?.verifiedEvidence)
@@ -354,7 +373,7 @@ export class AgentEvaluationService {
       try {
         let body = pages.get(pageKey);
         if (body === undefined) {
-          body = this.wiki.readPage(pageKey).page.bodyMarkdown;
+          body = this.wiki.readPage(knowledgeBaseId, pageKey).page.bodyMarkdown;
           pages.set(pageKey, body);
         }
         if (body.includes(quote))
@@ -374,9 +393,9 @@ export class AgentEvaluationService {
     return model;
   }
 
-  private revisionMatches(revisionId: string): boolean {
+  private revisionMatches(knowledgeBaseId: string, revisionId: string): boolean {
     try {
-      return this.wiki.getPublishedIdentity().revisionId === revisionId;
+      return this.wiki.getPublishedIdentity(knowledgeBaseId).revisionId === revisionId;
     } catch {
       return false;
     }

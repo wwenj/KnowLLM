@@ -5,6 +5,7 @@ import { ModelModule } from "../model/model.module";
 import { AgentEvaluationController } from "./agent-evaluation.controller";
 import { AgentEvaluationDatasetService } from "./agent-evaluation-dataset.service";
 import { AgentEvaluationStoreService } from "./agent-evaluation-store.service";
+import { AgentEvaluationDatasetStoreService } from "./agent-evaluation-dataset-store.service";
 import { AgentEvaluationService } from "./agent-evaluation.service";
 
 @Module({
@@ -12,6 +13,7 @@ import { AgentEvaluationService } from "./agent-evaluation.service";
   controllers: [AgentEvaluationController],
   providers: [
     AgentEvaluationDatasetService,
+    AgentEvaluationDatasetStoreService,
     AgentEvaluationStoreService,
     AgentEvaluationService,
   ],

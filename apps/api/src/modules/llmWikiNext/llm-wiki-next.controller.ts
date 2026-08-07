@@ -12,7 +12,8 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiConsumes, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { LlmWikiNextService } from "./llm-wiki-next.service";
+import { KnowledgeBaseService } from "./knowledge-base.service";
+import { LlmWikiNextWorkspaceFactory } from "./llm-wiki-next-workspace.factory";
 import { LlmWikiNextToolsService } from "./llm-wiki-next-tools.service";
 import { CompileRequest } from "./llm-wiki-next.types";
 
@@ -25,133 +26,167 @@ interface UploadedSourceFile {
 @Controller("api/llm-wiki-next")
 export class LlmWikiNextController {
   constructor(
-    private readonly wiki: LlmWikiNextService,
+    private readonly knowledgeBases: KnowledgeBaseService,
+    private readonly workspaces: LlmWikiNextWorkspaceFactory,
     private readonly tools: LlmWikiNextToolsService,
   ) {}
 
+  @Get("knowledge-bases")
+  listKnowledgeBases() {
+    return { items: this.knowledgeBases.list() };
+  }
+
+  @Post("knowledge-bases")
+  createKnowledgeBase(@Body() body: { name?: string }) {
+    return this.knowledgeBases.create(body?.name || "");
+  }
+
+  @Post("knowledge-bases/:knowledgeBaseId/rename")
+  renameKnowledgeBase(
+    @Param("knowledgeBaseId") knowledgeBaseId: string,
+    @Body() body: { name?: string },
+  ) {
+    return this.knowledgeBases.rename(knowledgeBaseId, body?.name || "");
+  }
+
+  @Delete("knowledge-bases/:knowledgeBaseId")
+  deleteKnowledgeBase(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    if (this.workspaces.hasActiveCompile(knowledgeBaseId)) {
+      throw new BadRequestException("知识库正在编译，请先停止编译后再删除");
+    }
+    if (this.knowledgeBases.hasActiveRuns(knowledgeBaseId)) {
+      throw new BadRequestException("知识库存在运行中的 Agent 或评测，请先停止任务后再删除");
+    }
+    this.workspaces.remove(knowledgeBaseId);
+    return this.knowledgeBases.remove(knowledgeBaseId);
+  }
+
   @ApiConsumes("multipart/form-data")
   @ApiOperation({ summary: "上传不可变 Markdown/Text Source" })
-  @Post("sources/upload")
+  @Post("knowledge-bases/:knowledgeBaseId/sources/upload")
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } }),
   )
-  uploadSource(@UploadedFile() file?: UploadedSourceFile) {
+  uploadSource(@Param("knowledgeBaseId") knowledgeBaseId: string, @UploadedFile() file?: UploadedSourceFile) {
     if (!file) throw new BadRequestException("请选择上传文件");
-    return this.wiki.uploadSource(
+    return this.workspaces.get(knowledgeBaseId).uploadSource(
       decodeUploadFilename(file.originalname),
       file.buffer,
     );
   }
 
-  @Get("sources")
-  listSources() {
-    return { items: this.wiki.listSources() };
+  @Get("knowledge-bases/:knowledgeBaseId/sources")
+  listSources(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return { items: this.workspaces.get(knowledgeBaseId).listSources() };
   }
 
-  @Get("sources/:sourceId")
-  getSource(@Param("sourceId") sourceId: string) {
-    return this.wiki.getSource(sourceId);
+  @Get("knowledge-bases/:knowledgeBaseId/sources/:sourceId")
+  getSource(@Param("knowledgeBaseId") knowledgeBaseId: string, @Param("sourceId") sourceId: string) {
+    return this.workspaces.get(knowledgeBaseId).getSource(sourceId);
   }
 
-  @Get("sources/:sourceId/compile-detail")
-  getSourceCompileDetail(@Param("sourceId") sourceId: string) {
-    return this.wiki.getSourceCompileDetail(sourceId);
+  @Get("knowledge-bases/:knowledgeBaseId/sources/:sourceId/compile-detail")
+  getSourceCompileDetail(@Param("knowledgeBaseId") knowledgeBaseId: string, @Param("sourceId") sourceId: string) {
+    return this.workspaces.get(knowledgeBaseId).getSourceCompileDetail(sourceId);
   }
 
-  @Post("sources/delete")
-  deleteSources(@Body() request: { sourceIds?: string[] }) {
-    return this.wiki.deleteSources(request?.sourceIds || []);
+  @Post("knowledge-bases/:knowledgeBaseId/sources/delete")
+  deleteSources(@Param("knowledgeBaseId") knowledgeBaseId: string, @Body() request: { sourceIds?: string[] }) {
+    return this.workspaces.get(knowledgeBaseId).deleteSources(request?.sourceIds || []);
   }
 
-  @Post("compile/estimate")
-  estimateCompile(@Body() request: CompileRequest) {
-    return this.wiki.estimateCompile(request || { sourceIds: [], model: "" });
+  @Post("knowledge-bases/:knowledgeBaseId/compile/estimate")
+  estimateCompile(@Param("knowledgeBaseId") knowledgeBaseId: string, @Body() request: CompileRequest) {
+    return this.workspaces.get(knowledgeBaseId).estimateCompile(request || { sourceIds: [], model: "" });
   }
 
-  @Post("compile")
-  compile(@Body() request: CompileRequest) {
-    return this.wiki.compile(request || { sourceIds: [], model: "" });
+  @Post("knowledge-bases/:knowledgeBaseId/compile")
+  compile(@Param("knowledgeBaseId") knowledgeBaseId: string, @Body() request: CompileRequest) {
+    return this.workspaces.get(knowledgeBaseId).compile(request || { sourceIds: [], model: "" });
   }
 
-  @Get("compile")
-  getCompilePool() {
-    return this.wiki.getCompilePool();
+  @Get("knowledge-bases/:knowledgeBaseId/compile")
+  getCompilePool(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).getCompilePool();
   }
 
-  @Post("compile/cancel")
-  cancelCompilePool() {
-    return this.wiki.cancelCompilePool();
+  @Post("knowledge-bases/:knowledgeBaseId/compile/cancel")
+  cancelCompilePool(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).cancelCompilePool();
   }
 
-  @Get("staging")
-  getStaging() {
-    return this.wiki.getStaging();
+  @Get("knowledge-bases/:knowledgeBaseId/staging")
+  getStaging(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).getStaging();
   }
 
-  @Get("staging/pages/:pageKey")
-  getStagingPage(@Param("pageKey") pageKey: string) {
-    return this.wiki.getStagingPage(pageKey);
+  @Get("knowledge-bases/:knowledgeBaseId/staging/pages/:pageKey")
+  getStagingPage(@Param("knowledgeBaseId") knowledgeBaseId: string, @Param("pageKey") pageKey: string) {
+    return this.workspaces.get(knowledgeBaseId).getStagingPage(pageKey);
   }
 
-  @Post("staging/publish")
-  publishStaging() {
-    return this.wiki.publishStaging();
+  @Post("knowledge-bases/:knowledgeBaseId/staging/publish")
+  publishStaging(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).publishStaging();
   }
 
-  @Post("staging/discard")
-  discardStaging() {
-    return this.wiki.discardStaging();
+  @Post("knowledge-bases/:knowledgeBaseId/staging/discard")
+  discardStaging(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).discardStaging();
   }
 
-  @Get("wiki/manifest")
-  getPublishedManifest() {
-    return this.wiki.getPublishedManifest();
+  @Get("knowledge-bases/:knowledgeBaseId/wiki/manifest")
+  getPublishedManifest(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.workspaces.get(knowledgeBaseId).getPublishedManifest();
   }
 
-  @Get("wiki/pages/:pageKey")
-  getPublishedPage(@Param("pageKey") pageKey: string) {
-    return this.wiki.getPublishedPage(pageKey);
+  @Get("knowledge-bases/:knowledgeBaseId/wiki/pages/:pageKey")
+  getPublishedPage(@Param("knowledgeBaseId") knowledgeBaseId: string, @Param("pageKey") pageKey: string) {
+    return this.workspaces.get(knowledgeBaseId).getPublishedPage(pageKey);
   }
 
-  @Delete("wiki/pages/:pageKey")
+  @Delete("knowledge-bases/:knowledgeBaseId/wiki/pages/:pageKey")
   deletePublishedPage(
+    @Param("knowledgeBaseId") knowledgeBaseId: string,
     @Param("pageKey") pageKey: string,
     @Query("revisionId") revisionId = "",
   ) {
-    return this.wiki.deletePublishedPage(pageKey, revisionId);
+    return this.workspaces.get(knowledgeBaseId).deletePublishedPage(pageKey, revisionId);
   }
 
-  @Get("wiki/search")
-  searchPublished(@Query("q") query = "", @Query("limit") limit = "20") {
-    return this.wiki.searchPublished(query, Number(limit));
+  @Get("knowledge-bases/:knowledgeBaseId/wiki/search")
+  searchPublished(@Param("knowledgeBaseId") knowledgeBaseId: string, @Query("q") query = "", @Query("limit") limit = "20") {
+    return this.workspaces.get(knowledgeBaseId).searchPublished(query, Number(limit));
   }
 
-  @Get("tools/catalog")
-  getToolsCatalog() {
-    return this.tools.getCatalog();
+  @Get("knowledge-bases/:knowledgeBaseId/tools/catalog")
+  getToolsCatalog(@Param("knowledgeBaseId") knowledgeBaseId: string) {
+    return this.tools.getCatalog(knowledgeBaseId);
   }
 
-  @Get("tools/pages/:pageKey")
-  readToolsPage(@Param("pageKey") pageKey: string) {
-    return this.tools.readPage(pageKey);
+  @Get("knowledge-bases/:knowledgeBaseId/tools/pages/:pageKey")
+  readToolsPage(@Param("knowledgeBaseId") knowledgeBaseId: string, @Param("pageKey") pageKey: string) {
+    return this.tools.readPage(knowledgeBaseId, pageKey);
   }
 
-  @Get("tools/sources/:sourceId")
+  @Get("knowledge-bases/:knowledgeBaseId/tools/sources/:sourceId")
   readToolsSource(
+    @Param("knowledgeBaseId") knowledgeBaseId: string,
     @Param("sourceId") sourceId: string,
     @Query("startLine") startLine?: string,
     @Query("endLine") endLine?: string,
   ) {
     return this.tools.readSource(
+      knowledgeBaseId,
       sourceId,
       startLine === undefined ? undefined : Number(startLine),
       endLine === undefined ? undefined : Number(endLine),
     );
   }
 
-  @Get("tools/search")
-  searchToolsWiki(@Query("q") query = "") {
-    return this.tools.searchWiki(query);
+  @Get("knowledge-bases/:knowledgeBaseId/tools/search")
+  searchToolsWiki(@Param("knowledgeBaseId") knowledgeBaseId: string, @Query("q") query = "") {
+    return this.tools.searchWiki(knowledgeBaseId, query);
   }
 }
 

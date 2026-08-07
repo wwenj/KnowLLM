@@ -10,6 +10,7 @@ export const RUN_CONFIG_STORAGE_KEY = "knowllm.llmWikiAgent.config.v2";
 
 export function buildRunBody(config: LlmWikiConfig): Record<string, unknown> {
   return {
+    knowledgeBaseId: config.knowledgeBaseId,
     query: config.query.trim(),
     fastModel: config.fastModel,
     qualityModel: config.qualityModel,
@@ -154,12 +155,13 @@ export function readStoredConfig(): LlmWikiConfig {
       window.localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || "{}",
     ) as Record<string, unknown>;
     return {
+      knowledgeBaseId: stringValue(raw.knowledgeBaseId),
       query: stringValue(raw.query),
       fastModel: stringValue(raw.fastModel),
       qualityModel: stringValue(raw.qualityModel),
     };
   } catch {
-    return { query: "", fastModel: "", qualityModel: "" };
+    return { knowledgeBaseId: "", query: "", fastModel: "", qualityModel: "" };
   }
 }
 

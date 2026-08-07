@@ -2,6 +2,11 @@ import { http } from "./http";
 
 const ROOT = "/api/llm-wiki-next";
 
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+}
+
 export type SourceStatus =
   | "pending"
   | "compiling"
@@ -421,74 +426,84 @@ function pathId(value: string): string {
   return encodeURIComponent(value);
 }
 
+function workspaceRoot(knowledgeBaseId: string): string {
+  return `${ROOT}/knowledge-bases/${pathId(knowledgeBaseId)}`;
+}
+
 export const llmWikiNextApi = {
-  uploadSource: (file: File) => {
+  listKnowledgeBases: () => http.get<{ items: KnowledgeBase[] }>(`${ROOT}/knowledge-bases`),
+  createKnowledgeBase: (name: string) => http.post<KnowledgeBase>(`${ROOT}/knowledge-bases`, { name }),
+  renameKnowledgeBase: (knowledgeBaseId: string, name: string) =>
+    http.post<KnowledgeBase>(`${workspaceRoot(knowledgeBaseId)}/rename`, { name }),
+  deleteKnowledgeBase: (knowledgeBaseId: string) =>
+    http.delete<KnowledgeBase>(workspaceRoot(knowledgeBaseId)),
+  uploadSource: (knowledgeBaseId: string, file: File) => {
     const data = new FormData();
     data.append("file", file);
-    return http.postForm<SourceRecord>(`${ROOT}/sources/upload`, data);
+    return http.postForm<SourceRecord>(`${workspaceRoot(knowledgeBaseId)}/sources/upload`, data);
   },
-  listSources: () => http.get<{ items: SourceRecord[] }>(`${ROOT}/sources`),
-  getSource: (sourceId: string) =>
-    http.get<SourceSnapshot>(`${ROOT}/sources/${pathId(sourceId)}`),
-  getSourceCompileDetail: (sourceId: string) =>
+  listSources: (knowledgeBaseId: string) => http.get<{ items: SourceRecord[] }>(`${workspaceRoot(knowledgeBaseId)}/sources`),
+  getSource: (knowledgeBaseId: string, sourceId: string) =>
+    http.get<SourceSnapshot>(`${workspaceRoot(knowledgeBaseId)}/sources/${pathId(sourceId)}`),
+  getSourceCompileDetail: (knowledgeBaseId: string, sourceId: string) =>
     http.get<SourceCompileDetailResponse>(
-      `${ROOT}/sources/${pathId(sourceId)}/compile-detail`,
+      `${workspaceRoot(knowledgeBaseId)}/sources/${pathId(sourceId)}/compile-detail`,
     ),
-  deleteSources: (sourceIds: string[]) =>
-    http.post<DeleteSourcesResult>(`${ROOT}/sources/delete`, { sourceIds }),
-  estimateCompile: (request: CompileRequest) =>
-    http.post<CompileEstimate>(`${ROOT}/compile/estimate`, request),
-  compile: (request: CompileRequest) =>
-    http.post<CompilePool>(`${ROOT}/compile`, request),
-  getCompilePool: async () => {
+  deleteSources: (knowledgeBaseId: string, sourceIds: string[]) =>
+    http.post<DeleteSourcesResult>(`${workspaceRoot(knowledgeBaseId)}/sources/delete`, { sourceIds }),
+  estimateCompile: (knowledgeBaseId: string, request: CompileRequest) =>
+    http.post<CompileEstimate>(`${workspaceRoot(knowledgeBaseId)}/compile/estimate`, request),
+  compile: (knowledgeBaseId: string, request: CompileRequest) =>
+    http.post<CompilePool>(`${workspaceRoot(knowledgeBaseId)}/compile`, request),
+  getCompilePool: async (knowledgeBaseId: string) => {
     const value = await http.get<CompilePool | Record<string, never>>(
-      `${ROOT}/compile`,
+      `${workspaceRoot(knowledgeBaseId)}/compile`,
     );
     return "poolId" in value ? (value as CompilePool) : null;
   },
-  cancelCompilePool: () =>
-    http.post<CompilePoolCancelResult>(`${ROOT}/compile/cancel`),
-  getStaging: async () => {
+  cancelCompilePool: (knowledgeBaseId: string) =>
+    http.post<CompilePoolCancelResult>(`${workspaceRoot(knowledgeBaseId)}/compile/cancel`),
+  getStaging: async (knowledgeBaseId: string) => {
     // Nest 的全局响应层会把 controller 返回的 null 转为 {}，统一还原为空 Staging。
     const value = await http.get<StagingSummary | Record<string, never>>(
-      `${ROOT}/staging`,
+      `${workspaceRoot(knowledgeBaseId)}/staging`,
     );
     return "state" in value ? (value as StagingSummary) : null;
   },
-  getStagingPage: (pageKey: string) =>
-    http.get<WikiPageDetail>(`${ROOT}/staging/pages/${pathId(pageKey)}`),
-  publishStaging: () => http.post<PublishResult>(`${ROOT}/staging/publish`),
-  discardStaging: () =>
-    http.post<{ discarded: true }>(`${ROOT}/staging/discard`),
-  getPublishedManifest: () => http.get<WikiManifest>(`${ROOT}/wiki/manifest`),
-  getPublishedPage: (pageKey: string) =>
-    http.get<WikiPageDetail>(`${ROOT}/wiki/pages/${pathId(pageKey)}`),
-  deletePublishedPage: (pageKey: string, revisionId: string) =>
+  getStagingPage: (knowledgeBaseId: string, pageKey: string) =>
+    http.get<WikiPageDetail>(`${workspaceRoot(knowledgeBaseId)}/staging/pages/${pathId(pageKey)}`),
+  publishStaging: (knowledgeBaseId: string) => http.post<PublishResult>(`${workspaceRoot(knowledgeBaseId)}/staging/publish`),
+  discardStaging: (knowledgeBaseId: string) =>
+    http.post<{ discarded: true }>(`${workspaceRoot(knowledgeBaseId)}/staging/discard`),
+  getPublishedManifest: (knowledgeBaseId: string) => http.get<WikiManifest>(`${workspaceRoot(knowledgeBaseId)}/wiki/manifest`),
+  getPublishedPage: (knowledgeBaseId: string, pageKey: string) =>
+    http.get<WikiPageDetail>(`${workspaceRoot(knowledgeBaseId)}/wiki/pages/${pathId(pageKey)}`),
+  deletePublishedPage: (knowledgeBaseId: string, pageKey: string, revisionId: string) =>
     http.delete<DeletePublishedPageResult>(
-      `${ROOT}/wiki/pages/${pathId(pageKey)}`,
+      `${workspaceRoot(knowledgeBaseId)}/wiki/pages/${pathId(pageKey)}`,
       { params: { revisionId } },
     ),
-  searchPublished: (query: string, limit = 20) =>
-    http.get<SearchResult>(`${ROOT}/wiki/search`, { q: query, limit }),
-  getToolsCatalog: () =>
-    http.get<ToolsCatalog>(`${ROOT}/tools/catalog`, undefined, {
+  searchPublished: (knowledgeBaseId: string, query: string, limit = 20) =>
+    http.get<SearchResult>(`${workspaceRoot(knowledgeBaseId)}/wiki/search`, { q: query, limit }),
+  getToolsCatalog: (knowledgeBaseId: string) =>
+    http.get<ToolsCatalog>(`${workspaceRoot(knowledgeBaseId)}/tools/catalog`, undefined, {
       silent: true,
     }),
-  readToolsPage: (pageKey: string) =>
+  readToolsPage: (knowledgeBaseId: string, pageKey: string) =>
     http.get<ToolsPageDetail>(
-      `${ROOT}/tools/pages/${pathId(pageKey)}`,
+      `${workspaceRoot(knowledgeBaseId)}/tools/pages/${pathId(pageKey)}`,
       undefined,
       { silent: true },
     ),
-  readToolsSource: (sourceId: string, startLine?: number, endLine?: number) =>
+  readToolsSource: (knowledgeBaseId: string, sourceId: string, startLine?: number, endLine?: number) =>
     http.get<ToolsSourceDetail>(
-      `${ROOT}/tools/sources/${pathId(sourceId)}`,
+      `${workspaceRoot(knowledgeBaseId)}/tools/sources/${pathId(sourceId)}`,
       { startLine, endLine },
       { silent: true },
     ),
-  searchToolsWiki: (query: string) =>
+  searchToolsWiki: (knowledgeBaseId: string, query: string) =>
     http.get<ToolsSearchResult>(
-      `${ROOT}/tools/search`,
+      `${workspaceRoot(knowledgeBaseId)}/tools/search`,
       { q: query },
       { silent: true },
     ),

@@ -4,6 +4,7 @@ export type AgentType = string;
 export type StatusKey = "idle" | AgentRunStatus;
 
 export interface LlmWikiConfig {
+  knowledgeBaseId: string;
   query: string;
   fastModel: string;
   qualityModel: string;

@@ -227,10 +227,11 @@ export class LlmWikiAgentWorkflow {
 
   validateInput(input: unknown): LlmWikiAgentInput {
     if (!isRecord(input)) throw new Error("请求体必须是对象");
-    const allowed = new Set(["query", "fastModel", "qualityModel"]);
+    const allowed = new Set(["knowledgeBaseId", "query", "fastModel", "qualityModel"]);
     const unknown = Object.keys(input).filter((key) => !allowed.has(key));
     if (unknown.length)
       throw new Error(`不支持旧 Agent 输入字段: ${unknown.join(", ")}`);
+    const knowledgeBaseId = string(input.knowledgeBaseId);
     const query = string(input.query);
     const fastModel = string(input.fastModel);
     const qualityModel = string(input.qualityModel);
@@ -241,7 +242,7 @@ export class LlmWikiAgentWorkflow {
       throw new Error(`fastModel 不存在或未配置: ${fastModel}`);
     if (!this.model.findModel(qualityModel))
       throw new Error(`qualityModel 不存在或未配置: ${qualityModel}`);
-    return { query, fastModel, qualityModel };
+    return { knowledgeBaseId, query, fastModel, qualityModel };
   }
 
   title(input: LlmWikiAgentInput): string {
@@ -261,7 +262,9 @@ export class LlmWikiAgentWorkflow {
     });
 
     this.assertActive(ctx);
-    const catalog = this.tools.getCatalog();
+    const catalog = ctx.input.knowledgeBaseId
+      ? this.tools.getCatalog(ctx.input.knowledgeBaseId)
+      : this.tools.getCatalog();
     state.catalog = catalog;
     state.catalogFingerprint = catalogFingerprint(catalog);
     state.plannerCatalog = plannerCatalog(catalog);
@@ -398,7 +401,9 @@ export class LlmWikiAgentWorkflow {
     }
 
     this.assertActive(ctx);
-    const finalCatalog = this.tools.getCatalog();
+    const finalCatalog = ctx.input.knowledgeBaseId
+      ? this.tools.getCatalog(ctx.input.knowledgeBaseId)
+      : this.tools.getCatalog();
     if (catalogFingerprint(finalCatalog) !== state.catalogFingerprint) {
       state.stopReason = "wiki_changed";
       state.evidence = [];
@@ -697,7 +702,9 @@ export class LlmWikiAgentWorkflow {
         if (!query) return { reject: "searchWiki.query 不能为空。" };
         const ref = searchRef(query);
         const cached = state.searches.get(query);
-        const result = cached || this.tools.searchWiki(query);
+        const result = cached || (state.input.knowledgeBaseId
+          ? this.tools.searchWiki(state.input.knowledgeBaseId, query)
+          : this.tools.searchWiki(query));
         state.searches.set(query, result);
         pushUnique(task.observationRefs, ref);
         pushUnique(task.attemptedActions, actionKey);
@@ -721,7 +728,9 @@ export class LlmWikiAgentWorkflow {
           };
         }
         const cached = state.pages.get(pageKey);
-        const result = cached || this.tools.readPage(pageKey);
+        const result = cached || (state.input.knowledgeBaseId
+          ? this.tools.readPage(state.input.knowledgeBaseId, pageKey)
+          : this.tools.readPage(pageKey));
         state.pages.set(pageKey, result);
         pushUnique(task.observationRefs, pageRef(pageKey));
         pushUnique(task.attemptedActions, actionKey);
@@ -761,6 +770,7 @@ export class LlmWikiAgentWorkflow {
         return { reject: "该 Task 已完成或读完此 Source，禁止重复追踪。" };
       }
       const trace = await this.tools.traceSource({
+        knowledgeBaseId: state.input.knowledgeBaseId,
         taskId: task.taskId,
         question: task.question,
         source,

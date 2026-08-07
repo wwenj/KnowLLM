@@ -164,6 +164,7 @@ export interface AgentEvaluationSummary {
 export interface AgentEvaluationRun {
   schemaVersion: typeof AGENT_EVALUATION_SCHEMA_VERSION;
   runId: string;
+  knowledgeBaseId: string;
   datasetId: string;
   datasetName: string;
   datasetHash: string;

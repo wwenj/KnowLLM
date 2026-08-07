@@ -10,6 +10,7 @@ import type {
 import { agentApi } from "@/api/agent";
 import type { ModelOption } from "@/api/model";
 import { modelApi } from "@/api/model";
+import { llmWikiNextApi, type KnowledgeBase } from "@/api/llmWikiNext";
 import { AgentConfigPanel } from "./components/AgentConfigPanel";
 import { HistoryCard } from "./components/HistoryCard";
 import { RunOutputPanel } from "./components/RunOutputPanel";
@@ -34,6 +35,7 @@ export function DeepAgent() {
   const [profiles, setProfiles] = useState<AgentProfile[]>(FALLBACK_PROFILES);
   const [activeAgent, setActiveAgent] = useState<AgentType>("llmWiki");
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [wikiConfig, setWikiConfig] = useState<LlmWikiConfig>(readStoredConfig);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [selectedRunAgent, setSelectedRunAgent] = useState<AgentType | null>(null);
@@ -55,28 +57,32 @@ export function DeepAgent() {
     }
   }, []);
 
-  const refreshHistory = useCallback(async (silent = true) => {
+  const refreshHistory = useCallback(async (silent = true, knowledgeBaseId = wikiConfig.knowledgeBaseId) => {
+    if (!knowledgeBaseId) return setHistory([]);
     if (!silent) setHistoryLoading(true);
     try {
-      const res = await agentApi.listAllRuns(50, true);
+      const res = await agentApi.listAllRuns(knowledgeBaseId, 50, true);
       setHistory(res.items || []);
     } catch {
       setHistory([]);
     } finally {
       if (!silent) setHistoryLoading(false);
     }
-  }, []);
+  }, [wikiConfig.knowledgeBaseId]);
 
   useEffect(() => {
     const init = async () => {
       try {
-        const [profileRes, modelRes, defaults] = await Promise.all([
+        const [profileRes, modelRes, defaults, knowledgeBaseRes] = await Promise.all([
           agentApi.listAgents(true).catch(() => ({ items: FALLBACK_PROFILES })),
           modelApi.list(true),
           agentApi.getDefaults<Record<string, unknown>>("llmWiki", true).catch(() => ({})),
+          llmWikiNextApi.listKnowledgeBases(),
         ]);
         const nextProfiles = profileRes.items?.length ? profileRes.items : FALLBACK_PROFILES;
         const nextModels = modelRes.items || [];
+        const nextKnowledgeBases = knowledgeBaseRes.items || [];
+        setKnowledgeBases(nextKnowledgeBases);
         const defaultValues = defaults as Record<string, unknown>;
         setProfiles(nextProfiles);
         setActiveAgent(nextProfiles[0]?.agentType || "llmWiki");
@@ -85,6 +91,7 @@ export function DeepAgent() {
           ...current,
           fastModel: pickModel(current.fastModel || stringValue(defaultValues.fastModel), nextModels),
           qualityModel: pickModel(current.qualityModel || stringValue(defaultValues.qualityModel), nextModels),
+          knowledgeBaseId: nextKnowledgeBases.some((item) => item.id === current.knowledgeBaseId) ? current.knowledgeBaseId : nextKnowledgeBases[0]?.id || "",
         }));
         void refreshHistory(true);
       } catch {
@@ -105,6 +112,10 @@ export function DeepAgent() {
       // ignore storage failures
     }
   }, [loadingConfig, wikiConfig]);
+
+  useEffect(() => {
+    if (!loadingConfig) void refreshHistory(true);
+  }, [loadingConfig, refreshHistory]);
 
   const startPolling = useCallback(
     (agentType: AgentType, id: string) => {
@@ -231,11 +242,13 @@ export function DeepAgent() {
             activeAgent={activeAgent}
             wikiConfig={wikiConfig}
             modelOptions={modelOptions}
+            knowledgeBases={knowledgeBases}
             loading={loadingConfig}
             submitting={submitting}
             submitDisabled={
               activeAgent !== "llmWiki" ||
               !wikiConfig.query.trim() ||
+              !wikiConfig.knowledgeBaseId ||
               !wikiConfig.fastModel ||
               !wikiConfig.qualityModel
             }

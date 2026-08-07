@@ -25,21 +25,22 @@ const SEARCH_SNIPPET_LENGTH = 240;
 export class LlmWikiNextToolsService {
   constructor(private readonly store: LlmWikiNextStore) {}
 
-  getPublishedIdentity(): {
+  getPublishedIdentity(knowledgeBaseId = "default"): {
     revisionId: string;
     publishedAt: string;
     pageCount: number;
     factCount: number;
     sourceCount: number;
   } {
-    const pointer = this.store.readPublishedPointer();
+    const store = this.store.forKnowledgeBase(knowledgeBaseId);
+    const pointer = store.readPublishedPointer();
     if (!pointer) {
       throw new NotFoundException({
         message: "暂无正式发布的 Wiki",
         error: "PUBLISHED_WIKI_NOT_FOUND",
       });
     }
-    const snapshot = this.store.readPublishedSnapshot();
+    const snapshot = store.readPublishedSnapshot();
     return {
       revisionId: pointer.revisionId,
       publishedAt: pointer.publishedAt,
@@ -52,14 +53,14 @@ export class LlmWikiNextToolsService {
     };
   }
 
-  getCatalog(): ToolsCatalog {
-    const snapshot = this.readPublishedSnapshot();
+  getCatalog(knowledgeBaseId = "default"): ToolsCatalog {
+    const snapshot = this.readPublishedSnapshot(knowledgeBaseId);
     const pages = snapshot.manifest.pages.map((page) =>
       catalogPage(snapshot, page.pageKey),
     );
     const sources = Object.keys(snapshot.sourceMap.sourceToPages)
       .sort()
-      .map((sourceId) => this.sourceSummary(snapshot, sourceId));
+      .map((sourceId) => this.sourceSummary(knowledgeBaseId, snapshot, sourceId));
     return {
       stats: {
         pageCount: pages.length,
@@ -74,14 +75,16 @@ export class LlmWikiNextToolsService {
     };
   }
 
-  readPage(pageKey: string): ToolsPageDetail {
+  readPage(knowledgeBaseIdOrPageKey: string, maybePageKey?: string): ToolsPageDetail {
+    const knowledgeBaseId = maybePageKey === undefined ? "default" : knowledgeBaseIdOrPageKey;
+    const pageKey = maybePageKey === undefined ? knowledgeBaseIdOrPageKey : maybePageKey;
     const normalizedPageKey = validId(
       pageKey,
       8,
       "pageKey",
       "INVALID_PAGE_KEY",
     );
-    const snapshot = this.readPublishedSnapshot();
+    const snapshot = this.readPublishedSnapshot(knowledgeBaseId);
     const page = snapshot.manifest.pages.find(
       (item) => item.pageKey === normalizedPageKey,
     );
@@ -119,23 +122,29 @@ export class LlmWikiNextToolsService {
       },
       relations: { outgoing, incoming, sameSource },
       sources: page.sourceIds.map((sourceId) =>
-        this.sourceSummary(snapshot, sourceId),
+        this.sourceSummary(knowledgeBaseId, snapshot, sourceId),
       ),
     };
   }
 
   readSource(
-    sourceId: string,
-    startLine?: number,
-    endLine?: number,
+    knowledgeBaseIdOrSourceId: string,
+    sourceIdOrStartLine?: string | number,
+    startLineOrEndLine?: number,
+    maybeEndLine?: number,
   ): ToolsSourceDetail {
+    const legacy = typeof sourceIdOrStartLine !== "string";
+    const knowledgeBaseId = legacy ? "default" : knowledgeBaseIdOrSourceId;
+    const sourceId = legacy ? knowledgeBaseIdOrSourceId : sourceIdOrStartLine;
+    const startLine = legacy ? sourceIdOrStartLine : startLineOrEndLine;
+    const endLine = legacy ? startLineOrEndLine : maybeEndLine;
     const normalizedSourceId = validId(
       sourceId,
       16,
       "sourceId",
       "INVALID_SOURCE_ID",
     );
-    const snapshot = this.readPublishedSnapshot();
+    const snapshot = this.readPublishedSnapshot(knowledgeBaseId);
     const pageKeys = snapshot.sourceMap.sourceToPages[normalizedSourceId];
     if (!pageKeys?.length) {
       throw new NotFoundException({
@@ -146,7 +155,7 @@ export class LlmWikiNextToolsService {
 
     const normalizedStartLine = optionalLine(startLine, "startLine");
     const normalizedEndLine = optionalLine(endLine, "endLine");
-    const source = this.readPublishedSource(normalizedSourceId);
+    const source = this.readPublishedSource(knowledgeBaseId, normalizedSourceId);
     const selectedStartLine = normalizedStartLine ?? 1;
     const selectedEndLine = normalizedEndLine ?? source.lineCount;
     if (selectedStartLine > source.lineCount) {
@@ -209,7 +218,9 @@ export class LlmWikiNextToolsService {
     };
   }
 
-  searchWiki(query: string): ToolsSearchResult {
+  searchWiki(knowledgeBaseIdOrQuery: string, maybeQuery?: string): ToolsSearchResult {
+    const knowledgeBaseId = maybeQuery === undefined ? "default" : knowledgeBaseIdOrQuery;
+    const query = maybeQuery === undefined ? knowledgeBaseIdOrQuery : maybeQuery;
     const normalizedQuery = String(query || "").trim();
     if (!normalizedQuery) {
       throw new BadRequestException({
@@ -217,7 +228,7 @@ export class LlmWikiNextToolsService {
         error: "EMPTY_QUERY",
       });
     }
-    const snapshot = this.readPublishedSnapshot();
+    const snapshot = this.readPublishedSnapshot(knowledgeBaseId);
     const loweredQuery = normalizedQuery.toLocaleLowerCase();
     const tokens = loweredQuery.split(/\s+/).filter(Boolean);
     const items = snapshot.searchIndex.documents
@@ -253,15 +264,16 @@ export class LlmWikiNextToolsService {
     return { query: normalizedQuery, items };
   }
 
-  private readPublishedSnapshot(): WikiSnapshot {
-    if (!this.store.readPublishedPointer()) {
+  private readPublishedSnapshot(knowledgeBaseId: string): WikiSnapshot {
+    const store = this.store.forKnowledgeBase(knowledgeBaseId);
+    if (!store.readPublishedPointer()) {
       throw new NotFoundException({
         message: "正式 Wiki 不存在",
         error: "PUBLISHED_WIKI_NOT_FOUND",
       });
     }
     try {
-      return this.store.readPublishedSnapshot();
+      return store.readPublishedSnapshot();
     } catch {
       throw new InternalServerErrorException({
         message: "正式 Wiki 产物不可用",
@@ -271,10 +283,11 @@ export class LlmWikiNextToolsService {
   }
 
   private sourceSummary(
+    knowledgeBaseId: string,
     snapshot: WikiSnapshot,
     sourceId: string,
   ): ToolsSourceSummary {
-    const source = this.readPublishedSourceRecord(sourceId);
+    const source = this.readPublishedSourceRecord(knowledgeBaseId, sourceId);
     return {
       sourceId: source.sourceId,
       filename: source.filename,
@@ -285,9 +298,9 @@ export class LlmWikiNextToolsService {
     };
   }
 
-  private readPublishedSourceRecord(sourceId: string) {
+  private readPublishedSourceRecord(knowledgeBaseId: string, sourceId: string) {
     try {
-      return this.store.getSourceRecord(sourceId);
+      return this.store.forKnowledgeBase(knowledgeBaseId).getSourceRecord(sourceId);
     } catch {
       throw new InternalServerErrorException({
         message: "正式 Wiki 原文不可用",
@@ -296,9 +309,9 @@ export class LlmWikiNextToolsService {
     }
   }
 
-  private readPublishedSource(sourceId: string) {
+  private readPublishedSource(knowledgeBaseId: string, sourceId: string) {
     try {
-      return this.store.getSource(sourceId);
+      return this.store.forKnowledgeBase(knowledgeBaseId).getSource(sourceId);
     } catch {
       throw new InternalServerErrorException({
         message: "正式 Wiki 原文不可用",

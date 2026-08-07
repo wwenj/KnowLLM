@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { sha256 } from "../../common/fs-json";
 import { LlmWikiNextToolsService } from "../llmWikiNext/llm-wiki-next-tools.service";
+import { KnowledgeBaseService } from "../llmWikiNext/knowledge-base.service";
+import { AgentEvaluationDatasetStoreService } from "./agent-evaluation-dataset-store.service";
 import {
   AGENT_EVALUATION_SCHEMA_VERSION,
   AgentEvaluationDataset,
@@ -12,18 +14,79 @@ import {
 
 @Injectable()
 export class AgentEvaluationDatasetService {
-  constructor(private readonly wiki: LlmWikiNextToolsService) {}
+  constructor(
+    private readonly wiki: LlmWikiNextToolsService,
+    private readonly knowledgeBases?: KnowledgeBaseService,
+    private readonly store?: AgentEvaluationDatasetStoreService,
+  ) {}
 
-  getDataset(): AgentEvaluationDataset {
-    const { text, value } = readBuiltinDataset();
+  listDatasets(knowledgeBaseId: string): AgentEvaluationDataset[] {
+    const { knowledgeBases, store } = this.persistent();
+    knowledgeBases.get(knowledgeBaseId);
+    this.ensureDefaultImported(knowledgeBaseId);
+    return store.list(knowledgeBaseId).map((item) =>
+      this.decorate(knowledgeBaseId, normalizeDataset(item.dataset)),
+    );
+  }
+
+  getDataset(knowledgeBaseId = "default", datasetId?: string): AgentEvaluationDataset {
+    if (!this.knowledgeBases || !this.store || !datasetId) {
+      const { text, value } = readBuiltinDataset();
+      const normalized = normalizeDataset(value);
+      const identity = this.wiki.getPublishedIdentity(knowledgeBaseId);
+      const compatible = normalized.revisionId === identity.revisionId;
+      if (compatible) this.validateEvidence(knowledgeBaseId, normalized.cases);
+      return { ...normalized, schemaVersion: AGENT_EVALUATION_SCHEMA_VERSION, datasetHash: sha256(text), currentRevisionId: identity.revisionId, compatible, caseCount: normalized.cases.length, factCount: normalized.cases.reduce((sum, item) => sum + item.requiredFacts.length, 0), answerableCount: normalized.cases.filter((item) => item.answerable).length, abstainCount: normalized.cases.filter((item) => !item.answerable).length };
+    }
+    this.knowledgeBases.get(knowledgeBaseId);
+    this.ensureDefaultImported(knowledgeBaseId);
+    const stored = this.store.get(knowledgeBaseId, datasetId);
+    return this.decorate(knowledgeBaseId, normalizeDataset(stored.dataset));
+  }
+
+  upload(knowledgeBaseId: string, buffer: Buffer): AgentEvaluationDataset {
+    const { knowledgeBases, store } = this.persistent();
+    knowledgeBases.get(knowledgeBaseId);
+    let value: unknown;
+    try {
+      value = JSON.parse(buffer.toString("utf8"));
+    } catch {
+      throw new Error("评测数据集必须是合法 JSON");
+    }
     const normalized = normalizeDataset(value);
-    const identity = this.wiki.getPublishedIdentity();
+    const identity = this.wiki.getPublishedIdentity(knowledgeBaseId);
+    if (normalized.revisionId !== identity.revisionId) {
+      throw new Error(`评测集绑定 Revision ${normalized.revisionId}，当前 Published Revision 为 ${identity.revisionId}`);
+    }
+    this.validateEvidence(knowledgeBaseId, normalized.cases);
+    store.save(knowledgeBaseId, normalized.datasetId, value as Record<string, unknown>);
+    return this.decorate(knowledgeBaseId, normalized);
+  }
+
+  delete(knowledgeBaseId: string, datasetId: string): void {
+    const { knowledgeBases, store } = this.persistent();
+    knowledgeBases.get(knowledgeBaseId);
+    store.remove(knowledgeBaseId, datasetId);
+  }
+
+  getRunnableDataset(knowledgeBaseId = "default", datasetId?: string): AgentEvaluationDataset {
+    const dataset = this.getDataset(knowledgeBaseId, datasetId);
+    if (!dataset.compatible) {
+      throw new Error(
+        `评测集绑定 Revision ${dataset.revisionId}，当前 Published Revision 为 ${dataset.currentRevisionId}`,
+      );
+    }
+    return dataset;
+  }
+
+  private decorate(knowledgeBaseId: string, normalized: NormalizedDatasetBase): AgentEvaluationDataset {
+    const identity = this.wiki.getPublishedIdentity(knowledgeBaseId);
     const compatible = normalized.revisionId === identity.revisionId;
-    if (compatible) this.validateEvidence(normalized.cases);
+    if (compatible) this.validateEvidence(knowledgeBaseId, normalized.cases);
     return {
       ...normalized,
       schemaVersion: AGENT_EVALUATION_SCHEMA_VERSION,
-      datasetHash: sha256(text),
+      datasetHash: sha256(JSON.stringify(normalized)),
       currentRevisionId: identity.revisionId,
       compatible,
       caseCount: normalized.cases.length,
@@ -37,23 +100,15 @@ export class AgentEvaluationDatasetService {
     };
   }
 
-  getRunnableDataset(): AgentEvaluationDataset {
-    const dataset = this.getDataset();
-    if (!dataset.compatible) {
-      throw new Error(
-        `评测集绑定 Revision ${dataset.revisionId}，当前 Published Revision 为 ${dataset.currentRevisionId}`,
-      );
-    }
-    return dataset;
-  }
-
-  private validateEvidence(cases: AgentEvaluationDatasetCase[]): void {
+  private validateEvidence(knowledgeBaseId: string, cases: AgentEvaluationDatasetCase[]): void {
     const pages = new Map<string, string>();
     for (const testCase of cases) {
       for (const fact of testCase.requiredFacts) {
         let body = pages.get(fact.evidence.pageKey);
         if (body === undefined) {
-          body = this.wiki.readPage(fact.evidence.pageKey).page.bodyMarkdown;
+          body = (this.store
+            ? this.wiki.readPage(knowledgeBaseId, fact.evidence.pageKey)
+            : this.wiki.readPage(fact.evidence.pageKey)).page.bodyMarkdown;
           pages.set(fact.evidence.pageKey, body);
         }
         if (!body.includes(fact.evidence.quote)) {
@@ -63,6 +118,18 @@ export class AgentEvaluationDatasetService {
         }
       }
     }
+  }
+
+  private ensureDefaultImported(knowledgeBaseId: string): void {
+    if (!this.store || knowledgeBaseId !== "default" || this.store.list("default").length) return;
+    const { value } = readBuiltinDataset();
+    const normalized = normalizeDataset(value);
+    this.store.save("default", normalized.datasetId, value as Record<string, unknown>);
+  }
+
+  private persistent(): { knowledgeBases: KnowledgeBaseService; store: AgentEvaluationDatasetStoreService } {
+    if (!this.knowledgeBases || !this.store) throw new Error("评测数据集存储未初始化");
+    return { knowledgeBases: this.knowledgeBases, store: this.store };
   }
 }
 

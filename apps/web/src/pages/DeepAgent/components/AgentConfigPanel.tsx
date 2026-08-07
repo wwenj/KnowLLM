@@ -1,6 +1,7 @@
 import { Brain, Loader2, Play } from "lucide-react";
 import type { AgentProfile } from "@/api/agent";
 import type { ModelOption } from "@/api/model";
+import type { KnowledgeBase } from "@/api/llmWikiNext";
 import { modelOptionLabel } from "@/api/model";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ interface AgentConfigPanelProps {
   activeAgent: AgentType;
   wikiConfig: LlmWikiConfig;
   modelOptions: ModelOption[];
+  knowledgeBases: KnowledgeBase[];
   loading: boolean;
   submitting: boolean;
   submitDisabled: boolean;
@@ -31,6 +33,7 @@ export function AgentConfigPanel({
   activeAgent,
   wikiConfig,
   modelOptions,
+  knowledgeBases,
   loading,
   submitting,
   submitDisabled,
@@ -72,6 +75,13 @@ export function AgentConfigPanel({
       <div className="px-3 py-3">
         {supported ? (
           <div className="space-y-2.5">
+            <label className="block min-w-0 space-y-1">
+              <span className="text-xs font-medium text-slate-600">知识库</span>
+              <Select value={wikiConfig.knowledgeBaseId} onValueChange={(knowledgeBaseId) => onWikiChange({ ...wikiConfig, knowledgeBaseId })} disabled={loading || !knowledgeBases.length}>
+                <SelectTrigger className="w-full border-stone-300 bg-white"><SelectValue placeholder="选择知识库" /></SelectTrigger>
+                <SelectContent>{knowledgeBases.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </label>
             <div className="grid grid-cols-2 gap-2.5">
               <label className="block min-w-0 space-y-1">
                 <span className="text-xs font-medium text-slate-600">规划/快速模型</span>

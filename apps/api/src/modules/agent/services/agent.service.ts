@@ -30,7 +30,7 @@ export class AgentService {
     return this.execution.getDetail(agentType, runId);
   }
 
-  listRuns(limit?: number) {
-    return this.execution.listAllRuns(limit);
+  listRuns(limit?: number, knowledgeBaseId?: string) {
+    return this.execution.listAllRuns(limit, knowledgeBaseId);
   }
 }

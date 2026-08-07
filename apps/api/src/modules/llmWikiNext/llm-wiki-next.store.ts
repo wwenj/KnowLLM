@@ -29,12 +29,27 @@ export class PublishedPageNotFoundError extends Error {}
 
 @Injectable()
 export class LlmWikiNextStore {
-  readonly root: string;
+  root: string;
 
   constructor() {
     this.root = path.join(getDataRoot(), "llm-wiki-next", "default");
+    this.ensureRoots();
+  }
+
+  private ensureRoots(): void {
     fs.mkdirSync(this.sourcesRoot(), { recursive: true });
     fs.mkdirSync(this.publishedRevisionsRoot(), { recursive: true });
+  }
+
+  forKnowledgeBase(knowledgeBaseId: string): LlmWikiNextStore {
+    const workspace = new LlmWikiNextStore();
+    workspace.root = path.join(
+      getDataRoot(),
+      "llm-wiki-next",
+      safeKnowledgeBaseId(knowledgeBaseId),
+    );
+    workspace.ensureRoots();
+    return workspace;
   }
 
   saveSource(filename: string, buffer: Buffer): SourceRecord {
@@ -726,6 +741,12 @@ function countLines(content: string): number {
 
 function safePageKey(value: string): string {
   return safeId(value, 8, "pageKey");
+}
+
+function safeKnowledgeBaseId(value: string): string {
+  const id = String(value || "").trim();
+  if (id === "default" || /^[a-z0-9]{8}$/.test(id)) return id;
+  throw new Error("知识库 ID 非法");
 }
 
 function safeId(value: string, length: number, field: string): string {

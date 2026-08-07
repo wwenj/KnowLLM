@@ -98,11 +98,14 @@ export class LlmWikiSourceTraceTool {
 
       let detail;
       try {
-        detail = this.tools.readSource(
-          input.source.sourceId,
-          startLine,
-          endLine,
-        );
+        detail = input.knowledgeBaseId
+          ? this.tools.readSource(
+              input.knowledgeBaseId,
+              input.source.sourceId,
+              startLine,
+              endLine,
+            )
+          : this.tools.readSource(input.source.sourceId, startLine, endLine);
       } catch (error) {
         return result(input, {
           status: "failed",

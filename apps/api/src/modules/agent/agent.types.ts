@@ -65,6 +65,7 @@ export interface AgentRunMeta {
   startedAt: string;
   endedAt: string;
   input: Record<string, unknown>;
+  knowledgeBaseId?: string;
   errors: string[];
   contentFormat: "markdown";
   artifacts: AgentArtifact[];
@@ -81,6 +82,7 @@ export interface AgentRunSummary {
   startedAt: string;
   endedAt: string;
   runnerMeta: Record<string, unknown>;
+  knowledgeBaseId?: string;
 }
 
 export interface AgentRunDetail extends AgentRunMeta {

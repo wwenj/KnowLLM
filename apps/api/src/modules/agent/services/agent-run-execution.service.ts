@@ -119,8 +119,8 @@ export class AgentRunExecutionService implements OnModuleInit {
     return this.store.loadDetail(runner.agentType, runId);
   }
 
-  listAllRuns(limit?: number): { items: AgentRunSummary[] } {
-    return { items: this.store.listAllRuns(this.registry.listProfiles().map((profile) => profile.agentType), limit) };
+  listAllRuns(limit?: number, knowledgeBaseId?: string): { items: AgentRunSummary[] } {
+    return { items: this.store.listAllRuns(this.registry.listProfiles().map((profile) => profile.agentType), limit, knowledgeBaseId) };
   }
 
   private finish(agentType: string, runId: string, result: AgentRunnerResult): AgentRunDetail {

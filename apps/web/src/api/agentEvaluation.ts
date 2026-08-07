@@ -136,6 +136,7 @@ export interface AgentEvaluationSummary {
 export interface AgentEvaluationRunSummary {
   schemaVersion: 2;
   runId: string;
+  knowledgeBaseId: string;
   datasetId: string;
   datasetName: string;
   datasetHash: string;
@@ -156,23 +157,43 @@ export interface AgentEvaluationRun extends AgentEvaluationRunSummary {
 }
 
 export const agentEvaluationApi = {
-  getDataset: (silent = false) =>
-    http.get<AgentEvaluationDataset>(
-      "/api/evaluations/llm-wiki-agent/dataset",
-      undefined,
+  listDatasets: (knowledgeBaseId: string, silent = false) =>
+    http.get<{ items: AgentEvaluationDataset[] }>(
+      "/api/evaluations/llm-wiki-agent/datasets",
+      { knowledgeBaseId },
       silent ? { silent: true } : undefined,
     ),
+  getDataset: (knowledgeBaseId: string, datasetId: string, silent = false) =>
+    http.get<AgentEvaluationDataset>(
+      `/api/evaluations/llm-wiki-agent/datasets/${encodeURIComponent(datasetId)}`,
+      { knowledgeBaseId },
+      silent ? { silent: true } : undefined,
+    ),
+  uploadDataset: (knowledgeBaseId: string, file: File) => {
+    const data = new FormData();
+    data.append("file", file);
+    return http.postForm<AgentEvaluationDataset>(
+      `/api/evaluations/llm-wiki-agent/datasets/upload?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`,
+      data,
+    );
+  },
+  deleteDataset: (knowledgeBaseId: string, datasetId: string) =>
+    http.delete<{ ok: true }>(
+      `/api/evaluations/llm-wiki-agent/datasets/${encodeURIComponent(datasetId)}?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}`,
+    ),
   createRun: (body: {
+    knowledgeBaseId: string;
+    datasetId: string;
     caseIds?: string[];
     fastModel: string;
     qualityModel: string;
     judgeModel: string;
   }) =>
     http.post<AgentEvaluationRun>("/api/evaluations/llm-wiki-agent/runs", body),
-  listRuns: (silent = false) =>
+  listRuns: (knowledgeBaseId: string, silent = false) =>
     http.get<{ items: AgentEvaluationRunSummary[] }>(
       "/api/evaluations/llm-wiki-agent/runs",
-      undefined,
+      { knowledgeBaseId },
       silent ? { silent: true } : undefined,
     ),
   getRun: (runId: string, silent = false) =>

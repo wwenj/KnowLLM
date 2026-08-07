@@ -57,6 +57,7 @@ export class AgentEvaluationStoreService implements OnModuleInit {
   }
 
   create(args: {
+    knowledgeBaseId: string;
     dataset: AgentEvaluationDataset;
     caseIds: string[];
     fastModel: string;
@@ -70,6 +71,7 @@ export class AgentEvaluationStoreService implements OnModuleInit {
     const run: AgentEvaluationRun = {
       schemaVersion: AGENT_EVALUATION_SCHEMA_VERSION,
       runId: randomId(),
+      knowledgeBaseId: args.knowledgeBaseId,
       datasetId: args.dataset.datasetId,
       datasetName: args.dataset.name,
       datasetHash: args.dataset.datasetHash,
@@ -94,11 +96,12 @@ export class AgentEvaluationStoreService implements OnModuleInit {
     if (!run || run.schemaVersion !== AGENT_EVALUATION_SCHEMA_VERSION) {
       throw new NotFoundException("Agent 评测记录不存在");
     }
-    return run;
+    return normalizeKnowledgeBase(run);
   }
 
-  list(): AgentEvaluationRunSummary[] {
+  list(knowledgeBaseId?: string): AgentEvaluationRunSummary[] {
     return this.readAll()
+      .filter((run) => !knowledgeBaseId || run.knowledgeBaseId === knowledgeBaseId)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .map(({ cases: _cases, ...summary }) => summary);
   }
@@ -128,7 +131,8 @@ export class AgentEvaluationStoreService implements OnModuleInit {
       )
       .filter((run): run is AgentEvaluationRun =>
         Boolean(run && run.schemaVersion === AGENT_EVALUATION_SCHEMA_VERSION),
-      );
+      )
+      .map(normalizeKnowledgeBase);
   }
 
   private file(runId: string): string {
@@ -137,6 +141,10 @@ export class AgentEvaluationStoreService implements OnModuleInit {
       throw new BadRequestException("runId 非法");
     return path.join(this.root, `${safe}.json`);
   }
+}
+
+function normalizeKnowledgeBase(run: AgentEvaluationRun): AgentEvaluationRun {
+  return run.knowledgeBaseId ? run : { ...run, knowledgeBaseId: "default" };
 }
 
 export function summarizeAgentEvaluation(

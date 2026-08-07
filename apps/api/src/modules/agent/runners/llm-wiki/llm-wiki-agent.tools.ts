@@ -11,16 +11,20 @@ export class LlmWikiAgentTools {
     private readonly sourceTrace: LlmWikiSourceTraceTool,
   ) {}
 
-  getCatalog() {
-    return this.tools.getCatalog();
+  getCatalog(knowledgeBaseId = "default") {
+    return this.tools.getCatalog(knowledgeBaseId);
   }
 
-  searchWiki(query: string) {
-    return this.tools.searchWiki(query);
+  searchWiki(knowledgeBaseIdOrQuery: string, maybeQuery?: string) {
+    return maybeQuery === undefined
+      ? this.tools.searchWiki(knowledgeBaseIdOrQuery)
+      : this.tools.searchWiki(knowledgeBaseIdOrQuery, maybeQuery);
   }
 
-  readPage(pageKey: string) {
-    return this.tools.readPage(pageKey);
+  readPage(knowledgeBaseIdOrPageKey: string, maybePageKey?: string) {
+    return maybePageKey === undefined
+      ? this.tools.readPage(knowledgeBaseIdOrPageKey)
+      : this.tools.readPage(knowledgeBaseIdOrPageKey, maybePageKey);
   }
 
   traceSource(input: SourceTraceInput) {
